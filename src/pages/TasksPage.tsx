@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { listTasks, cancelTask, type Task } from "../lib/tauri";
-import { XCircle, RefreshCw } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { cancelTask, listTasks, TASK_UPDATED_EVENT, type Task } from "../lib/tauri";
+import { RefreshCw, XCircle } from "lucide-react";
 
 function StatusPill({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -11,11 +12,34 @@ function StatusPill({ status }: { status: string }) {
     done: "bg-green-100 text-green-700",
     error: "bg-red-100 text-red-700",
   };
+  const labels: Record<string, string> = {
+    pending: "等待中",
+    running: "运行中",
+    paused: "已暂停",
+    cancelled: "已取消",
+    done: "已完成",
+    error: "错误",
+  };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[status] ?? colors.pending}`}>
-      {status}
+      {labels[status] ?? status}
     </span>
   );
+}
+
+function sortTasks(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+}
+
+function upsertTask(tasks: Task[], task: Task): Task[] {
+  const existingIndex = tasks.findIndex((item) => item.id === task.id);
+  if (existingIndex === -1) {
+    return sortTasks([task, ...tasks]);
+  }
+
+  const next = [...tasks];
+  next[existingIndex] = task;
+  return sortTasks(next);
 }
 
 export default function TasksPage() {
@@ -25,35 +49,55 @@ export default function TasksPage() {
   const refresh = () => {
     setLoading(true);
     listTasks()
-      .then(setTasks)
+      .then((nextTasks) => setTasks(sortTasks(nextTasks)))
       .catch(console.error)
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+
+    refresh();
+    listen<Task>(TASK_UPDATED_EVENT, (event) => {
+      setTasks((currentTasks) => upsertTask(currentTasks, event.payload));
+      setLoading(false);
+    }).then((cleanup) => {
+      if (mounted) {
+        unlisten = cleanup;
+      } else {
+        cleanup();
+      }
+    }).catch(console.error);
+
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   const handleCancel = async (taskId: string) => {
-    await cancelTask(taskId);
-    refresh();
+    const task = await cancelTask(taskId);
+    setTasks((currentTasks) => upsertTask(currentTasks, task));
   };
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Tasks</h2>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">任务队列</h2>
         <button
           onClick={refresh}
           className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
         >
-          <RefreshCw size={16} /> Refresh
+          <RefreshCw size={16} /> 刷新
         </button>
       </div>
 
       {loading ? (
-        <div className="text-gray-500">Loading tasks...</div>
+        <div className="text-gray-500">正在加载任务...</div>
       ) : tasks.length === 0 ? (
         <div className="text-gray-500 bg-white dark:bg-gray-800 rounded-lg p-8 text-center border border-gray-200 dark:border-gray-700">
-          No tasks yet. Create one from the Home page.
+          暂无任务。
         </div>
       ) : (
         <div className="space-y-3">
@@ -62,26 +106,36 @@ export default function TasksPage() {
               key={task.id}
               className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700"
             >
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="min-w-0">
                   <h4 className="font-medium text-gray-900 dark:text-white">{task.media_name}</h4>
-                  <p className="text-xs text-gray-500 mt-1">Engine: {task.engine_id} | Model: {task.model_id}</p>
+                  <p className="mt-1 truncate text-xs text-gray-500" title={task.media_path}>
+                    {task.media_path}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    引擎：{task.engine_id} | 模型：{task.model_id}
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-end gap-2">
                   <StatusPill status={task.status} />
                   {task.status === "running" || task.status === "pending" ? (
-                    <button onClick={() => handleCancel(task.id)} className="text-red-500 hover:text-red-700">
+                    <button
+                      type="button"
+                      aria-label="Cancel task"
+                      onClick={() => handleCancel(task.id)}
+                      className="text-red-500 hover:text-red-700"
+                    >
                       <XCircle size={18} />
                     </button>
                   ) : null}
                 </div>
               </div>
-              {task.status === "running" && (
+              {task.status !== "pending" && (
                 <div className="mt-3">
                   <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                     <div
                       className="bg-blue-600 h-2 rounded-full transition-all"
-                      style={{ width: `${task.progress * 100}%` }}
+                      style={{ width: `${Math.round(task.progress * 100)}%` }}
                     />
                   </div>
                   <p className="text-xs text-gray-500 mt-1">{task.status_message}</p>

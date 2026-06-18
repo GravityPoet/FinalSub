@@ -55,11 +55,11 @@ pub fn parse_srt_time(raw: &str) -> crate::error::Result<u64> {
     let parts: Vec<&str> = raw.split(':').collect();
     let (h, m, s_str) = match parts.len() {
         3 => (
-            parts[0].parse::<u64>().unwrap_or(0),
-            parts[1].parse::<u64>().unwrap_or(0),
+            parse_time_component("hours", parts[0])?,
+            parse_time_component("minutes", parts[1])?,
             parts[2],
         ),
-        2 => (0, parts[0].parse::<u64>().unwrap_or(0), parts[1]),
+        2 => (0, parse_time_component("minutes", parts[0])?, parts[1]),
         1 => (0, 0, parts[0]),
         _ => {
             return Err(crate::error::FinalSubError::Parse(format!(
@@ -70,8 +70,28 @@ pub fn parse_srt_time(raw: &str) -> crate::error::Result<u64> {
     let sec: f64 = s_str
         .parse()
         .map_err(|_| crate::error::FinalSubError::Parse(format!("bad seconds: {s_str}")))?;
+    if !sec.is_finite() || sec < 0.0 {
+        return Err(crate::error::FinalSubError::Parse(format!(
+            "bad seconds: {s_str}"
+        )));
+    }
+    if parts.len() > 1 && sec >= 60.0 {
+        return Err(crate::error::FinalSubError::Parse(format!(
+            "seconds out of range: {s_str}"
+        )));
+    }
+    if parts.len() > 1 && m >= 60 {
+        return Err(crate::error::FinalSubError::Parse(format!(
+            "minutes out of range: {m}"
+        )));
+    }
     let total_ms = h * 3_600_000 + m * 60_000 + (sec * 1000.0).round() as u64;
     Ok(total_ms)
+}
+
+fn parse_time_component(name: &str, raw: &str) -> crate::error::Result<u64> {
+    raw.parse::<u64>()
+        .map_err(|_| crate::error::FinalSubError::Parse(format!("bad {name}: {raw}")))
 }
 
 fn parse_srt_block(block: &str) -> crate::error::Result<Cue> {
@@ -179,6 +199,36 @@ mod tests {
         assert_eq!(parse_srt_time("00:00:01,000").unwrap(), 1000);
         assert_eq!(parse_srt_time("00:01:30.500").unwrap(), 90_500);
         assert_eq!(parse_srt_time("1:30:00").unwrap(), 5_400_000);
+        assert_eq!(parse_srt_time("90").unwrap(), 90_000);
+        assert_eq!(parse_srt_time("01:30.500").unwrap(), 90_500);
+    }
+
+    #[test]
+    fn parse_srt_time_rejects_invalid_components() {
+        assert!(parse_srt_time("xx:01:02,000")
+            .unwrap_err()
+            .to_string()
+            .contains("bad hours"));
+        assert!(parse_srt_time("00:yy:02,000")
+            .unwrap_err()
+            .to_string()
+            .contains("bad minutes"));
+        assert!(parse_srt_time("00:60:02,000")
+            .unwrap_err()
+            .to_string()
+            .contains("minutes out of range"));
+        assert!(parse_srt_time("00:01:60,000")
+            .unwrap_err()
+            .to_string()
+            .contains("seconds out of range"));
+        assert!(parse_srt_time("-1")
+            .unwrap_err()
+            .to_string()
+            .contains("bad seconds"));
+        assert!(parse_srt_time("NaN")
+            .unwrap_err()
+            .to_string()
+            .contains("bad seconds"));
     }
 
     #[test]

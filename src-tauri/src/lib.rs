@@ -18,6 +18,7 @@ pub fn run() {
             commands::list_asr_models,
             commands::get_model_status,
             commands::create_task,
+            commands::create_preview_task,
             commands::list_tasks,
             commands::cancel_task,
             commands::normalize_srt,

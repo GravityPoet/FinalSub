@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export const TASK_UPDATED_EVENT = "task-updated";
+
 export interface AppInfo {
   version: string;
   name: string;
@@ -62,6 +64,10 @@ export async function createTask(
   return invoke("create_task", { mediaPath, mediaName, engineId, modelId, language });
 }
 
+export async function createPreviewTask(mediaPath: string): Promise<Task> {
+  return invoke("create_preview_task", { mediaPath });
+}
+
 export async function listTasks(): Promise<Task[]> {
   return invoke("list_tasks");
 }
@@ -75,11 +81,10 @@ export async function normalizeSrt(srtContent: string): Promise<string> {
 }
 
 export async function extractAudioPlan(
-  ffmpegBin: string,
   videoPath: string,
   outputPath: string
 ): Promise<AudioExtractPlan> {
-  return invoke("extract_audio_plan", { ffmpegBin, videoPath, outputPath });
+  return invoke("extract_audio_plan", { videoPath, outputPath });
 }
 
 export async function getFfmpegVersion(): Promise<string> {

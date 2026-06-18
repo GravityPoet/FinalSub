@@ -60,7 +60,7 @@ pub fn create_task(
         model_id,
         language,
         progress: 0.0,
-        status_message: "Pending".into(),
+        status_message: "待处理".into(),
         output_path: None,
         error: None,
         created_at: chrono::Utc::now().to_rfc3339(),

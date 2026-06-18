@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:build": "tauri build",
+    "sign:local": "codesign --force --deep --sign - \"src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app\"",
+    "verify:bundle": "codesign --verify --deep --strict --verbose=4 \"src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app\"",
+    "build:local": "npm run tauri:build && npm run sign:local && npm run verify:bundle"
   },
   "dependencies": {
     "react": "^19.1.0",
