@@ -233,3 +233,98 @@ fn start_preview_worker(app: AppHandle, tasks: TaskMap, task_id: String) {
 fn emit_task_update(app: &AppHandle, task: &Task) {
     let _ = app.emit(TASK_UPDATED_EVENT, task.clone());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_media_path_empty() {
+        let result = validate_media_path("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("请选择"));
+    }
+
+    #[test]
+    fn validate_media_path_whitespace() {
+        let result = validate_media_path("   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_media_path_relative() {
+        let result = validate_media_path("relative/path.mp4");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("绝对路径"));
+    }
+
+    #[test]
+    fn validate_media_path_nonexistent() {
+        let result = validate_media_path("/nonexistent/file.mp4");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("不存在"));
+    }
+
+    #[test]
+    fn validate_media_path_directory() {
+        let result = validate_media_path("/tmp");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("不存在"));
+    }
+
+    #[test]
+    fn validate_media_path_valid() {
+        let tmp = std::env::temp_dir().join("finalsub_test_media.mp4");
+        std::fs::write(&tmp, b"fake").unwrap();
+        let result = validate_media_path(tmp.to_str().unwrap());
+        assert!(result.is_ok());
+        std::fs::remove_file(&tmp).unwrap();
+    }
+
+    #[test]
+    fn normalize_media_name_from_input() {
+        let path = PathBuf::from("/tmp/test.mp4");
+        assert_eq!(normalize_media_name(&path, "custom"), "custom");
+    }
+
+    #[test]
+    fn normalize_media_name_from_path() {
+        let path = PathBuf::from("/tmp/test.mp4");
+        assert_eq!(normalize_media_name(&path, ""), "test.mp4");
+    }
+
+    #[test]
+    fn normalize_media_name_whitespace() {
+        let path = PathBuf::from("/tmp/test.mp4");
+        assert_eq!(normalize_media_name(&path, "  "), "test.mp4");
+    }
+
+    #[test]
+    fn normalize_media_name_fallback() {
+        let path = PathBuf::from("/");
+        assert_eq!(normalize_media_name(&path, ""), "未命名媒体");
+    }
+
+    #[test]
+    fn validate_non_empty_ok() {
+        assert_eq!(validate_non_empty("x", "hello".into()).unwrap(), "hello");
+    }
+
+    #[test]
+    fn validate_non_empty_trimmed() {
+        assert_eq!(validate_non_empty("x", "  hello  ".into()).unwrap(), "hello");
+    }
+
+    #[test]
+    fn validate_non_empty_fail() {
+        let result = validate_non_empty("engine_id", "".into());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("engine_id"));
+    }
+
+    #[test]
+    fn validate_non_empty_whitespace_fail() {
+        let result = validate_non_empty("model_id", "   ".into());
+        assert!(result.is_err());
+    }
+}
