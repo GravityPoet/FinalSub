@@ -94,6 +94,24 @@ export async function extractAudioPlan(
   return invoke("extract_audio_plan", { videoPath, outputPath });
 }
 
+export async function extractAudio(videoPath: string, outputPath: string): Promise<string> {
+  return invoke("extract_audio", { videoPath, outputPath });
+}
+
+export interface BurnSubtitleRequest {
+  video_path: string;
+  subtitle_path: string;
+  output_path: string;
+  font_size?: number;
+  font_color?: string;
+  outline_color?: string;
+  margin_v?: number;
+}
+
+export async function burnSubtitle(req: BurnSubtitleRequest): Promise<string> {
+  return invoke("burn_subtitle", { req });
+}
+
 export async function getFfmpegVersion(): Promise<string> {
   return invoke("get_ffmpeg_version");
 }
