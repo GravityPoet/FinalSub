@@ -25,6 +25,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::list_asr_models,
+            commands::scan_models,
+            commands::delete_model,
             commands::get_model_status,
             commands::create_task,
             commands::create_preview_task,

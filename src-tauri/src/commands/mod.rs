@@ -8,7 +8,7 @@ use crate::core::audio;
 use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
-use crate::core::models::AsrModelInfo;
+use crate::core::models::{self, AsrModelInfo};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType};
@@ -38,6 +38,21 @@ pub fn list_asr_models(state: State<'_, AppState>) -> Vec<AsrModelInfo> {
 #[tauri::command]
 pub fn get_model_status(state: State<'_, AppState>, model_id: String) -> Option<AsrModelInfo> {
     state.models.iter().find(|m| m.id == model_id).cloned()
+}
+
+#[tauri::command]
+pub fn scan_models(_state: State<'_, AppState>) -> Vec<AsrModelInfo> {
+    let whisper_dir = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM/whisper-models");
+    let parakeet_dir = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM/parakeet-models");
+    let mut catalog = models::builtin_model_catalog();
+    models::scan_model_status(&mut catalog, &whisper_dir, &parakeet_dir);
+    catalog
+}
+
+#[tauri::command]
+pub fn delete_model(model_id: String) -> Result<(), String> {
+    let models_dir = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM/whisper-models");
+    models::delete_whisper_model(&models_dir, &model_id).map_err(|e| e.to_string())
 }
 
 #[derive(serde::Deserialize)]

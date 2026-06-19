@@ -53,6 +53,14 @@ export async function listAsrModels(): Promise<AsrModelInfo[]> {
   return invoke("list_asr_models");
 }
 
+export async function scanModels(): Promise<AsrModelInfo[]> {
+  return invoke("scan_models");
+}
+
+export async function deleteModel(modelId: string): Promise<void> {
+  return invoke("delete_model", { modelId });
+}
+
 export async function getModelStatus(modelId: string): Promise<AsrModelInfo | null> {
   return invoke("get_model_status", { modelId });
 }
