@@ -1,13 +1,13 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::ShellExt;
 
-use crate::core::audio;
 use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
+use crate::core::audio;
 use crate::core::models::{self, AsrModelInfo};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
@@ -32,27 +32,28 @@ pub fn get_app_info() -> AppInfo {
 }
 
 #[tauri::command]
-pub fn list_asr_models(state: State<'_, AppState>) -> Vec<AsrModelInfo> {
-    state.models.clone()
+pub fn list_asr_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, String> {
+    scan_models_for_state(&state)
 }
 
 #[tauri::command]
-pub fn get_model_status(state: State<'_, AppState>, model_id: String) -> Option<AsrModelInfo> {
-    state.models.iter().find(|m| m.id == model_id).cloned()
+pub fn get_model_status(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<Option<AsrModelInfo>, String> {
+    Ok(scan_models_for_state(&state)?
+        .into_iter()
+        .find(|m| m.id == model_id))
 }
 
 #[tauri::command]
-pub fn scan_models(_state: State<'_, AppState>) -> Vec<AsrModelInfo> {
-    let whisper_dir = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM/whisper-models");
-    let parakeet_dir = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM/parakeet-models");
-    let mut catalog = models::builtin_model_catalog();
-    models::scan_model_status(&mut catalog, &whisper_dir, &parakeet_dir);
-    catalog
+pub fn scan_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, String> {
+    scan_models_for_state(&state)
 }
 
 #[tauri::command]
-pub fn delete_model(model_id: String) -> Result<(), String> {
-    let models_dir = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM/whisper-models");
+pub fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
+    let models_dir = whisper_models_dir(&state.app_config_dir)?;
     models::delete_whisper_model(&models_dir, &model_id).map_err(|e| e.to_string())
 }
 
@@ -69,41 +70,24 @@ pub struct CreateTaskRequest {
 
 #[tauri::command]
 pub async fn create_task(
-    app: AppHandle,
-    state: State<'_, AppState>,
+    _app: AppHandle,
+    _state: State<'_, AppState>,
     req: CreateTaskRequest,
 ) -> Result<Task, String> {
-    let media_path = validate_media_path(&req.media_path)?;
-    let media_name = media_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("未命名媒体")
-        .to_string();
-    let engine_id = validate_non_empty("engine_id", req.engine_id)?;
-    let model_id = validate_non_empty("model_id", req.model_id)?;
-
-    let task_type = match req.task_type.as_str() {
+    let _media_path = validate_media_path(&req.media_path)?;
+    let _engine_id = validate_non_empty("engine_id", req.engine_id)?;
+    let _model_id = validate_non_empty("model_id", req.model_id)?;
+    let _task_type = match req.task_type.as_str() {
         "generate-and-translate" => TaskType::GenerateAndTranslate,
         "generate-only" => TaskType::GenerateOnly,
         "translate-only" => TaskType::TranslateOnly,
         _ => return Err(format!("未知任务类型：{}", req.task_type)),
     };
+    let _source_language = req.source_language;
+    let _target_language = req.target_language;
+    let _output_format = req.output_format;
 
-    let task = task_queue::create_task(CreateTaskParams {
-        task_type,
-        media_path: media_path.to_string_lossy().to_string(),
-        media_name,
-        engine_id,
-        model_id,
-        source_language: req.source_language,
-        target_language: req.target_language,
-        output_format: req.output_format,
-    });
-    let task_clone = task.clone();
-    state.tasks.write().await.insert(task.id.clone(), task);
-    emit_task_update(&app, &task_clone);
-    start_preview_worker(app, state.tasks.clone(), task_clone.id.clone());
-    Ok(task_clone)
+    Err("真实任务流水线尚未接入：当前只能使用“快速预览”验证任务队列事件，不能把未执行的 ASR/翻译任务标为完成。".into())
 }
 
 #[tauri::command]
@@ -157,6 +141,7 @@ pub async fn cancel_task(
     task.status = task_queue::TaskStatus::Cancelled;
     task.progress = task.progress.clamp(0.0, 1.0);
     task.status_message = "已取消".into();
+    task.updated_at = chrono::Utc::now().to_rfc3339();
     let task_clone = task.clone();
     drop(tasks);
     emit_task_update(&app, &task_clone);
@@ -181,9 +166,10 @@ pub async fn extract_audio(
     output_path: String,
 ) -> Result<String, String> {
     let video_path = validate_media_path(&video_path)?;
+    let output_path = validate_new_output_path(&output_path, "音频输出路径")?;
     let args = audio::extract_audio_args(
         &video_path.to_string_lossy(),
-        &output_path,
+        &output_path.to_string_lossy(),
     );
 
     let output = app
@@ -200,7 +186,7 @@ pub async fn extract_audio(
         return Err(format!("FFmpeg 音频提取失败：{stderr}"));
     }
 
-    Ok(output_path)
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -215,11 +201,11 @@ pub struct BurnSubtitleRequest {
 }
 
 #[tauri::command]
-pub async fn burn_subtitle(
-    app: AppHandle,
-    req: BurnSubtitleRequest,
-) -> Result<String, String> {
+pub async fn burn_subtitle(app: AppHandle, req: BurnSubtitleRequest) -> Result<String, String> {
     let video_path = validate_media_path(&req.video_path)?;
+    let subtitle_path = validate_existing_file_path(&req.subtitle_path, "字幕文件")?;
+    let output_path = validate_new_output_path(&req.output_path, "视频输出路径")?;
+    validate_burn_style(&req)?;
     let style = audio::BurnInStyleOptions {
         font_size: req.font_size,
         font_color: req.font_color,
@@ -228,8 +214,8 @@ pub async fn burn_subtitle(
     };
     let args = audio::burn_in_args(
         &video_path.to_string_lossy(),
-        &req.subtitle_path,
-        &req.output_path,
+        &subtitle_path.to_string_lossy(),
+        &output_path.to_string_lossy(),
         &style,
     );
 
@@ -247,7 +233,7 @@ pub async fn burn_subtitle(
         return Err(format!("FFmpeg 字幕烧录失败：{stderr}"));
     }
 
-    Ok(req.output_path)
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -264,10 +250,9 @@ pub async fn transcribe_audio(
     req: TranscribeRequest,
 ) -> Result<String, String> {
     let whisper_bin = std::path::PathBuf::from("/opt/homebrew/bin/whisper-cli");
-    let models_dir = std::path::PathBuf::from(&state.app_config_dir)
-        .parent()
-        .unwrap_or(&std::path::PathBuf::from("/tmp"))
-        .join("whisper-models");
+    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
+    let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
 
     let engine = WhisperCppEngine::new(whisper_bin, models_dir);
     let model_ref = AsrModelRef {
@@ -276,24 +261,30 @@ pub async fn transcribe_audio(
         model_path: None,
     };
 
-    engine.prepare(&model_ref).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+    engine
+        .prepare(&model_ref)
+        .await
+        .map_err(|e: crate::error::FinalSubError| e.to_string())?;
 
     let (tx, _rx) = tokio::sync::mpsc::channel(32);
     let job = TranscribeJob {
-        audio_path: req.audio_path,
-        output_path: req.output_path.clone(),
+        audio_path: audio_path.to_string_lossy().to_string(),
+        output_path: output_path.to_string_lossy().to_string(),
         language: req.language,
         model: model_ref,
     };
 
-    let track = engine.transcribe(job, tx).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+    let track = engine
+        .transcribe(job, tx)
+        .await
+        .map_err(|e: crate::error::FinalSubError| e.to_string())?;
 
     let srt = track.to_srt();
-    tokio::fs::write(&req.output_path, &srt)
+    tokio::fs::write(&output_path, &srt)
         .await
         .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
 
-    Ok(req.output_path)
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -308,11 +299,13 @@ pub async fn transcribe_parakeet(
     _state: State<'_, AppState>,
     req: TranscribeParakeetRequest,
 ) -> Result<String, String> {
+    let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
+    let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
     let uv_bin = crate::core::asr::parakeet::default_uv_bin();
     let transcribe_script = std::path::PathBuf::from(
         "/Users/moonlitpoet/Tools/AI-tools/FinalSub/extraResources/parakeet/parakeet_transcribe.py",
     );
-    let cache_root = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM");
+    let cache_root = default_local_llm_dir();
     let ffmpeg_path = Some(std::path::PathBuf::from(
         "/opt/homebrew/Cellar/ffmpeg/8.1.1/bin/ffmpeg",
     ));
@@ -324,24 +317,30 @@ pub async fn transcribe_parakeet(
         model_path: None,
     };
 
-    engine.prepare(&model_ref).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+    engine
+        .prepare(&model_ref)
+        .await
+        .map_err(|e: crate::error::FinalSubError| e.to_string())?;
 
     let (tx, _rx) = tokio::sync::mpsc::channel(32);
     let job = TranscribeJob {
-        audio_path: req.audio_path,
-        output_path: req.output_path.clone(),
+        audio_path: audio_path.to_string_lossy().to_string(),
+        output_path: output_path.to_string_lossy().to_string(),
         language: req.language.or_else(|| Some("en".into())),
         model: model_ref,
     };
 
-    let track = engine.transcribe(job, tx).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+    let track = engine
+        .transcribe(job, tx)
+        .await
+        .map_err(|e: crate::error::FinalSubError| e.to_string())?;
 
     let srt = track.to_srt();
-    tokio::fs::write(&req.output_path, &srt)
+    tokio::fs::write(&output_path, &srt)
         .await
         .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
 
-    Ok(req.output_path)
+    Ok(output_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -350,8 +349,12 @@ pub fn list_translation_providers() -> Vec<TranslationProvider> {
 }
 
 #[tauri::command]
-pub async fn test_translation(req: translation::TranslateRequest) -> Result<translation::TranslateResponse, String> {
-    translation::translate_text(&req).await.map_err(|e| e.to_string())
+pub async fn test_translation(
+    req: translation::TranslateRequest,
+) -> Result<translation::TranslateResponse, String> {
+    translation::translate_text(&req)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -428,6 +431,7 @@ fn start_preview_worker(app: AppHandle, tasks: TaskMap, task_id: String) {
                     };
                     task.progress = progress;
                     task.status_message = message.into();
+                    task.updated_at = chrono::Utc::now().to_rfc3339();
                     task.clone()
                 }
             };
@@ -471,6 +475,153 @@ pub fn export_config(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> Result<Settings, String> {
     settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_config_to_path(
+    state: State<'_, AppState>,
+    output_path: String,
+) -> Result<String, String> {
+    let path = validate_json_output_path(&output_path)?;
+    let json = settings::export_config(&state.app_config_dir).map_err(|e| e.to_string())?;
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, json).map_err(|e| format!("写出配置失败：{e}"))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("保存配置失败：{e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn import_config_from_path(
+    state: State<'_, AppState>,
+    input_path: String,
+) -> Result<Settings, String> {
+    let path = validate_json_input_path(&input_path)?;
+    let json = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
+    settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())
+}
+
+fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> {
+    let whisper_dir = whisper_models_dir(&state.app_config_dir)?;
+    let parakeet_dir = default_local_llm_dir().join("parakeet-models");
+    let mut catalog = state.models.clone();
+    models::scan_model_status(&mut catalog, &whisper_dir, &parakeet_dir);
+    Ok(catalog)
+}
+
+fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
+    let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
+    let path = expand_home_path(&settings.models_path);
+    if !path.is_absolute() {
+        return Err("模型路径必须是绝对路径".into());
+    }
+    Ok(path)
+}
+
+fn default_local_llm_dir() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .join("Tools/Local-LLM")
+}
+
+fn expand_home_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(trimmed)
+}
+
+fn validate_existing_file_path(raw: &str, label: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw.trim());
+    if path.as_os_str().is_empty() {
+        return Err(format!("{label}不能为空"));
+    }
+    if !path.is_absolute() {
+        return Err(format!("{label}必须是绝对路径"));
+    }
+    if !path.is_file() {
+        return Err(format!("{label}不存在：{}", path.display()));
+    }
+    Ok(path)
+}
+
+fn validate_new_output_path(raw: &str, label: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw.trim());
+    if path.as_os_str().is_empty() {
+        return Err(format!("{label}不能为空"));
+    }
+    if !path.is_absolute() {
+        return Err(format!("{label}必须是绝对路径"));
+    }
+    let parent = path.parent().ok_or_else(|| format!("{label}缺少父目录"))?;
+    if !parent.is_dir() {
+        return Err(format!("{label}父目录不存在：{}", parent.display()));
+    }
+    if path.exists() {
+        return Err(format!(
+            "{label}已存在，为避免覆盖请重新选择：{}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn validate_json_output_path(raw: &str) -> Result<PathBuf, String> {
+    let path = validate_new_output_path(raw, "配置导出路径")?;
+    validate_json_extension(&path)?;
+    Ok(path)
+}
+
+fn validate_json_input_path(raw: &str) -> Result<PathBuf, String> {
+    let path = validate_existing_file_path(raw, "配置文件")?;
+    validate_json_extension(&path)?;
+    Ok(path)
+}
+
+fn validate_json_extension(path: &Path) -> Result<(), String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "json" {
+        return Err("配置文件必须是 .json 文件".into());
+    }
+    Ok(())
+}
+
+fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
+    if let Some(font_size) = req.font_size {
+        if !(10..=120).contains(&font_size) {
+            return Err("字幕字号必须在 10-120 之间".into());
+        }
+    }
+    if let Some(margin_v) = req.margin_v {
+        if margin_v > 1_000 {
+            return Err("字幕垂直边距不能超过 1000".into());
+        }
+    }
+    if let Some(ref color) = req.font_color {
+        validate_ass_color("字体颜色", color)?;
+    }
+    if let Some(ref color) = req.outline_color {
+        validate_ass_color("描边颜色", color)?;
+    }
+    Ok(())
+}
+
+fn validate_ass_color(label: &str, value: &str) -> Result<(), String> {
+    let valid = value.len() == 10
+        && value.starts_with("&H")
+        && value[2..].chars().all(|c| c.is_ascii_hexdigit());
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("{label}必须使用 ASS 颜色格式，例如 &H00FFFFFF"))
+    }
 }
 
 #[cfg(test)]
@@ -527,7 +678,10 @@ mod tests {
 
     #[test]
     fn validate_non_empty_trimmed() {
-        assert_eq!(validate_non_empty("x", "  hello  ".into()).unwrap(), "hello");
+        assert_eq!(
+            validate_non_empty("x", "  hello  ".into()).unwrap(),
+            "hello"
+        );
     }
 
     #[test]
@@ -541,5 +695,51 @@ mod tests {
     fn validate_non_empty_whitespace_fail() {
         let result = validate_non_empty("model_id", "   ".into());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_new_output_path_rejects_existing_file() {
+        let tmp = std::env::temp_dir().join("finalsub_existing_output.srt");
+        std::fs::write(&tmp, b"exists").unwrap();
+
+        let result = validate_new_output_path(tmp.to_str().unwrap(), "输出路径");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("已存在"));
+
+        std::fs::remove_file(&tmp).unwrap();
+    }
+
+    #[test]
+    fn validate_new_output_path_accepts_new_file_in_existing_parent() {
+        let tmp = std::env::temp_dir().join("finalsub_new_output.srt");
+        let _ = std::fs::remove_file(&tmp);
+
+        let result = validate_new_output_path(tmp.to_str().unwrap(), "输出路径");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_json_extension_rejects_non_json() {
+        let path = std::path::PathBuf::from("/tmp/config.txt");
+        let result = validate_json_extension(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_ass_color_rejects_bad_value() {
+        let result = validate_ass_color("字体颜色", "white");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_ass_color_accepts_ass_hex() {
+        assert!(validate_ass_color("字体颜色", "&H00FFFFFF").is_ok());
+    }
+
+    #[test]
+    fn expand_home_path_expands_tilde_prefix() {
+        let expanded = expand_home_path("~/Tools/Local-LLM");
+        assert!(expanded.is_absolute());
+        assert!(expanded.ends_with("Tools/Local-LLM"));
     }
 }

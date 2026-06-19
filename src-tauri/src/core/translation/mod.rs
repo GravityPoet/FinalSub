@@ -31,23 +31,108 @@ impl Default for TranslationConfig {
 
 pub fn builtin_providers() -> Vec<TranslationProvider> {
     vec![
-        TranslationProvider { id: "baidu".into(), name: "百度翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "google".into(), name: "谷歌翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "aliyun".into(), name: "阿里云翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "volc".into(), name: "火山翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "doubao".into(), name: "豆包翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "niutrans".into(), name: "小牛翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "tencent".into(), name: "腾讯翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "xunfei".into(), name: "讯飞翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "deeplx".into(), name: "DeepLX".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "azure".into(), name: "微软翻译".into(), provider_type: "api".into(), is_ai: false },
-        TranslationProvider { id: "ollama".into(), name: "Ollama".into(), provider_type: "ai".into(), is_ai: true },
-        TranslationProvider { id: "deepseek".into(), name: "深度求索".into(), provider_type: "ai".into(), is_ai: true },
-        TranslationProvider { id: "azureopenai".into(), name: "Azure OpenAI".into(), provider_type: "ai".into(), is_ai: true },
-        TranslationProvider { id: "deerapi".into(), name: "DeerAPI".into(), provider_type: "ai".into(), is_ai: true },
-        TranslationProvider { id: "gemini".into(), name: "Gemini".into(), provider_type: "ai".into(), is_ai: true },
-        TranslationProvider { id: "siliconflow".into(), name: "硅基流动".into(), provider_type: "ai".into(), is_ai: true },
-        TranslationProvider { id: "qwen".into(), name: "通义千问".into(), provider_type: "ai".into(), is_ai: true },
+        TranslationProvider {
+            id: "baidu".into(),
+            name: "百度翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "google".into(),
+            name: "谷歌翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "aliyun".into(),
+            name: "阿里云翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "volc".into(),
+            name: "火山翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "doubao".into(),
+            name: "豆包翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "niutrans".into(),
+            name: "小牛翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "tencent".into(),
+            name: "腾讯翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "xunfei".into(),
+            name: "讯飞翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "deeplx".into(),
+            name: "DeepLX".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "azure".into(),
+            name: "微软翻译".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+        },
+        TranslationProvider {
+            id: "ollama".into(),
+            name: "Ollama".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
+        TranslationProvider {
+            id: "deepseek".into(),
+            name: "深度求索".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
+        TranslationProvider {
+            id: "azureopenai".into(),
+            name: "Azure OpenAI".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
+        TranslationProvider {
+            id: "deerapi".into(),
+            name: "DeerAPI".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
+        TranslationProvider {
+            id: "gemini".into(),
+            name: "Gemini".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
+        TranslationProvider {
+            id: "siliconflow".into(),
+            name: "硅基流动".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
+        TranslationProvider {
+            id: "qwen".into(),
+            name: "通义千问".into(),
+            provider_type: "ai".into(),
+            is_ai: true,
+        },
     ]
 }
 
@@ -71,7 +156,7 @@ pub struct TranslateResponse {
 }
 
 pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse> {
-    if req.api_key.as_deref().unwrap_or("").is_empty() && !matches!(req.provider.as_str(), "ollama") {
+    if provider_requires_api_key(&req.provider) && req.api_key.as_deref().unwrap_or("").is_empty() {
         return Err(FinalSubError::Validation(format!(
             "翻译 provider '{}' 需要 API Key，请在设置中配置",
             req.provider
@@ -94,16 +179,27 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
     }
 }
 
+fn provider_requires_api_key(provider: &str) -> bool {
+    !matches!(provider, "ollama" | "deeplx")
+}
+
 async fn translate_baidu(_req: &TranslateRequest) -> Result<TranslateResponse> {
-    Err(FinalSubError::Validation("百度翻译 API 暂未实现，请使用其他 provider".into()))
+    Err(FinalSubError::Validation(
+        "百度翻译 API 暂未实现，请使用其他 provider".into(),
+    ))
 }
 
 async fn translate_google(_req: &TranslateRequest) -> Result<TranslateResponse> {
-    Err(FinalSubError::Validation("谷歌翻译 API 暂未实现，请使用其他 provider".into()))
+    Err(FinalSubError::Validation(
+        "谷歌翻译 API 暂未实现，请使用其他 provider".into(),
+    ))
 }
 
 async fn translate_deeplx(req: &TranslateRequest) -> Result<TranslateResponse> {
-    let api_url = req.api_key.as_deref().unwrap_or("http://localhost:1188/translate");
+    let api_url = req
+        .api_url
+        .as_deref()
+        .unwrap_or("http://localhost:1188/translate");
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "text": req.text,
@@ -194,7 +290,10 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
     })
 }
 
-async fn translate_openai_compatible(req: &TranslateRequest, provider_name: &str) -> Result<TranslateResponse> {
+async fn translate_openai_compatible(
+    req: &TranslateRequest,
+    provider_name: &str,
+) -> Result<TranslateResponse> {
     let api_url = req
         .api_url
         .as_deref()
@@ -278,5 +377,12 @@ mod tests {
             assert!(!p.id.is_empty());
             assert!(!p.name.is_empty());
         }
+    }
+
+    #[test]
+    fn local_providers_do_not_require_api_key() {
+        assert!(!provider_requires_api_key("ollama"));
+        assert!(!provider_requires_api_key("deeplx"));
+        assert!(provider_requires_api_key("google"));
     }
 }

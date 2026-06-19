@@ -220,3 +220,11 @@ export async function exportConfig(): Promise<string> {
 export async function importConfig(json: string): Promise<Settings> {
   return invoke("import_config", { json });
 }
+
+export async function exportConfigToPath(outputPath: string): Promise<string> {
+  return invoke("export_config_to_path", { outputPath });
+}
+
+export async function importConfigFromPath(inputPath: string): Promise<Settings> {
+  return invoke("import_config_from_path", { inputPath });
+}

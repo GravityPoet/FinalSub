@@ -37,10 +37,26 @@ impl AsrEngine for WhisperCppEngine {
         AsrCapabilities {
             supports_streaming: false,
             supported_languages: vec![
-                "auto".into(), "zh".into(), "en".into(), "ja".into(), "ko".into(),
-                "fr".into(), "de".into(), "es".into(), "ru".into(), "pt".into(),
-                "it".into(), "nl".into(), "pl".into(), "tr".into(), "ar".into(),
-                "vi".into(), "th".into(), "id".into(), "ms".into(), "hi".into(),
+                "auto".into(),
+                "zh".into(),
+                "en".into(),
+                "ja".into(),
+                "ko".into(),
+                "fr".into(),
+                "de".into(),
+                "es".into(),
+                "ru".into(),
+                "pt".into(),
+                "it".into(),
+                "nl".into(),
+                "pl".into(),
+                "tr".into(),
+                "ar".into(),
+                "vi".into(),
+                "th".into(),
+                "id".into(),
+                "ms".into(),
+                "hi".into(),
             ],
             requires_model_download: true,
         }
@@ -82,6 +98,12 @@ impl AsrEngine for WhisperCppEngine {
             .await
             .ok();
 
+        let output_prefix = job
+            .output_path
+            .strip_suffix(".srt")
+            .unwrap_or(&job.output_path)
+            .to_string();
+
         let mut args = vec![
             "-m".to_string(),
             model_path.to_string_lossy().to_string(),
@@ -89,7 +111,7 @@ impl AsrEngine for WhisperCppEngine {
             job.audio_path.clone(),
             "-osrt".to_string(),
             "-of".to_string(),
-            job.output_path.clone().replace(".srt", ""),
+            output_prefix.clone(),
         ];
 
         if let Some(ref lang) = job.language {
@@ -128,7 +150,7 @@ impl AsrEngine for WhisperCppEngine {
             .await
             .ok();
 
-        let srt_path = format!("{}.srt", job.output_path.replace(".srt", ""));
+        let srt_path = format!("{output_prefix}.srt");
         let srt_content = tokio::fs::read_to_string(&srt_path)
             .await
             .map_err(|e| FinalSubError::Validation(format!("读取 SRT 输出失败：{e}")))?;
@@ -149,12 +171,12 @@ impl AsrEngine for WhisperCppEngine {
 
 pub fn available_models() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        ("whisper-large-v3-turbo", "Large V3 Turbo", "1500MB"),
-        ("whisper-large-v3", "Large V3", "3100MB"),
-        ("whisper-medium", "Medium", "1500MB"),
-        ("whisper-small", "Small", "500MB"),
-        ("whisper-base", "Base", "150MB"),
-        ("whisper-tiny", "Tiny", "75MB"),
+        ("large-v3-turbo", "Large V3 Turbo", "1500MB"),
+        ("large-v3", "Large V3", "3100MB"),
+        ("medium", "Medium", "1500MB"),
+        ("small", "Small", "500MB"),
+        ("base", "Base", "150MB"),
+        ("tiny", "Tiny", "75MB"),
     ]
 }
 

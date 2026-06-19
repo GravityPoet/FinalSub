@@ -1,359 +1,135 @@
-# FinalSub 迁移矩阵
+# FinalSub Tauri 迁移矩阵
 
 生成时间：2026-06-19  
+审查更新时间：2026-06-19
 来源：旧 Electron 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSub` + 新 Tauri 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri`  
 计划书：`/Users/moonlitpoet/Desktop/交接书/handoff-20260619-0238-finalsub-tauri-full-migration-plan.md`
-品牌图标母版：`/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri/src-tauri/icons/app-icon-source.png`
 
-图标裁决：从 2026-06-19 起，FinalSub 后续 Tauri 版、旧 Electron 兼容包和文档图标均使用该母版生成，不再恢复旧图标。
-
----
+品牌图标母版：`/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri/src-tauri/icons/app-icon-source.png`。从 2026-06-19 起，Tauri 版、旧 Electron 兼容包和文档图标均使用该母版生成，不得恢复旧图标。
 
 ## 1. 主导航迁移状态
 
-| # | 路由 | 中文名 | 旧 Electron 文件 | 新 Tauri 文件 | 状态 |
-|---|------|--------|------------------|--------------|------|
-| 1 | `/` | 任务 | `pages/[locale]/home.tsx` | `pages/HomePage.tsx` | 🟡 部分（预览任务，非真实） |
-| 2 | `/tasks` | 任务队列 | `components/TaskList.tsx` + `TaskControls.tsx` | `pages/TasksPage.tsx` | 🟡 部分（内存队列，无持久化） |
-| 3 | `/models` | 模型管理 | `pages/[locale]/modelsControl.tsx` | `pages/ModelsPage.tsx` | 🟡 部分（只读展示，无下载/删除） |
-| 4 | `/translation` | 翻译管理 | `pages/[locale]/translateControl.tsx` | `pages/PlaceholderPage.tsx` | 🔴 占位 |
-| 5 | `/proofread` | 字幕校对 | `pages/[locale]/proofread.tsx` | `pages/PlaceholderPage.tsx` | 🔴 占位 |
-| 6 | `/subtitle-merge` | 视频合字幕 | `pages/[locale]/subtitleMerge.tsx` | `pages/PlaceholderPage.tsx` | 🔴 占位 |
-| 7 | `/settings` | 设置 | `pages/[locale]/settings.tsx` | `pages/PlaceholderPage.tsx` | 🔴 占位 |
+| # | 路由 | 中文名 | 新 Tauri 文件 | 当前状态 |
+|---|------|--------|---------------|----------|
+| 1 | `/` | 任务 | `src/pages/HomePage.tsx` | 🟡 部分。完整配置 UI 存在，但真实 `create_task` 流水线未接入；审查修复后不再伪装完成，只允许 `快速预览` 走模拟队列 |
+| 2 | `/tasks` | 任务队列 | `src/pages/TasksPage.tsx` | 🟡 部分。内存队列、事件刷新、取消预览任务可用；无持久化、暂停/恢复/重试 |
+| 3 | `/models` | 模型管理 | `src/pages/ModelsPage.tsx` | 🟡 部分。可扫描设置中的 Whisper 模型目录，可删除受管 Whisper 模型；无下载、导入、checksum |
+| 4 | `/translation` | 翻译管理 | `src/pages/TranslationPage.tsx` | 🟡 部分。Provider 列表和测试入口存在；DeepLX/Ollama 本地路径可走，多数商业 provider 仍未实现或缺配置 UI |
+| 5 | `/proofread` | 字幕校对 | `src/pages/PlaceholderPage.tsx` | 🔴 未迁移。仍为占位 |
+| 6 | `/subtitle-merge` | 视频合字幕 | `src/pages/SubtitleMergePage.tsx` | 🟡 部分。文件选择、样式预设、FFmpeg 烧录命令存在；无进度解析、取消、预览、视频/字幕信息读取 |
+| 7 | `/settings` | 设置 | `src/pages/SettingsPage.tsx` | 🟡 部分。设置读写、校验、重置、JSON 导入导出存在；无加密导出、Keychain/API Key 安全存储、旧配置完整迁移 |
 
----
+## 2. 任务系统
 
-## 2. 任务系统迁移矩阵
+| 能力 | 新 Tauri | 当前状态 |
+|------|----------|----------|
+| 任务类型枚举 | `GenerateAndTranslate` / `GenerateOnly` / `TranslateOnly` | 🟡 类型存在 |
+| 真实任务创建 | `create_task` | 🔴 审查后改为显式报错，避免把未执行 ASR/翻译的任务标为完成 |
+| 预览任务 | `create_preview_task` | 🟢 可用于验证队列事件和 UI 流 |
+| 队列状态 | `pending/running/cancelled/done/error` | 🟡 预览任务可用；真实任务未接入 |
+| 任务事件 | `task-updated` | 🟢 已实现 |
+| 日志流 | `task-log` | 🔴 未实现 |
+| 暂停/恢复/重试 | — | 🔴 未实现 |
+| 持久化 | — | 🔴 未实现 |
 
-### 2.1 任务类型
+## 3. ASR 与模型
 
-| 旧值 | 中文 | 新 Tauri TaskType | 状态 |
-|------|------|-------------------|------|
-| `generateAndTranslate` | 生成字幕并翻译 | `GenerateAndTranslate` | 🟡 类型存在，无创建路径 |
-| `generateOnly` | 仅生成字幕 | `GenerateOnly` | 🟢 `create_task` 可创建 |
-| `translateOnly` | 仅翻译字幕 | `TranslateOnly` | 🟡 类型存在，无创建路径 |
+### 3.1 ASR 引擎
 
-### 2.2 任务状态
+| 引擎 | 新实现 | 当前状态 |
+|------|--------|----------|
+| Whisper.cpp | `WhisperCppEngine` + `transcribe_audio` | 🟡 命令存在，使用设置中的模型目录；仍硬编码 `/opt/homebrew/bin/whisper-cli`，未接入任务流水线 |
+| Parakeet MLX | `ParakeetMlxEngine` + `transcribe_parakeet` | 🟡 命令存在；仍依赖旧 Electron 仓库脚本路径和本机 `uv`/FFmpeg，属于本机 spike，不可标为正式可分发 |
+| SenseVoice | catalog only | 🔴 仅模型候选，未接入运行时 |
+| Custom Command | catalog only | 🔴 未设计权限方案，不可用 |
 
-| 旧状态 | 新 TaskStatus | 状态 |
-|--------|---------------|------|
-| `loading` / `pending` | `Pending` | 🟢 |
-| `running` | `Running` | 🟢（模拟） |
-| `paused` | `Paused` | 🟡 枚举存在，无触发 |
-| `cancelled` | `Cancelled` | 🟢 |
-| `done` | `Done` | 🟢（模拟） |
-| `error` | `Error` | 🟡 结构体有 error 字段 |
+### 3.2 模型 ID 与文件名
 
-### 2.3 任务进度阶段
+| 模型 ID | 期望文件 | 当前状态 |
+|---------|----------|----------|
+| `large-v3-turbo` | `ggml-large-v3-turbo.bin` | 🟢 审查修复：不再误找 `ggml-whisper-large-v3-turbo.bin` |
+| `large-v3` | `ggml-large-v3.bin` | 🟢 |
+| `medium` | `ggml-medium.bin` | 🟢 |
+| `small` | `ggml-small.bin` | 🟢 |
+| `parakeet-tdt-0.6b-v2` | 自动缓存目录 | 🟡 只检测本机缓存目录 |
+| `sensevoice-small` | 待定 | 🔴 未接入 |
 
-| 旧阶段 | 新阶段 | 状态 |
-|--------|--------|------|
-| `extracting-audio` | — | 🔴 未实现 |
-| `preparing-model` | — | 🔴 未实现 |
-| `transcribing` | — | 🔴 未实现 |
-| `translating` | — | 🔴 未实现 |
-| `writing-subtitle` | — | 🔴 未实现 |
-| `done` | — | 🔴 未实现 |
+### 3.3 模型操作
 
-### 2.4 任务事件
+| 操作 | 新 Tauri command | 当前状态 |
+|------|------------------|----------|
+| 列出/扫描模型 | `list_asr_models` / `scan_models` | 🟢 使用设置里的 `models_path` |
+| 删除 Whisper 模型 | `delete_model` | 🟢 只删除 `ggml-*.bin` 受管文件，拒绝路径逃逸 |
+| 下载模型 | — | 🔴 未实现 |
+| 取消下载 | — | 🔴 未实现 |
+| 导入本地模型 | — | 🔴 未实现 |
+| checksum 校验 | — | 🔴 未实现 |
 
-| 旧 IPC 事件 | 新 Tauri 事件 | 状态 |
-|-------------|---------------|------|
-| `taskStatusChange` | `task-updated` | 🟢 合并为单一事件 |
-| `taskProgressChange` | `task-updated` | 🟢 合并 |
-| `taskErrorChange` | `task-updated` | 🟢 合并 |
-| `taskFileChange` | — | 🔴 未实现 |
-| `taskComplete` | `task-updated` (status=done) | 🟢 合并 |
-| `file-selected` | — | 🔴 未实现（Tauri 用 dialog plugin） |
+## 4. FFmpeg
 
----
+| 功能 | 新 Tauri | 当前状态 |
+|------|----------|----------|
+| 版本检测 | `get_ffmpeg_version` | 🟢 sidecar 调用 |
+| 音频提取 | `extract_audio` | 🟡 命令存在，参数结构化，输出路径禁止覆盖；未接入任务流水线 |
+| 字幕烧录 | `burn_subtitle` | 🟡 命令存在，校验视频/字幕/输出路径和 ASS 颜色；无进度解析/取消 |
+| 进度解析 | `parse_duration_ms` / `parse_current_time_ms` | 🟡 工具函数有测试，但未接入 UI |
+| sidecar 打包 | `bundle.externalBin` | 🟢 |
+| sidecar 来源 | Homebrew 动态版 | ⚠️ 仅 Apple Silicon 本机预览，不适合正式分发 |
 
-## 3. ASR 引擎迁移矩阵
+## 5. 翻译
 
-### 3.1 引擎
+| 能力 | 新 Tauri | 当前状态 |
+|------|----------|----------|
+| Provider 列表 | `list_translation_providers` | 🟢 17 个 provider 元数据 |
+| 测试翻译 | `test_translation` | 🟡 Ollama、DeepLX、本机/兼容 OpenAI 路径可走；百度/谷歌等仍是 stub |
+| DeepLX 本地服务 | `api_url` 默认 `http://localhost:1188/translate` | 🟢 审查修复：不再错误要求 API Key，也不再把 API Key 当 URL |
+| API Key 安全存储 | — | 🔴 未实现 |
+| 字幕批量翻译 | — | 🔴 未接入任务流水线 |
+| AI 优化翻译 | — | 🔴 未实现 |
 
-| 引擎 ID | 旧实现 | 新 trait impl | 状态 |
-|---------|--------|--------------|------|
-| `builtin-whisper` | `subtitleGenerator.ts` native addon | `AsrEngine` trait（零实现） | 🔴 |
-| `local-whisper` | `subtitleGenerator.ts` CLI exec | — | 🔴 |
-| `parakeet-v2` | `parakeetTranscriber.ts` Python/uv | `AsrEngine` trait（零实现） | 🔴 |
-| `sensevoice` | — | `AsrEngine` trait（零实现） | 🔴 |
-| `custom-command` | — | `AsrEngine` trait（零实现） | 🔴 |
+## 6. 设置
 
-### 3.2 模型
+| 能力 | 新 Tauri | 当前状态 |
+|------|----------|----------|
+| 读取/保存/重置 | `get_settings` / `save_settings_cmd` / `reset_settings` | 🟢 JSON 存储，保存前校验 |
+| 字段兼容 | `Settings` serde alias | 🟢 审查修复：前端 snake_case 与旧 camelCase 导入均可处理 |
+| 原子写入 | temp file + rename | 🟢 |
+| JSON 导入导出 | `import_config_from_path` / `export_config_to_path` | 🟢 由 Rust 受控读写，前端不需要 fs 插件权限 |
+| 加密导入导出 | — | 🔴 未实现 |
+| API Key/密钥存储 | — | 🔴 未实现 |
+| 旧 Electron 配置迁移 | — | 🔴 未完整实现 |
 
-| 模型 ID | 旧仓库状态 | 新 Tauri catalog | 状态 |
-|---------|-----------|------------------|------|
-| `whisper-large-v3-turbo` | ✅ 可下载/使用 | 🟡 元数据存在，NotReady | 🟡 |
-| `whisper-large-v3` | ✅ | 🟡 NotReady | 🟡 |
-| `whisper-medium` | ✅ | 🟡 NotReady | 🟡 |
-| `whisper-small` | ✅ | 🟡 NotReady | 🟡 |
-| `parakeet-tdt-0.6b-v2` | ✅ 自动缓存 | 🟡 NotReady | 🟡 |
-| `sensevoice-small` | 🔴 待验证 | 🟡 NotReady | 🟡 |
-| `custom-command` | — | 🟡 NotReady | 🟡 |
+## 7. 字幕校对
 
-### 3.3 模型管理操作
+| 功能 | 当前状态 |
+|------|----------|
+| 导入视频/字幕、自动检测同目录字幕 | 🔴 未实现 |
+| 视频预览 + 字幕列表 + 当前字幕联动 | 🔴 未实现 |
+| 编辑、保存、重新打开一致性 | 🔴 未实现 |
+| 合并/拆分、时间偏移、搜索替换、撤销重做 | 🔴 未实现 |
+| AI 优化翻译、历史任务 | 🔴 未实现 |
 
-| 操作 | 旧 IPC | 新 Tauri command | 状态 |
-|------|--------|------------------|------|
-| 列出已安装 | `getSystemInfo` → `modelsInstalled` | `list_asr_models` | 🟢 只读 |
-| 下载模型 | `downloadModel` | — | 🔴 |
-| 取消下载 | `cancelModelDownload` | — | 🔴 |
-| 删除模型 | `deleteModel` | — | 🔴 |
-| 导入本地模型 | `importModel` | — | 🔴 |
-| 模型路径配置 | `settings.modelsPath` | — | 🔴 |
+## 8. 安全与权限
 
----
+| 安全项 | 当前状态 |
+|--------|----------|
+| Tauri capability | 🟢 前端仅有 core/opener/dialog open/save；审查修复后移除前端 `shell:allow-execute` |
+| 前端文件系统权限 | 🟢 无 `plugin-fs` 直接读写权限；配置文件导入导出走 Rust command |
+| FFmpeg 命令注入 | 🟢 Rust 结构化参数，不接收前端可执行路径 |
+| 输出覆盖保护 | 🟢 音频提取、字幕输出、视频烧录和配置导出默认拒绝覆盖已有文件 |
+| 模型删除路径逃逸 | 🟢 模型 ID 限定字符集，删除目标限定 `ggml-*.bin` |
+| API Key 防泄漏 | 🔴 配置 UI/存储策略未完成 |
+| 正式签名/Gatekeeper | 🔴 仍未做 Developer ID、hardened runtime、notarization、stapling |
 
-## 4. 翻译系统迁移矩阵
+## 9. 当前结论
 
-### 4.1 Provider 清单（旧 17 个 + 自定义）
+Agent B 的“阶段 0-11 完成”不能按字面接受。当前 Tauri 版是可运行的预览版，已经有 6 个非占位导航页和若干底层命令，但还不能替代旧 Electron 版。
 
-| Provider ID | 中文名 | 类型 | 新 Tauri | 状态 |
-|-------------|--------|------|----------|------|
-| `baidu` | 百度翻译 | API | — | 🔴 |
-| `google` | 谷歌翻译 | API | — | 🔴 |
-| `aliyun` | 阿里云翻译 | API | — | 🔴 |
-| `volc` | 火山翻译 | API | — | 🔴 |
-| `doubao` | 豆包翻译 | API | — | 🔴 |
-| `niutrans` | 小牛翻译 | API | — | 🔴 |
-| `tencent` | 腾讯翻译 | API | — | 🔴 |
-| `xunfei` | 讯飞翻译 | API | — | 🔴 |
-| `deeplx` | DeepLX | API | — | 🔴 |
-| `azure` | 微软翻译 | API | — | 🔴 |
-| `ollama` | Ollama | AI | — | 🔴 |
-| `deepseek` | 深度求索 | AI | — | 🔴 |
-| `azureopenai` | Azure OpenAI | AI | — | 🔴 |
-| `DeerAPI` | DeerAPI | AI | — | 🔴 |
-| `Gemini` | Gemini | AI | — | 🔴 |
-| `siliconflow` | 硅基流动 | AI | — | 🔴 |
-| `qwen` | 通义千问 | AI | — | 🔴 |
-| custom | 自定义 | OpenAI 兼容 | — | 🔴 |
+不可宣称完成的核心缺口：
 
-### 4.2 翻译功能
-
-| 功能 | 旧 IPC | 新 Tauri | 状态 |
-|------|--------|----------|------|
-| 加载 provider 列表 | `getTranslationProviders` | — | 🔴 |
-| 保存 provider 配置 | `setTranslationProviders` | — | 🔴 |
-| 测试翻译 | `testTranslation` | — | 🔴 |
-| 字幕翻译执行 | `handleTask` (translateOnly) | — | 🔴 |
-| AI 优化翻译 | `optimizeSubtitle` | — | 🔴 |
-| 批量 AI 优化 | `batchOptimizeSubtitles` | — | 🔴 |
-
----
-
-## 5. 设置迁移矩阵
-
-### 5.1 设置字段
-
-| 字段 | 旧 store key | 类型 | 新 Tauri | 状态 |
-|------|-------------|------|----------|------|
-| ASR 引擎 | `settings.asrEngine` | enum | — | 🔴 |
-| Whisper 命令模板 | `settings.whisperCommand` | string | — | 🔴 |
-| 界面语言 | `settings.language` | string | — | 🔴 |
-| 本地 Whisper | `settings.useLocalWhisper` | bool | — | 🔴 |
-| CUDA 加速 | `settings.useCuda` | bool | — | 🔴 |
-| 模型路径 | `settings.modelsPath` | string | — | 🔴 |
-| 最大上下文 | `settings.maxContext` | number | — | 🔴 |
-| 自定义临时目录 | `settings.useCustomTempDir` | bool | — | 🔴 |
-| VAD 启用 | `settings.useVAD` | bool | — | 🔴 |
-| VAD 阈值 | `settings.vadThreshold` | number | — | 🔴 |
-| VAD 最小语音时长 | `settings.vadMinSpeechDuration` | number | — | 🔴 |
-| VAD 最小静音时长 | `settings.vadMinSilenceDuration` | number | — | 🔴 |
-| VAD 最大语音时长 | `settings.vadMaxSpeechDuration` | number | — | 🔴 |
-| VAD 语音填充 | `settings.vadSpeechPad` | number | — | 🔴 |
-| VAD 样本重叠 | `settings.vadSamplesOverlap` | number | — | 🔴 |
-| 启动检查更新 | `settings.checkUpdateOnStartup` | bool | — | 🔴 |
-| 并发任务数 | `maxConcurrentTasks` | number | — | 🔴 |
-| 字幕输出格式 | `subtitleOutputFormat` | enum | — | 🔴 |
-| 翻译 provider | `translateProvider` | string | — | 🔴 |
-| 目标语言 | `targetLanguage` | string | — | 🔴 |
-| 翻译重试次数 | `translateRetryTimes` | number | — | 🔴 |
-
-### 5.2 设置操作
-
-| 操作 | 旧 IPC | 新 Tauri | 状态 |
-|------|--------|----------|------|
-| 读取设置 | `getSettings` | — | 🔴 |
-| 保存设置 | `setSettings` | — | 🔴 |
-| 恢复默认 | `clearConfig` | — | 🔴 |
-| 清除缓存 | `clearCache` | — | 🔴 |
-| 导出配置（加密） | `exportConfig` | — | 🔴 |
-| 导入配置（解密） | `importConfig` | — | 🔴 |
-| 选择目录 | `selectDirectory` | — | 🔴 |
-
----
-
-## 6. 字幕校对迁移矩阵
-
-| 功能 | 旧 IPC / 组件 | 新 Tauri | 状态 |
-|------|--------------|----------|------|
-| 导入视频+字幕 | `openDialog` + `file-selected` | — | 🔴 |
-| 自动检测字幕 | `detectSubtitles` | — | 🔴 |
-| 目录扫描字幕 | `scanDirectorySubtitles` | — | 🔴 |
-| 智能扫描 | `smartScanDirectory` | — | 🔴 |
-| 语言检测 | `detectLanguage` | — | 🔴 |
-| 创建校对任务 | `createProofreadTask` | — | 🔴 |
-| 更新校对任务 | `updateProofreadTask` | — | 🔴 |
-| 字幕编辑器 | `ProofreadEditor` 组件 | — | 🔴 |
-| AI 优化翻译 | `optimizeSubtitle` | — | 🔴 |
-| 批量 AI 优化 | `batchOptimizeSubtitles` | — | 🔴 |
-| 搜索替换 | 前端实现 | — | 🔴 |
-| 时间偏移 | 前端实现 | — | 🔴 |
-| 合并字幕 | 前端实现 | — | 🔴 |
-| 拆分字幕 | 前端实现 | — | 🔴 |
-| 撤销/重做 | 前端实现 | — | 🔴 |
-| 历史任务 | `getProofreadHistories` | — | 🔴 |
-
----
-
-## 7. 视频合字幕迁移矩阵
-
-| 功能 | 旧 IPC / 组件 | 新 Tauri | 状态 |
-|------|--------------|----------|------|
-| 选择视频 | `selectFile` | — | 🔴 |
-| 选择字幕 | `selectFile` | — | 🔴 |
-| 获取视频信息 | `subtitleMerge:getVideoInfo` | — | 🔴 |
-| 获取字幕信息 | `subtitleMerge:getSubtitleInfo` | — | 🔴 |
-| 样式预设（5种） | 前端 `StylePreset` | — | 🔴 |
-| 字体设置 | 前端 | — | 🔴 |
-| 边框设置 | 前端 | — | 🔴 |
-| 位置设置（9宫格） | 前端 | — | 🔴 |
-| CSS 预览 | 前端 | — | 🔴 |
-| 精确预览 | 前端 | — | 🔴 |
-| 开始烧录 | `subtitleMerge:startMerge` → FFmpeg | — | 🔴 |
-| 进度展示 | FFmpeg stdout 解析 | — | 🔴 |
-| 选择输出路径 | `subtitleMerge:selectOutputPath` | — | 🔴 |
-| 打开输出目录 | `subtitleMerge:openOutputFolder` | — | 🔴 |
-
----
-
-## 8. FFmpeg 迁移矩阵
-
-| 功能 | 旧实现 | 新 Tauri | 状态 |
-|------|--------|----------|------|
-| 版本检测 | Node spawn | `get_ffmpeg_version` (sidecar) | 🟢 |
-| 音频提取 | `subtitleGenerator.ts` | `extract_audio_plan`（只生成计划） | 🟡 |
-| 字幕烧录 | `subtitleMerge:startMerge` | `audio/mod.rs` plan（未暴露命令） | 🟡 |
-| 进度解析 | FFmpeg stdout | — | 🔴 |
-| sidecar 打包 | extraResources | `bundle.externalBin` | 🟢 |
-| sidecar 来源 | Homebrew 动态版 | Homebrew 动态版（需替换） | ⚠️ |
-
----
-
-## 9. IPC 通道完整映射
-
-### 9.1 Invoke 通道（旧 89 个）
-
-| 旧通道 | 新 Tauri command | 状态 |
-|--------|------------------|------|
-| `getTasks` | `list_tasks` | 🟢 |
-| `getSettings` | — | 🔴 |
-| `setSettings` | — | 🔴 |
-| `getTranslationProviders` | — | 🔴 |
-| `testTranslation` | — | 🔴 |
-| `getSystemInfo` | `get_app_info` + `list_asr_models` | 🟡 拆分 |
-| `deleteModel` | — | 🔴 |
-| `downloadModel` | — | 🔴 |
-| `cancelModelDownload` | — | 🔴 |
-| `importModel` | — | 🔴 |
-| `selectDirectory` | dialog plugin | 🟢 |
-| `selectFile` | dialog plugin | 🟢 |
-| `selectFiles` | dialog plugin | 🟢 |
-| `getDroppedFiles` | — | 🔴 |
-| `readSubtitleFile` | — | 🔴 |
-| `saveSubtitleFile` | — | 🔴 |
-| `getSubtitleAsVtt` | — | 🔴 |
-| `readRawFileContent` | fs plugin | 🟡 |
-| `checkFileExists` | fs plugin | 🟡 |
-| `getDirectoryFiles` | fs plugin | 🟡 |
-| `clearConfig` | — | 🔴 |
-| `getTempDir` | — | 🔴 |
-| `clearCache` | — | 🔴 |
-| `exportConfig` | — | 🔴 |
-| `importConfig` | — | 🔴 |
-| `check-for-updates` | — | 🔴 |
-| `download-update` | — | 🔴 |
-| `install-update` | — | 🔴 |
-| `get-cuda-environment` | — | 🔴（macOS 无 CUDA） |
-| `get-addon-summary` | — | 🔴 |
-| `getTaskStatus` | `list_tasks` | 🟢 |
-| `createProofreadTask` | — | 🔴 |
-| `updateProofreadTask` | — | 🔴 |
-| `detectSubtitles` | — | 🔴 |
-| `optimizeSubtitle` | — | 🔴 |
-| `batchOptimizeSubtitles` | — | 🔴 |
-| `subtitleMerge:getVideoInfo` | — | 🔴 |
-| `subtitleMerge:startMerge` | — | 🔴 |
-| 其余 ~50 通道 | — | 🔴 |
-
-### 9.2 Send 通道（旧 11 个）
-
-| 旧通道 | 新 Tauri | 状态 |
-|--------|----------|------|
-| `setTasks` | `create_task` / `cancel_task` | 🟡 命令式替代 |
-| `setTranslationProviders` | — | 🔴 |
-| `handleTask` | `create_task` | 🟡 |
-| `pauseTask` | — | 🔴 |
-| `resumeTask` | — | 🔴 |
-| `cancelTask` | `cancel_task` | 🟢 |
-| `openDialog` | dialog plugin | 🟢 |
-| `openUrl` | opener plugin | 🟢 |
-
-### 9.3 On 通道（旧 13 个）
-
-| 旧通道 | 新 Tauri event | 状态 |
-|--------|----------------|------|
-| `taskStatusChange` | `task-updated` | 🟢 |
-| `taskProgressChange` | `task-updated` | 🟢 |
-| `taskErrorChange` | `task-updated` | 🟢 |
-| `taskFileChange` | — | 🔴 |
-| `taskComplete` | `task-updated` | 🟢 |
-| `file-selected` | dialog plugin 回调 | 🟢 |
-| `message` | — | 🔴 |
-| `update-status` | — | 🔴 |
-| `newLog` | — | 🔴 |
-| `downloadProgress` | — | 🔴 |
-| `modelDownloadDetail` | — | 🔴 |
-| `addon-download-progress` | — | 🔴 |
-| `batchOptimizeProgress` | — | 🔴 |
-
----
-
-## 10. 安全迁移清单
-
-| 安全项 | 旧实现 | 新 Tauri | 状态 |
-|--------|--------|----------|------|
-| IPC 白名单 | preload.ts 89+11+13 通道 | capabilities JSON | 🟢 |
-| URL scheme 白名单 | `openExternal` scheme 检查 | opener plugin | 🟢 |
-| 路径遍历防护 | `validate_media_path` | `validate_media_path` | 🟢 |
-| API Key 存储 | electron-store（本地） | — | 🔴 |
-| 配置导入加密 | AES password | — | 🔴 |
-| CSP | webSecurity true | tauri.conf.json CSP | 🟢 |
-| XSS 防护 | DOMPurify sanitize | — | 🔴（暂无 HTML 渲染） |
-| shell 命令注入 | execFile + validateShellVar | sidecar + args 白名单 | 🟢 |
-| FFmpeg 参数注入 | 结构化生成 | 结构化 plan | 🟢 |
-
----
-
-## 11. 统计摘要
-
-| 类别 | 总数 | 已迁移 | 部分迁移 | 未迁移 |
-|------|------|--------|----------|--------|
-| 主导航 | 7 | 0 | 3 | 4 |
-| 任务类型 | 3 | 1 | 2 | 0 |
-| ASR 引擎 | 5 | 0 | 0 | 5 |
-| 模型操作 | 6 | 1 | 0 | 5 |
-| 翻译 Provider | 18 | 0 | 0 | 18 |
-| 设置字段 | 21 | 0 | 0 | 21 |
-| 设置操作 | 7 | 0 | 0 | 7 |
-| 字幕校对功能 | 16 | 0 | 0 | 16 |
-| 视频合字幕功能 | 14 | 0 | 0 | 14 |
-| FFmpeg 功能 | 6 | 2 | 2 | 2 |
-| Invoke 通道 | ~89 | ~8 | ~5 | ~76 |
-| Send 通道 | 11 | ~4 | ~2 | ~5 |
-| On 通道 | 13 | ~5 | 0 | ~8 |
-| 安全项 | 9 | 5 | 0 | 4 |
-
-**总体迁移进度：约 12%**
+- 真实任务流水线未接入。
+- 字幕校对编辑器未迁移。
+- ASR/翻译/FFmpeg 命令没有串成端到端业务任务。
+- 模型下载、checksum、导入、本地缓存治理未完成。
+- API Key 安全存储和加密配置导入导出未完成。
+- 正式签名发布未完成。

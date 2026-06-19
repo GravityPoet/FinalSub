@@ -10,7 +10,7 @@ pub struct Task {
     pub media_path: String,   // 绝对路径
     pub media_name: String,   // 显示名
     pub engine_id: String,    // e.g. "whisper-cpp", "parakeet-mlx"
-    pub model_id: String,     // e.g. "whisper-large-v3-turbo"
+    pub model_id: String,     // e.g. "large-v3-turbo"
     pub language: Option<String>,
     pub progress: f32,        // 0.0 ~ 1.0
     pub status_message: String,
@@ -42,11 +42,11 @@ pub struct Task {
 状态转换图：
 
 ```
-Pending → Running → Done
-Pending → Running → Error
-Pending → Running → Cancelled
+Pending → Running → Done      // 仅预览任务
+Pending → Running → Error     // 真实任务流水线未接入
+Pending → Running → Cancelled // 预览任务
 Pending → Cancelled
-Running → Paused → Running (未实现)
+Running → Paused → Running    // 未实现
 Running → Cancelled
 ```
 
@@ -68,7 +68,9 @@ Running → Cancelled
 
 - 方向：Rust → 前端
 - 载荷：完整 `Task` 结构体
-- 触发时机：任务创建、状态变化、进度更新、完成、错误、取消
+- 触发时机：预览任务创建、状态变化、进度更新、完成、取消
+
+注意：审查修复后，`create_task` 不再把真实 ASR/翻译任务伪装成完成；完整任务流水线接入前只允许 `create_preview_task` 产生模拟进度。
 
 ### `task-log`（规划，未实现）
 

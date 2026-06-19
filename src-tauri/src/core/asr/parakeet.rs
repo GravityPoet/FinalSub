@@ -104,7 +104,11 @@ impl AsrEngine for ParakeetMlxEngine {
             let path_val = std::env::var("PATH").unwrap_or_default();
             cmd.env(
                 "PATH",
-                format!("{}:{}", ffmpeg.parent().unwrap_or(ffmpeg).display(), path_val),
+                format!(
+                    "{}:{}",
+                    ffmpeg.parent().unwrap_or(ffmpeg).display(),
+                    path_val
+                ),
             );
             cmd.env("FFMPEG_PATH", ffmpeg.to_string_lossy().to_string());
         }
@@ -176,15 +180,14 @@ impl AsrEngine for ParakeetMlxEngine {
 }
 
 pub fn default_uv_bin() -> PathBuf {
-    let candidates = [
-        "/opt/homebrew/bin/uv",
-        "/Users/moonlitpoet/.local/bin/uv",
-        "/usr/local/bin/uv",
-    ];
-    for c in &candidates {
-        let p = PathBuf::from(c);
+    let mut candidates: Vec<PathBuf> = vec![PathBuf::from("/opt/homebrew/bin/uv")];
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/bin/uv"));
+    }
+    candidates.push(PathBuf::from("/usr/local/bin/uv"));
+    for p in &candidates {
         if p.exists() {
-            return p;
+            return p.clone();
         }
     }
     PathBuf::from("uv")

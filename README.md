@@ -19,17 +19,19 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSubTauri && npx tauri icon src-tauri/i
 - 中文界面和主导航入口：任务、任务队列、模型管理、翻译管理、字幕校对、视频合字幕、设置
 - FFmpeg sidecar 版本检测
 - 预览任务创建、进度事件、取消和任务列表刷新
-- ASR 模型目录展示
+- ASR 模型目录扫描和受管 Whisper 模型删除
+- 设置读写、重置、JSON 导入导出
+- 视频合字幕基础烧录命令
 - SRT 解析/序列化核心测试
 
 ## 待迁移
 
-- Whisper.cpp 实际转录
-- Parakeet MLX 实际转录
+- 真实任务流水线：音频提取、ASR、翻译、字幕写出、错误/重试/日志
+- Whisper.cpp 和 Parakeet MLX 转录命令接入任务队列
 - SenseVoice 运行时验证
-- 翻译服务配置
+- 翻译服务完整配置、API Key 安全存储、字幕批量翻译
 - 字幕校对编辑器
-- 视频合字幕完整流程
+- 视频合字幕进度解析、预览、取消
 - 正式发布签名与 notarization
 
 ## 验收命令
