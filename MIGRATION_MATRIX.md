@@ -75,6 +75,8 @@
 | 进度解析 | `parse_duration_ms` / `parse_current_time_ms` | 🟡 工具函数有测试，但未接入 UI |
 | sidecar 打包 | `bundle.externalBin` | 🟢 |
 | sidecar 来源 | osxexperts.net 静态 arm64 构建（GPL，ffmpeg 7.1.1） | 🟢 静态构建，无 Homebrew 依赖，可再分发 |
+| GPL 合规 | `src-tauri/licenses/ffmpeg-GPLv2.txt` + `ffmpeg-NOTICE.md`，经 `bundle.resources` 打进 `.app` | 🟢 许可证全文+出处+SHA256+源码书面要约随二进制分发 |
+| 架构覆盖 | 仅 `ffmpeg-aarch64`（arm64） | 🟡 原项目 ffmpeg-static 支持 Intel；通用包需补 x86_64 sidecar（开放决策） |
 
 ## 5. 翻译
 
