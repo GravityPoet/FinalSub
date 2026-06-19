@@ -30,5 +30,7 @@
 - `[x]` 独立复核 18 项声明：16 项硬核实通过，2 项缺口已处理
 - `[x]` 修复 `default_uv_bin()` 残留 `/opt/homebrew/bin/uv` 偏向 → PATH 优先 + 多候选兜底（`~/.local/bin`、`~/.cargo/bin`、homebrew、`/usr/local`）
 - `[x]` 重新 `build:universal`，使 uv 修复进入分发包（产物 19:00 重建，签名/verify 通过）
-- `[x]` whisper-cli **arm64**（Metal 原生）+ **x86_64**（Rosetta）双架构均实跑出正确递增时间轴 SRT
+- `[x]` whisper-cli + ffmpeg **arm64** 原生实跑通过（Metal / ffmpeg 7.1.1 GPL static + lavfi 生成 + 重采样）
+- `[x]` ffmpeg `otool -L` 零 Homebrew 依赖（arm64 + x86_64 均确认）
+- `[ ]` **x86_64 未实跑**：本机未装 Rosetta（`oahd` 未运行），仅静态验证（file/lipo/otool），运行闭环待 Intel Mac / CI
 - `[x]` Parakeet 在重建后的 `.app` 内实跑闭环
