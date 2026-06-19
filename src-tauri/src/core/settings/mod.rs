@@ -21,6 +21,10 @@ pub struct Settings {
     pub target_language: String,
     #[serde(alias = "translateProvider")]
     pub translate_provider: String,
+    #[serde(alias = "translateEndpoints")]
+    pub translate_endpoints: std::collections::HashMap<String, String>,
+    #[serde(alias = "translateModels")]
+    pub translate_models: std::collections::HashMap<String, String>,
     #[serde(alias = "translateRetryTimes")]
     pub translate_retry_times: u32,
     #[serde(alias = "useVad", alias = "useVAD")]
@@ -60,6 +64,8 @@ impl Default for Settings {
             source_language: "auto".into(),
             target_language: "zh".into(),
             translate_provider: String::new(),
+            translate_endpoints: std::collections::HashMap::new(),
+            translate_models: std::collections::HashMap::new(),
             translate_retry_times: 0,
             use_vad: true,
             vad_threshold: 0.5,

@@ -227,22 +227,32 @@ export default function HomePage() {
             <div className="mb-4 grid grid-cols-2 gap-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">源语言</label>
-                <input
-                  type="text"
+                <select
                   value={sourceLanguage}
                   onChange={(e) => setSourceLanguage(e.target.value)}
-                  placeholder="auto"
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
-                />
+                >
+                  <option value="auto">自动检测 (auto)</option>
+                  <option value="zh">中文 (zh)</option>
+                  <option value="en">英文 (en)</option>
+                  <option value="ja">日文 (ja)</option>
+                  <option value="ko">韩文 (ko)</option>
+                  <option value="yue">粤语 (yue)</option>
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">目标语言</label>
-                <input
-                  type="text"
+                <select
                   value={targetLanguage}
                   onChange={(e) => setTargetLanguage(e.target.value)}
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
-                />
+                >
+                  <option value="zh">中文 (zh)</option>
+                  <option value="en">英文 (en)</option>
+                  <option value="ja">日文 (ja)</option>
+                  <option value="ko">韩文 (ko)</option>
+                  <option value="yue">粤语 (yue)</option>
+                </select>
               </div>
             </div>
 

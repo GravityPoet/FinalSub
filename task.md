@@ -9,19 +9,29 @@
   - `[x]` 创建 `whisper.cpp-LICENSE.txt` 与 `whisper-NOTICE.md`
 - `[x]` 修改工程配置文件
   - `[x]` 修改 `tauri.conf.json`，将外部 binaries 和 resources 加入打包列表
-  - `[x]` 修改 `package.json`，在 `binaries:universal` 中追加 `whisper-cli` 的 lipo 合成
-  - `[x]` 修改 `.gitignore` 忽略 `whisper-cli-universal-apple-darwin`
-- `[x]` 修改 Rust 命令层代码
-  - `[x]` 在 `commands/mod.rs` 中编写 `resolve_sidecar` 辅助函数支持 dev & bundle 解析
-  - `[x]` 消除 `transcribe_audio` 中写死 `/opt/homebrew/bin/whisper-cli` 路径，改用 `resolve_sidecar` 并补齐 `app: AppHandle`
-  - `[x]` 消除 `transcribe_parakeet` 中写死脚本和 ffmpeg 路径，使用 `resolve_sidecar` 及 `resolve_resource` 处理
-- `[x]` 验收与验证 (SOP-B 门控)
-  - `[x]` 运行 `rg` 确认写死路径已清零
-  - `[x]` 执行 `cargo clippy` 及 `cargo test` 校验代码规范
-  - `[x]` 运行 `npm run build:universal` 构建通用包并验证签名
-  - `[x]` 使用 `lipo -info` 确认 whisper-cli / ffmpeg 双架构支持
-  - `[x]` 检查 `otool -L` 确认零 Homebrew 依赖
-  - `[x]` 业务级验证：在 dev 和 bundle 中运行 ASR 成功产出含递增时间轴的 SRT
+  - `[x]` G1: 修复 FFmpeg 未找到（改为 tokio::process::Command 绕过 shell-plugin）
+- `[x]` G2: 修改 Rust get_app_info 命令与 Cargo.toml 版本为 2.17.0
+- `[x]` G3: 移除 Layout.tsx 中的 "Tauri 预览版" 副标题
+- `[x]` G4: 修改 ModelsPage 与 Placeholder 中的 "待迁移/待接入" 等开发文案为 "敬请期待"
+- `[x]` G5: 修改 models/mod.rs 主推 Whisper Large V3 中文，SenseVoice 改为 "敬请期待"
+- `[x]` G6: 混合翻译设置与 Keychain 密钥安全存储
+  - `[x]` Rust 引入 keyring 依赖
+  - `[x]` Settings struct 增加 translate_endpoints 和 translate_models 字典
+  - `[x]` TranslationProvider struct 增加能力属性并在 builtin_providers 填充
+  - `[x]` 实现 Rust Keychain commands: set/get/delete_provider_secret
+  - `[x]` 在后端 test_translation 自动从 settings 和 Keychain 拼接缺失的配置
+  - `[x]` 前端 tauri.ts 暴露相应属性与 Keychain 接口
+  - `[x]` 前端 TranslationPage.tsx 支持动态配置表单 and Keychain 存储
+- `[x]` G7: 字幕校对功能完整移植
+  - `[x]` 实现 Rust 端任务数据持久化 load/save_proofread_tasks
+  - `[x]` 实现 Rust 端薄文件系统命令 fs_read_dir/fs_exists/fs_read_text/fs_write_text
+  - `[x]` 注册新 commands
+  - `[x]` 前端 tauri.ts 声明新接口
+  - `[x]` 在前端 pages/proofread/ 移植 detector, language_detector, hooks, editor 与 sub-components shim
+  - `[x]` 在 App.tsx 中挂载 ProofreadPage 路由
+- `[x]` G8: HomePage 源/目标语言文本框改为下拉 Select 框
+- `[x]` G9: 字幕合并页增加实时 ASS 转 CSS 字幕样式预览
+- `[x]` Build & Verify: 双架构打包、ad-hoc 签名与业务功能复验产出含递增时间轴的 SRT
 
 ---
 

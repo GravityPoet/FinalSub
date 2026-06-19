@@ -5,6 +5,8 @@ import {
   testTranslation,
   getSettings,
   saveSettingsCmd,
+  getProviderSecret,
+  setProviderSecret,
   type TranslationProvider,
   type Settings,
 } from "../lib/tauri";
@@ -17,6 +19,11 @@ export default function TranslationPage() {
   const [testResult, setTestResult] = useState<string>("");
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
+
+  const [apiUrl, setApiUrl] = useState("");
+  const [modelName, setModelName] = useState("");
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
 
   useEffect(() => {
     listTranslationProviders().then(setProviders).catch(console.error);
@@ -26,11 +33,66 @@ export default function TranslationPage() {
     }).catch(console.error);
   }, []);
 
+  const selectedProviderInfo = providers.find((p) => p.id === selectedProvider);
+
+  useEffect(() => {
+    if (!selectedProvider || !settings) return;
+    const ep = settings.translate_endpoints?.[selectedProvider] || selectedProviderInfo?.default_endpoint || "";
+    const md = settings.translate_models?.[selectedProvider] || "";
+    setApiUrl(ep);
+    setModelName(md);
+
+    if (selectedProviderInfo?.secret_fields) {
+      const loadSecrets = async () => {
+        const loaded: Record<string, string> = {};
+        for (const field of selectedProviderInfo.secret_fields) {
+          try {
+            const val = await getProviderSecret(selectedProvider, field);
+            loaded[field] = val || "";
+          } catch (e) {
+            console.error(`读取密钥 ${field} 失败`, e);
+          }
+        }
+        setSecrets(loaded);
+      };
+      loadSecrets();
+    } else {
+      setSecrets({});
+    }
+  }, [selectedProvider, settings, selectedProviderInfo]);
+
+  const handleSecretChange = (field: string, val: string) => {
+    setSecrets((prev) => ({ ...prev, [field]: val }));
+  };
+
   const handleSaveProvider = async () => {
-    if (!settings) return;
-    const updated = { ...settings, translate_provider: selectedProvider };
-    await saveSettingsCmd(updated);
-    setSettings(updated);
+    if (!settings || !selectedProvider) return;
+    setSuccessMsg("");
+    setError("");
+    try {
+      const updatedEndpoints = { ...(settings.translate_endpoints || {}), [selectedProvider]: apiUrl };
+      const updatedModels = { ...(settings.translate_models || {}), [selectedProvider]: modelName };
+      
+      const updated = {
+        ...settings,
+        translate_provider: selectedProvider,
+        translate_endpoints: updatedEndpoints,
+        translate_models: updatedModels,
+      };
+
+      await saveSettingsCmd(updated);
+      setSettings(updated);
+
+      if (selectedProviderInfo?.secret_fields) {
+        for (const field of selectedProviderInfo.secret_fields) {
+          await setProviderSecret(selectedProvider, field, secrets[field] || "");
+        }
+      }
+      setSuccessMsg("配置及密钥保存成功");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handleTest = async () => {
@@ -47,6 +109,9 @@ export default function TranslationPage() {
         source_language: "en",
         target_language: "zh",
         provider: selectedProvider,
+        api_url: apiUrl || undefined,
+        model_name: modelName || undefined,
+        api_key: secrets["apiKey"] || secrets["appSecret"] || secrets["secretKey"] || undefined,
       });
       if (resp.success) {
         setTestResult(resp.translated_text);
@@ -64,7 +129,7 @@ export default function TranslationPage() {
   const aiProviders = providers.filter((p) => p.is_ai);
 
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-4xl pb-10">
       <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">翻译管理</h2>
 
       {/* Provider 选择 */}
@@ -113,12 +178,70 @@ export default function TranslationPage() {
           </div>
         </div>
 
-        <button
-          onClick={handleSaveProvider}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          保存选择
-        </button>
+        {/* 动态配置表单 */}
+        {selectedProviderInfo && (selectedProviderInfo.requires_endpoint || selectedProviderInfo.requires_model || selectedProviderInfo.secret_fields?.length > 0) && (
+          <div className="my-5 border-t border-gray-150 pt-5 dark:border-gray-700 space-y-4">
+            <h4 className="font-semibold text-sm text-gray-900 dark:text-white">
+              配置 {selectedProviderInfo.name} 参数
+            </h4>
+            
+            {selectedProviderInfo.requires_endpoint && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">端点 URL</label>
+                <input
+                  type="text"
+                  value={apiUrl}
+                  onChange={(e) => setApiUrl(e.target.value)}
+                  placeholder={selectedProviderInfo.default_endpoint || "请输入接口端点"}
+                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+            )}
+            
+            {selectedProviderInfo.requires_model && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">模型名称</label>
+                <input
+                  type="text"
+                  value={modelName}
+                  onChange={(e) => setModelName(e.target.value)}
+                  placeholder="请输入模型名，例如 gpt-4o-mini"
+                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+            )}
+            
+            {selectedProviderInfo.secret_fields?.map((field) => (
+              <div key={field}>
+                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                  {field === "apiKey" ? "API Key" : field === "appSecret" || field === "secretKey" || field === "apiSecret" || field === "accessKeySecret" ? "Secret Key / 凭证密码" : field}
+                </label>
+                <input
+                  type="password"
+                  value={secrets[field] || ""}
+                  onChange={(e) => handleSecretChange(field, e.target.value)}
+                  placeholder="请输入密钥内容（本地 Keychain 加密存储）"
+                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSaveProvider}
+            disabled={!selectedProvider}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            保存选择与配置
+          </button>
+          {successMsg && (
+            <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
+              <CheckCircle size={14} /> {successMsg}
+            </span>
+          )}
+        </div>
       </section>
 
       {/* 测试翻译 */}
@@ -133,7 +256,7 @@ export default function TranslationPage() {
             value={testText}
             onChange={(e) => setTestText(e.target.value)}
             rows={3}
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700"
+            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
           />
         </div>
 
@@ -163,7 +286,7 @@ export default function TranslationPage() {
         </button>
 
         <p className="mt-3 text-xs text-gray-400">
-          注意：API 服务商需要在设置中配置 API Key 才能使用。Ollama 可直接使用本地服务。
+          注意：API 服务商需要在下方配置端点和 API Key 才能使用。Ollama 可直接使用本地服务。
         </p>
       </section>
     </div>

@@ -150,6 +150,11 @@ export interface TranslationProvider {
   name: string;
   provider_type: string;
   is_ai: boolean;
+  requires_api_key: boolean;
+  requires_endpoint: boolean;
+  requires_model: boolean;
+  secret_fields: string[];
+  default_endpoint: string;
 }
 
 export interface TranslateRequest {
@@ -186,6 +191,8 @@ export interface Settings {
   source_language: string;
   target_language: string;
   translate_provider: string;
+  translate_endpoints: Record<string, string>;
+  translate_models: Record<string, string>;
   translate_retry_times: number;
   use_vad: boolean;
   vad_threshold: number;
@@ -227,4 +234,40 @@ export async function exportConfigToPath(outputPath: string): Promise<string> {
 
 export async function importConfigFromPath(inputPath: string): Promise<Settings> {
   return invoke("import_config_from_path", { inputPath });
+}
+
+export async function setProviderSecret(providerId: string, field: string, value: string): Promise<void> {
+  return invoke("set_provider_secret", { providerId, field, value });
+}
+
+export async function getProviderSecret(providerId: string, field: string): Promise<string> {
+  return invoke("get_provider_secret", { providerId, field });
+}
+
+export async function deleteProviderSecret(providerId: string, field: string): Promise<void> {
+  return invoke("delete_provider_secret", { providerId, field });
+}
+
+export async function loadProofreadTasks(): Promise<string> {
+  return invoke("load_proofread_tasks");
+}
+
+export async function saveProofreadTasks(data: string): Promise<void> {
+  return invoke("save_proofread_tasks", { data });
+}
+
+export async function fsReadDir(dirPath: string): Promise<string[]> {
+  return invoke("fs_read_dir", { dirPath });
+}
+
+export async function fsExists(filePath: string): Promise<boolean> {
+  return invoke("fs_exists", { filePath });
+}
+
+export async function fsReadText(filePath: string): Promise<string> {
+  return invoke("fs_read_text", { filePath });
+}
+
+export async function fsWriteText(filePath: string, content: string): Promise<void> {
+  return invoke("fs_write_text", { filePath, content });
 }
