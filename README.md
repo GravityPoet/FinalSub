@@ -2,6 +2,18 @@
 
 FinalSub 的 Tauri 2 重写预览工程。当前目标是验证 Tauri + React UI、Rust 核心命令、任务状态事件、FFmpeg sidecar 和本地打包链路。
 
+## 品牌图标
+
+从 2026-06-19 起，FinalSub 所有新版打包图标统一使用 `src-tauri/icons/app-icon-source.png` 作为母版。
+
+生成 Tauri 全平台图标时执行：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSubTauri && npx tauri icon src-tauri/icons/app-icon-source.png
+```
+
+旧 Electron 兼容仓库使用同一母版同步到 `/Users/moonlitpoet/Tools/AI-tools/FinalSub/resources/icon-source.png` 和 `resources/icon.*`，迁移过程中不得恢复旧图标。
+
 ## 当前可用
 
 - 中文界面和主导航入口：任务、任务队列、模型管理、翻译管理、字幕校对、视频合字幕、设置

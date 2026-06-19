@@ -3,6 +3,9 @@
 生成时间：2026-06-19  
 来源：旧 Electron 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSub` + 新 Tauri 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri`  
 计划书：`/Users/moonlitpoet/Desktop/交接书/handoff-20260619-0238-finalsub-tauri-full-migration-plan.md`
+品牌图标母版：`/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri/src-tauri/icons/app-icon-source.png`
+
+图标裁决：从 2026-06-19 起，FinalSub 后续 Tauri 版、旧 Electron 兼容包和文档图标均使用该母版生成，不再恢复旧图标。
 
 ---
 
