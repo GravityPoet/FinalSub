@@ -156,6 +156,82 @@ pub fn extract_audio_plan(video_path: String, output_path: String) -> audio::Aud
 }
 
 #[tauri::command]
+pub async fn extract_audio(
+    app: AppHandle,
+    video_path: String,
+    output_path: String,
+) -> Result<String, String> {
+    let video_path = validate_media_path(&video_path)?;
+    let args = audio::extract_audio_args(
+        &video_path.to_string_lossy(),
+        &output_path,
+    );
+
+    let output = app
+        .shell()
+        .sidecar("binaries/ffmpeg")
+        .map_err(|e| format!("准备 FFmpeg sidecar 失败：{e}"))?
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| format!("运行 FFmpeg 失败：{e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg 音频提取失败：{stderr}"));
+    }
+
+    Ok(output_path)
+}
+
+#[derive(serde::Deserialize)]
+pub struct BurnSubtitleRequest {
+    pub video_path: String,
+    pub subtitle_path: String,
+    pub output_path: String,
+    pub font_size: Option<u32>,
+    pub font_color: Option<String>,
+    pub outline_color: Option<String>,
+    pub margin_v: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn burn_subtitle(
+    app: AppHandle,
+    req: BurnSubtitleRequest,
+) -> Result<String, String> {
+    let video_path = validate_media_path(&req.video_path)?;
+    let style = audio::BurnInStyleOptions {
+        font_size: req.font_size,
+        font_color: req.font_color,
+        outline_color: req.outline_color,
+        margin_v: req.margin_v,
+    };
+    let args = audio::burn_in_args(
+        &video_path.to_string_lossy(),
+        &req.subtitle_path,
+        &req.output_path,
+        &style,
+    );
+
+    let output = app
+        .shell()
+        .sidecar("binaries/ffmpeg")
+        .map_err(|e| format!("准备 FFmpeg sidecar 失败：{e}"))?
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| format!("运行 FFmpeg 失败：{e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg 字幕烧录失败：{stderr}"));
+    }
+
+    Ok(req.output_path)
+}
+
+#[tauri::command]
 pub async fn get_ffmpeg_version(app: AppHandle) -> Result<String, String> {
     let output = app
         .shell()

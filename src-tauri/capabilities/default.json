@@ -12,8 +12,7 @@
       "allow": [
         {
           "name": "binaries/ffmpeg",
-          "sidecar": true,
-          "args": ["-version"]
+          "sidecar": true
         }
       ]
     }

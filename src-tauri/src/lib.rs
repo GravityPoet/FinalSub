@@ -32,6 +32,8 @@ pub fn run() {
             commands::cancel_task,
             commands::normalize_srt,
             commands::extract_audio_plan,
+            commands::extract_audio,
+            commands::burn_subtitle,
             commands::get_ffmpeg_version,
             commands::get_settings,
             commands::save_settings_cmd,
