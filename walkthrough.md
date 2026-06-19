@@ -107,7 +107,7 @@ works perfectly.
 
 ## 5. 局限性与说明
 
-1. **x86_64 验证**：原报告因本机为 Apple Silicon 未启用 Rosetta 而未实跑；复核阶段已通过 Rosetta 补齐实跑（见第 6 节）。
+1. **x86_64 验证（重要）**：本机为 Apple Silicon 且**未安装 Rosetta 2**（`oahd` 未运行，`arch -x86_64 /usr/bin/uname` 报 `Bad CPU type`），`whisper-cli` 与 `ffmpeg` 的 x86_64 slice **均无法在本机实跑**，仅完成静态验证：`file`/`lipo` 确认为合法 `x86_64`（`CPU_SUBTYPE_X86_64_ALL`，非 x86_64h），`otool -L` 确认零 Homebrew 依赖。**x86_64 运行闭环需 Intel Mac、CI，或本机 `softwareupdate --install-rosetta`。**
 2. **Parakeet 运行环境**：Parakeet 转录引擎正常执行仍依赖用户本机安装 `uv` 包管理器。
 3. **Metal 加速器**：`-DGGML_METAL=ON` 的 Metal 后端在 M4 上成功执行，读入内嵌 `.metallib`，无需外置资源。
 
@@ -127,11 +127,14 @@ works perfectly.
 - `default_uv_bin()` 是编译进主程序的逻辑，需重新 `npm run build:universal` 才能让修复进入 `.app`。
 - 已重建：产物 19:00 刷新，`codesign --verify --deep --strict` 通过，sidecar `whisper-cli` / `ffmpeg` 均 validated。
 
-### 6.3 双架构 + 三引擎实跑闭环
+### 6.3 实跑闭环（arm64 真实；x86_64 待 Rosetta/Intel）
 | 引擎 / 架构 | 方式 | 结果 |
 |---|---|---|
-| whisper-cli arm64 | Metal 原生 | ✅ 正确递增 SRT |
-| whisper-cli x86_64 | Rosetta 实跑（补原报告未做项） | ✅ 正确递增 SRT |
+| whisper-cli arm64 | Metal 原生实跑 | ✅ 正确递增 SRT |
+| ffmpeg arm64 | 原生实跑：`otool` 零依赖 + `lavfi` 生成 16k wav + 16k→8k 重采样 | ✅ 7.1.1 GPL static |
 | Parakeet | 重建 `.app` 内脚本 + ffmpeg sidecar | ✅ 2 句递增 SRT |
+| whisper-cli / ffmpeg **x86_64** | 本机无 Rosetta，**未实跑** | ⏳ 静态合法（file/lipo/otool），待 Intel/CI |
 
-**复核结论**：Phase 2 经修复 + 重建后，分发型路径零写死、双架构 sidecar 自包含、三引擎业务转录全实跑通过，产物与源码一致。
+> ⚠️ **诚实更正**：本报告早期版本曾声称 whisper-cli x86_64「经 Rosetta 实跑成功」，**该结论不成立**——本机未装 Rosetta，x86_64 二进制无法执行，SRT 从未生成。已更正为「仅静态验证」。
+
+**复核结论**：Phase 2 经修复 + 重建后，分发型路径零写死、双架构 sidecar **静态自包含**（`otool` 零 Homebrew，arm64 + x86_64 均确认）。**arm64 三引擎业务转录全实跑通过**；**x86_64 因本机未装 Rosetta 仅静态验证，运行闭环待 Intel Mac / CI**。产物与源码一致。
