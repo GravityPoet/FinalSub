@@ -29,6 +29,9 @@ pub enum FinalSubError {
 
     #[error("tauri error: {0}")]
     Tauri(#[from] tauri::Error),
+
+    #[error("validation error: {0}")]
+    Validation(String),
 }
 
 pub type Result<T> = std::result::Result<T, FinalSubError>;

@@ -6,6 +6,7 @@ use tauri_plugin_shell::ShellExt;
 
 use crate::core::audio;
 use crate::core::models::AsrModelInfo;
+use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{self, Task, TaskMap, TaskStatus, TaskType};
 use crate::state::AppState;
@@ -232,6 +233,35 @@ fn start_preview_worker(app: AppHandle, tasks: TaskMap, task_id: String) {
 
 fn emit_task_update(app: &AppHandle, task: &Task) {
     let _ = app.emit(TASK_UPDATED_EVENT, task.clone());
+}
+
+#[tauri::command]
+pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    settings::load_settings(&state.app_config_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_settings_cmd(
+    state: State<'_, AppState>,
+    new_settings: Settings,
+) -> Result<Settings, String> {
+    settings::save_settings(&state.app_config_dir, &new_settings).map_err(|e| e.to_string())?;
+    Ok(new_settings)
+}
+
+#[tauri::command]
+pub fn reset_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    settings::reset_settings(&state.app_config_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_config(state: State<'_, AppState>) -> Result<String, String> {
+    settings::export_config(&state.app_config_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_config(state: State<'_, AppState>, json: String) -> Result<Settings, String> {
+    settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
