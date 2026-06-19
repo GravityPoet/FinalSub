@@ -281,6 +281,8 @@ mod tests {
             "/tmp/o.mp4",
             &BurnInStyleOptions::default(),
         );
-        assert!(args.windows(2).any(|w| w[0] == "-vf" && w[1].contains("subtitles=")));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "-vf" && w[1].contains("subtitles=")));
     }
 }

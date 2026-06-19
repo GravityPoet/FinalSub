@@ -11,7 +11,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let config_dir = app
@@ -46,6 +45,8 @@ pub fn run() {
             commands::reset_settings,
             commands::export_config,
             commands::import_config,
+            commands::export_config_to_path,
+            commands::import_config_from_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

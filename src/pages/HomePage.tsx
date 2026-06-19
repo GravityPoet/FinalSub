@@ -45,7 +45,7 @@ export default function HomePage() {
 
   const [taskType, setTaskType] = useState("generate-only");
   const [engineId, setEngineId] = useState("whisper-cpp");
-  const [modelId, setModelId] = useState("whisper-large-v3-turbo");
+  const [modelId, setModelId] = useState("large-v3-turbo");
   const [sourceLanguage, setSourceLanguage] = useState("auto");
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [outputFormat, setOutputFormat] = useState("srt");
@@ -90,7 +90,7 @@ export default function HomePage() {
         engine_id: engineId,
         model_id: modelId,
         source_language: sourceLanguage,
-        target_language: taskType !== "translate-only" ? undefined : targetLanguage,
+        target_language: taskType === "generate-only" ? undefined : targetLanguage,
         output_format: outputFormat,
       });
       navigate("/tasks");

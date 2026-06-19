@@ -27,47 +27,69 @@ pub struct AsrModelInfo {
 pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
     vec![
         AsrModelInfo {
-            id: "whisper-large-v3-turbo".into(),
+            id: "large-v3-turbo".into(),
             engine_id: "whisper-cpp".into(),
             name: "Whisper Large V3 Turbo".into(),
             description: "速度和精度平衡较好的通用多语言模型".into(),
-            languages: vec!["en".into(), "zh".into(), "ja".into(), "ko".into(), "auto".into()],
+            languages: vec![
+                "en".into(),
+                "zh".into(),
+                "ja".into(),
+                "ko".into(),
+                "auto".into(),
+            ],
             best_for: "general-multilingual".into(),
             size_mb: Some(1500),
-            download_url: Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".into()),
+            download_url: Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+                    .into(),
+            ),
             status: ModelStatus::NotReady,
         },
         AsrModelInfo {
-            id: "whisper-large-v3".into(),
+            id: "large-v3".into(),
             engine_id: "whisper-cpp".into(),
             name: "Whisper Large V3".into(),
             description: "高精度多语言 Whisper 模型，适合质量优先的任务".into(),
-            languages: vec!["en".into(), "zh".into(), "ja".into(), "ko".into(), "auto".into()],
+            languages: vec![
+                "en".into(),
+                "zh".into(),
+                "ja".into(),
+                "ko".into(),
+                "auto".into(),
+            ],
             best_for: "high-accuracy-multilingual".into(),
             size_mb: Some(3100),
-            download_url: Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin".into()),
+            download_url: Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
+                    .into(),
+            ),
             status: ModelStatus::NotReady,
         },
         AsrModelInfo {
-            id: "whisper-medium".into(),
+            id: "medium".into(),
             engine_id: "whisper-cpp".into(),
             name: "Whisper Medium".into(),
             description: "中等体积，速度快于 large，适合平衡场景".into(),
             languages: vec!["en".into(), "zh".into(), "auto".into()],
             best_for: "balanced".into(),
             size_mb: Some(1500),
-            download_url: Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin".into()),
+            download_url: Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin".into(),
+            ),
             status: ModelStatus::NotReady,
         },
         AsrModelInfo {
-            id: "whisper-small".into(),
+            id: "small".into(),
             engine_id: "whisper-cpp".into(),
             name: "Whisper Small".into(),
             description: "速度较快，占用较低，精度低于大模型".into(),
             languages: vec!["en".into(), "auto".into()],
             best_for: "fast-low-memory".into(),
             size_mb: Some(500),
-            download_url: Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin".into()),
+            download_url: Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin".into(),
+            ),
             status: ModelStatus::NotReady,
         },
         AsrModelInfo {
@@ -86,7 +108,13 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
             engine_id: "sensevoice".into(),
             name: "SenseVoice Small".into(),
             description: "中文和粤语识别候选模型，等待运行时验证接入".into(),
-            languages: vec!["zh".into(), "yue".into(), "en".into(), "ja".into(), "ko".into()],
+            languages: vec![
+                "zh".into(),
+                "yue".into(),
+                "en".into(),
+                "ja".into(),
+                "ko".into(),
+            ],
             best_for: "chinese-cantonese".into(),
             size_mb: Some(800),
             download_url: Some("https://huggingface.co/FunAudioLLM/SenseVoiceSmall".into()),
@@ -107,7 +135,33 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
 }
 
 pub fn whisper_model_path(models_dir: &Path, model_id: &str) -> std::path::PathBuf {
-    models_dir.join(format!("ggml-{model_id}.bin"))
+    models_dir.join(whisper_model_file_name(model_id))
+}
+
+pub fn whisper_model_file_name(model_id: &str) -> String {
+    format!("ggml-{}.bin", normalize_whisper_model_id(model_id))
+}
+
+pub fn normalize_whisper_model_id(model_id: &str) -> String {
+    model_id
+        .trim()
+        .strip_prefix("whisper-")
+        .unwrap_or_else(|| model_id.trim())
+        .to_string()
+}
+
+fn validate_whisper_model_id(model_id: &str) -> crate::error::Result<String> {
+    let normalized = normalize_whisper_model_id(model_id);
+    let valid = !normalized.is_empty()
+        && normalized
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !valid {
+        return Err(crate::error::FinalSubError::Validation(format!(
+            "模型 ID 格式异常，拒绝操作：{model_id}"
+        )));
+    }
+    Ok(normalized)
 }
 
 pub fn scan_model_status(catalog: &mut [AsrModelInfo], whisper_dir: &Path, parakeet_dir: &Path) {
@@ -138,17 +192,15 @@ pub fn scan_model_status(catalog: &mut [AsrModelInfo], whisper_dir: &Path, parak
 }
 
 pub fn delete_whisper_model(models_dir: &Path, model_id: &str) -> crate::error::Result<()> {
-    let path = whisper_model_path(models_dir, model_id);
+    let normalized = validate_whisper_model_id(model_id)?;
+    let path = whisper_model_path(models_dir, &normalized);
     if !path.exists() {
         return Err(crate::error::FinalSubError::Validation(format!(
             "模型文件不存在：{}",
             path.display()
         )));
     }
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if !file_name.starts_with("ggml-") || !file_name.ends_with(".bin") {
         return Err(crate::error::FinalSubError::Validation(
             "模型文件名格式异常，拒绝删除".into(),
@@ -173,16 +225,29 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let whisper_dir = tmp.path().join("whisper");
         std::fs::create_dir_all(&whisper_dir).unwrap();
-        std::fs::write(whisper_dir.join("ggml-whisper-small.bin"), b"fake").unwrap();
+        std::fs::write(whisper_dir.join("ggml-small.bin"), b"fake").unwrap();
 
         let mut catalog = builtin_model_catalog();
         scan_model_status(&mut catalog, &whisper_dir, &tmp.path().join("parakeet"));
 
-        let small = catalog.iter().find(|m| m.id == "whisper-small").unwrap();
+        let small = catalog.iter().find(|m| m.id == "small").unwrap();
         assert!(matches!(small.status, ModelStatus::Downloaded));
 
-        let large = catalog.iter().find(|m| m.id == "whisper-large-v3").unwrap();
+        let large = catalog.iter().find(|m| m.id == "large-v3").unwrap();
         assert!(matches!(large.status, ModelStatus::Available));
+    }
+
+    #[test]
+    fn whisper_model_path_uses_ggml_file_names() {
+        let dir = std::path::PathBuf::from("/models");
+        assert_eq!(
+            whisper_model_path(&dir, "large-v3-turbo"),
+            dir.join("ggml-large-v3-turbo.bin")
+        );
+        assert_eq!(
+            whisper_model_path(&dir, "whisper-small"),
+            dir.join("ggml-small.bin")
+        );
     }
 
     #[test]
@@ -195,7 +260,10 @@ mod tests {
         let mut catalog = builtin_model_catalog();
         scan_model_status(&mut catalog, &tmp.path().join("whisper"), &parakeet_dir);
 
-        let parakeet = catalog.iter().find(|m| m.id == "parakeet-tdt-0.6b-v2").unwrap();
+        let parakeet = catalog
+            .iter()
+            .find(|m| m.id == "parakeet-tdt-0.6b-v2")
+            .unwrap();
         assert!(matches!(parakeet.status, ModelStatus::Downloaded));
     }
 
@@ -210,9 +278,26 @@ mod tests {
     }
 
     #[test]
+    fn delete_model_accepts_legacy_prefixed_id() {
+        let tmp = TempDir::new().unwrap();
+        let models_dir = tmp.path();
+        std::fs::write(models_dir.join("ggml-small.bin"), b"fake").unwrap();
+
+        delete_whisper_model(models_dir, "whisper-small").unwrap();
+        assert!(!models_dir.join("ggml-small.bin").exists());
+    }
+
+    #[test]
     fn delete_model_rejects_missing() {
         let tmp = TempDir::new().unwrap();
         let result = delete_whisper_model(tmp.path(), "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn delete_model_rejects_path_escape() {
+        let tmp = TempDir::new().unwrap();
+        let result = delete_whisper_model(tmp.path(), "../../small");
         assert!(result.is_err());
     }
 }

@@ -5,8 +5,8 @@ import {
   getSettings,
   saveSettingsCmd,
   resetSettings,
-  exportConfig,
-  importConfig,
+  exportConfigToPath,
+  importConfigFromPath,
   type Settings,
 } from "../lib/tauri";
 
@@ -107,14 +107,12 @@ export default function SettingsPage() {
 
   const handleExport = async () => {
     try {
-      const json = await exportConfig();
       const path = await save({
         defaultPath: "finalsub-config.json",
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (path) {
-        const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-        await writeTextFile(path, json);
+        await exportConfigToPath(path);
         showMsg("ok", "配置已导出");
       }
     } catch (err) {
@@ -129,9 +127,7 @@ export default function SettingsPage() {
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (typeof selected === "string") {
-        const { readTextFile } = await import("@tauri-apps/plugin-fs");
-        const json = await readTextFile(selected);
-        const imported = await importConfig(json);
+        const imported = await importConfigFromPath(selected);
         setSettings(imported);
         showMsg("ok", "配置已导入");
       }
@@ -291,7 +287,7 @@ export default function SettingsPage() {
                     className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
                   />
                 </SettingRow>
-                <SettingRow label="最小时长 (ms)">
+                <SettingRow label="最小静音时长 (ms)">
                   <input
                     type="number"
                     min={0}
