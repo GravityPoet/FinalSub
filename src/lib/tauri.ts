@@ -27,12 +27,15 @@ export interface Task {
   media_name: string;
   engine_id: string;
   model_id: string;
-  language: string | null;
+  source_language: string | null;
+  target_language: string | null;
+  output_format: string;
   progress: number;
   status_message: string;
   output_path: string | null;
   error: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface AudioExtractPlan {
@@ -54,14 +57,18 @@ export async function getModelStatus(modelId: string): Promise<AsrModelInfo | nu
   return invoke("get_model_status", { modelId });
 }
 
-export async function createTask(
-  mediaPath: string,
-  mediaName: string,
-  engineId: string,
-  modelId: string,
-  language?: string
-): Promise<Task> {
-  return invoke("create_task", { mediaPath, mediaName, engineId, modelId, language });
+export interface CreateTaskRequest {
+  task_type: string;
+  media_path: string;
+  engine_id: string;
+  model_id: string;
+  source_language?: string;
+  target_language?: string;
+  output_format?: string;
+}
+
+export async function createTask(req: CreateTaskRequest): Promise<Task> {
+  return invoke("create_task", { req });
 }
 
 export async function createPreviewTask(mediaPath: string): Promise<Task> {

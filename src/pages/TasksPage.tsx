@@ -27,6 +27,19 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function TaskTypeLabel({ type }: { type: string }) {
+  const labels: Record<string, string> = {
+    "generate-and-translate": "生成并翻译",
+    "generate-only": "仅生成",
+    "translate-only": "仅翻译",
+  };
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+      {labels[type] ?? type}
+    </span>
+  );
+}
+
 function sortTasks(tasks: Task[]): Task[] {
   return [...tasks].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
 }
@@ -113,7 +126,11 @@ export default function TasksPage() {
                     {task.media_path}
                   </p>
                   <p className="mt-1 text-xs text-gray-500">
-                    引擎：{task.engine_id} | 模型：{task.model_id}
+                    <TaskTypeLabel type={task.task_type} />
+                    {" · "}{task.engine_id} · {task.model_id}
+                    {task.source_language && ` · ${task.source_language}`}
+                    {task.target_language && ` → ${task.target_language}`}
+                    {" · "}{task.output_format.toUpperCase()}
                   </p>
                 </div>
                 <div className="flex items-center justify-end gap-2">
