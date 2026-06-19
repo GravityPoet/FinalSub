@@ -90,3 +90,47 @@ export async function extractAudioPlan(
 export async function getFfmpegVersion(): Promise<string> {
   return invoke("get_ffmpeg_version");
 }
+
+export interface Settings {
+  language: string;
+  asr_engine: string;
+  models_path: string;
+  max_concurrent_tasks: number;
+  subtitle_output_format: string;
+  source_language: string;
+  target_language: string;
+  translate_provider: string;
+  translate_retry_times: number;
+  use_vad: boolean;
+  vad_threshold: number;
+  vad_min_speech_duration_ms: number;
+  vad_min_silence_duration_ms: number;
+  vad_max_speech_duration_s: number;
+  vad_speech_pad_ms: number;
+  vad_samples_overlap: number;
+  check_update_on_startup: boolean;
+  use_custom_temp_dir: boolean;
+  custom_temp_dir: string;
+  whisper_command: string;
+  max_context: number;
+}
+
+export async function getSettings(): Promise<Settings> {
+  return invoke("get_settings");
+}
+
+export async function saveSettingsCmd(newSettings: Settings): Promise<Settings> {
+  return invoke("save_settings_cmd", { newSettings });
+}
+
+export async function resetSettings(): Promise<Settings> {
+  return invoke("reset_settings");
+}
+
+export async function exportConfig(): Promise<string> {
+  return invoke("export_config");
+}
+
+export async function importConfig(json: string): Promise<Settings> {
+  return invoke("import_config", { json });
+}
