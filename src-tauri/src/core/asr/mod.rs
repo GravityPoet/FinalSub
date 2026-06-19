@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::subtitle::SubtitleTrack;
 
+pub mod whisper;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsrCapabilities {
     pub supports_streaming: bool,

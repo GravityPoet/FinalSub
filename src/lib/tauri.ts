@@ -116,6 +116,17 @@ export async function getFfmpegVersion(): Promise<string> {
   return invoke("get_ffmpeg_version");
 }
 
+export interface TranscribeRequest {
+  audio_path: string;
+  output_path: string;
+  model_id: string;
+  language?: string;
+}
+
+export async function transcribeAudio(req: TranscribeRequest): Promise<string> {
+  return invoke("transcribe_audio", { req });
+}
+
 export interface Settings {
   language: string;
   asr_engine: string;
