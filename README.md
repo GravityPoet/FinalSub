@@ -1,6 +1,6 @@
-# FinalSub Tauri Preview
+# FinalSub
 
-FinalSub 的 Tauri 2 重写预览工程。当前目标是验证 Tauri + React UI、Rust 核心命令、任务状态事件、FFmpeg sidecar 和本地打包链路。
+独立的跨平台字幕生成与翻译桌面应用，基于 Tauri 2 + React + Rust。
 
 ## 品牌图标
 
@@ -44,8 +44,12 @@ cd .. && npm run build:local
 
 `npm run build:local` 会执行 Tauri 打包、本地 ad-hoc 签名和 `codesign --verify --deep --strict` 校验。
 
-## FFmpeg sidecar 说明
+## FFmpeg 与 ASR Sidecar 说明
 
-当前 `src-tauri/binaries/ffmpeg-aarch64-apple-darwin` 来自本机 Homebrew `ffmpeg 8.1.1`，用于 Apple Silicon 本机预览验证。它仍依赖 Homebrew 动态库，不是正式可再分发的完整 FFmpeg 包。
+本项目内置了已完成签名的、可直接分发的静态多架构 (Universal) `ffmpeg` 与 `whisper-cli` Sidecar 二进制文件（支持 x86_64 与 arm64），无外部 Homebrew 或系统运行时依赖，符合全自包含打包与沙箱安全合规要求。
 
-正式发布前需要替换为可再分发的 FFmpeg 方案，并完成依赖库、许可证、签名和 notarization 验证。
+## 致敬与开源授权
+
+FinalSub 是一个独立的字幕生成与翻译应用。本项目在研发与设计过程中，其早期的基础架构及部分功能设计灵感来自优秀的开源项目 **SmartSub (妙幕)** (`https://github.com/buxuku/SmartSub`，基于 MIT 许可证开源，Copyright (c) 2024 Lin Xiaodong)。我们对此表示诚挚的谢意。
+
+关于第三方开源依赖及上游基座的完整许可协议与版权声明，请参阅 [THIRD_PARTY_NOTICES.md](file:///Users/moonlitpoet/Tools/AI-tools/FinalSubTauri/THIRD_PARTY_NOTICES.md)。
