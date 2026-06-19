@@ -5,6 +5,8 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::ShellExt;
 
 use crate::core::audio;
+use crate::core::asr::whisper::WhisperCppEngine;
+use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
 use crate::core::models::AsrModelInfo;
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
@@ -227,6 +229,52 @@ pub async fn burn_subtitle(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("FFmpeg 字幕烧录失败：{stderr}"));
     }
+
+    Ok(req.output_path)
+}
+
+#[derive(serde::Deserialize)]
+pub struct TranscribeRequest {
+    pub audio_path: String,
+    pub output_path: String,
+    pub model_id: String,
+    pub language: Option<String>,
+}
+
+#[tauri::command]
+pub async fn transcribe_audio(
+    state: State<'_, AppState>,
+    req: TranscribeRequest,
+) -> Result<String, String> {
+    let whisper_bin = std::path::PathBuf::from("/opt/homebrew/bin/whisper-cli");
+    let models_dir = std::path::PathBuf::from(&state.app_config_dir)
+        .parent()
+        .unwrap_or(&std::path::PathBuf::from("/tmp"))
+        .join("whisper-models");
+
+    let engine = WhisperCppEngine::new(whisper_bin, models_dir);
+    let model_ref = AsrModelRef {
+        engine_id: "whisper-cpp".into(),
+        model_id: req.model_id.clone(),
+        model_path: None,
+    };
+
+    engine.prepare(&model_ref).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let job = TranscribeJob {
+        audio_path: req.audio_path,
+        output_path: req.output_path.clone(),
+        language: req.language,
+        model: model_ref,
+    };
+
+    let track = engine.transcribe(job, tx).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+
+    let srt = track.to_srt();
+    tokio::fs::write(&req.output_path, &srt)
+        .await
+        .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
 
     Ok(req.output_path)
 }
