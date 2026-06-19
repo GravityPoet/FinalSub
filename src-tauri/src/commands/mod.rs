@@ -12,6 +12,7 @@ use crate::core::models::{self, AsrModelInfo};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType};
+use crate::core::translation::{self, TranslationProvider};
 use crate::state::AppState;
 
 const TASK_UPDATED_EVENT: &str = "task-updated";
@@ -341,6 +342,16 @@ pub async fn transcribe_parakeet(
         .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
 
     Ok(req.output_path)
+}
+
+#[tauri::command]
+pub fn list_translation_providers() -> Vec<TranslationProvider> {
+    translation::builtin_providers()
+}
+
+#[tauri::command]
+pub async fn test_translation(req: translation::TranslateRequest) -> Result<translation::TranslateResponse, String> {
+    translation::translate_text(&req).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

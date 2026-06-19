@@ -38,6 +38,8 @@ pub fn run() {
             commands::burn_subtitle,
             commands::transcribe_audio,
             commands::transcribe_parakeet,
+            commands::list_translation_providers,
+            commands::test_translation,
             commands::get_ffmpeg_version,
             commands::get_settings,
             commands::save_settings_cmd,

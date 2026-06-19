@@ -145,6 +145,38 @@ export async function transcribeParakeet(req: TranscribeParakeetRequest): Promis
   return invoke("transcribe_parakeet", { req });
 }
 
+export interface TranslationProvider {
+  id: string;
+  name: string;
+  provider_type: string;
+  is_ai: boolean;
+}
+
+export interface TranslateRequest {
+  text: string;
+  source_language: string;
+  target_language: string;
+  provider: string;
+  api_key?: string;
+  api_url?: string;
+  model_name?: string;
+}
+
+export interface TranslateResponse {
+  translated_text: string;
+  provider: string;
+  success: boolean;
+  error?: string;
+}
+
+export async function listTranslationProviders(): Promise<TranslationProvider[]> {
+  return invoke("list_translation_providers");
+}
+
+export async function testTranslation(req: TranslateRequest): Promise<TranslateResponse> {
+  return invoke("test_translation", { req });
+}
+
 export interface Settings {
   language: string;
   asr_engine: string;
