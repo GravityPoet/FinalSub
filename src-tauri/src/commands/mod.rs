@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, State};
@@ -8,7 +8,7 @@ use crate::core::audio;
 use crate::core::models::AsrModelInfo;
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
-use crate::core::task_queue::{self, Task, TaskMap, TaskStatus, TaskType};
+use crate::core::task_queue::{self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType};
 use crate::state::AppState;
 
 const TASK_UPDATED_EVENT: &str = "task-updated";
@@ -37,29 +37,49 @@ pub fn get_model_status(state: State<'_, AppState>, model_id: String) -> Option<
     state.models.iter().find(|m| m.id == model_id).cloned()
 }
 
+#[derive(serde::Deserialize)]
+pub struct CreateTaskRequest {
+    pub task_type: String,
+    pub media_path: String,
+    pub engine_id: String,
+    pub model_id: String,
+    pub source_language: Option<String>,
+    pub target_language: Option<String>,
+    pub output_format: Option<String>,
+}
+
 #[tauri::command]
 pub async fn create_task(
     app: AppHandle,
     state: State<'_, AppState>,
-    media_path: String,
-    media_name: String,
-    engine_id: String,
-    model_id: String,
-    language: Option<String>,
+    req: CreateTaskRequest,
 ) -> Result<Task, String> {
-    let media_path = validate_media_path(&media_path)?;
-    let media_name = normalize_media_name(&media_path, &media_name);
-    let engine_id = validate_non_empty("engine_id", engine_id)?;
-    let model_id = validate_non_empty("model_id", model_id)?;
+    let media_path = validate_media_path(&req.media_path)?;
+    let media_name = media_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未命名媒体")
+        .to_string();
+    let engine_id = validate_non_empty("engine_id", req.engine_id)?;
+    let model_id = validate_non_empty("model_id", req.model_id)?;
 
-    let task = task_queue::create_task(
-        TaskType::GenerateOnly,
-        media_path.to_string_lossy().to_string(),
+    let task_type = match req.task_type.as_str() {
+        "generate-and-translate" => TaskType::GenerateAndTranslate,
+        "generate-only" => TaskType::GenerateOnly,
+        "translate-only" => TaskType::TranslateOnly,
+        _ => return Err(format!("未知任务类型：{}", req.task_type)),
+    };
+
+    let task = task_queue::create_task(CreateTaskParams {
+        task_type,
+        media_path: media_path.to_string_lossy().to_string(),
         media_name,
         engine_id,
         model_id,
-        language,
-    );
+        source_language: req.source_language,
+        target_language: req.target_language,
+        output_format: req.output_format,
+    });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
     emit_task_update(&app, &task_clone);
@@ -80,14 +100,16 @@ pub async fn create_preview_task(
         .unwrap_or("未命名媒体")
         .to_string();
 
-    let task = task_queue::create_task(
-        TaskType::GenerateOnly,
-        media_path.to_string_lossy().to_string(),
+    let task = task_queue::create_task(CreateTaskParams {
+        task_type: TaskType::GenerateOnly,
+        media_path: media_path.to_string_lossy().to_string(),
         media_name,
-        "preview-pipeline".into(),
-        "ffmpeg-sidecar-probe".into(),
-        None,
-    );
+        engine_id: "preview-pipeline".into(),
+        model_id: "ffmpeg-sidecar-probe".into(),
+        source_language: None,
+        target_language: None,
+        output_format: None,
+    });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
     emit_task_update(&app, &task_clone);
@@ -166,18 +188,6 @@ fn validate_media_path(raw: &str) -> Result<PathBuf, String> {
         return Err(format!("音视频文件不存在：{}", path.display()));
     }
     Ok(path)
-}
-
-fn normalize_media_name(path: &Path, media_name: &str) -> String {
-    let trimmed = media_name.trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("未命名媒体")
-        .to_string()
 }
 
 fn validate_non_empty(name: &str, value: String) -> Result<String, String> {
@@ -309,30 +319,6 @@ mod tests {
         let result = validate_media_path(tmp.to_str().unwrap());
         assert!(result.is_ok());
         std::fs::remove_file(&tmp).unwrap();
-    }
-
-    #[test]
-    fn normalize_media_name_from_input() {
-        let path = PathBuf::from("/tmp/test.mp4");
-        assert_eq!(normalize_media_name(&path, "custom"), "custom");
-    }
-
-    #[test]
-    fn normalize_media_name_from_path() {
-        let path = PathBuf::from("/tmp/test.mp4");
-        assert_eq!(normalize_media_name(&path, ""), "test.mp4");
-    }
-
-    #[test]
-    fn normalize_media_name_whitespace() {
-        let path = PathBuf::from("/tmp/test.mp4");
-        assert_eq!(normalize_media_name(&path, "  "), "test.mp4");
-    }
-
-    #[test]
-    fn normalize_media_name_fallback() {
-        let path = PathBuf::from("/");
-        assert_eq!(normalize_media_name(&path, ""), "未命名媒体");
     }
 
     #[test]
