@@ -3,6 +3,34 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { Film, FolderOpen, AlertCircle, CheckCircle } from "lucide-react";
 import { burnSubtitle } from "../lib/tauri";
 
+function assColorToCss(assColor: string): string {
+  if (!assColor) return "rgb(255, 255, 255)";
+  const cleanColor = assColor.trim().toUpperCase();
+  const match = cleanColor.match(/^&H([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/);
+  if (match) {
+    const aa = match[1];
+    const bb = match[2];
+    const gg = match[3];
+    const rr = match[4];
+    const alpha = (1 - parseInt(aa, 16) / 255).toFixed(2);
+    const r = parseInt(rr, 16);
+    const g = parseInt(gg, 16);
+    const b = parseInt(bb, 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  const matchNoAlpha = cleanColor.match(/^&H([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/);
+  if (matchNoAlpha) {
+    const bb = matchNoAlpha[1];
+    const gg = matchNoAlpha[2];
+    const rr = matchNoAlpha[3];
+    const r = parseInt(rr, 16);
+    const g = parseInt(gg, 16);
+    const b = parseInt(bb, 16);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  return "rgb(255, 255, 255)";
+}
+
 const presets = [
   { name: "经典白字黑边", font_size: 24, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 30 },
   { name: "电影字幕", font_size: 28, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 40 },
@@ -152,6 +180,34 @@ export default function SubtitleMergePage() {
             <div>
               <label className="mb-1 block text-xs text-gray-500">垂直边距</label>
               <input type="number" min={0} max={100} value={marginV} onChange={(e) => setMarginV(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700" />
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <label className="mb-2 block text-xs text-gray-500">样式实时预览</label>
+            <div className="relative flex h-28 w-full items-center justify-center rounded-lg border border-gray-300 bg-gray-900 overflow-hidden dark:border-gray-600">
+              <div className="absolute inset-0 bg-[linear-gradient(45deg,#1f2937_25%,transparent_25%),linear-gradient(-45deg,#1f2937_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#1f2937_75%),linear-gradient(-45deg,transparent_75%,#1f2937_75%)] bg-[size:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0] opacity-40"></div>
+              <div 
+                className="relative z-10 px-4 py-1 text-center select-none font-bold"
+                style={{
+                  fontSize: `${fontSize}px`,
+                  color: assColorToCss(fontColor),
+                  textShadow: `
+                    -1px -1px 0 ${assColorToCss(outlineColor)},  
+                     1px -1px 0 ${assColorToCss(outlineColor)},
+                    -1px  1px 0 ${assColorToCss(outlineColor)},
+                     1px  1px 0 ${assColorToCss(outlineColor)},
+                    -2px -2px 0 ${assColorToCss(outlineColor)},  
+                     2px -2px 0 ${assColorToCss(outlineColor)},
+                    -2px  2px 0 ${assColorToCss(outlineColor)},
+                     2px  2px 0 ${assColorToCss(outlineColor)}
+                  `,
+                  transform: `translateY(${marginV / 4}px)`,
+                  fontFamily: "sans-serif"
+                }}
+              >
+                这是样式实时预览 / Preview Subtitle Style
+              </div>
             </div>
           </div>
         </section>

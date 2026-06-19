@@ -6,9 +6,8 @@ import ModelsPage from "./pages/ModelsPage";
 import TranslationPage from "./pages/TranslationPage";
 import SubtitleMergePage from "./pages/SubtitleMergePage";
 import SettingsPage from "./pages/SettingsPage";
-import PlaceholderPage from "./pages/PlaceholderPage";
+import ProofreadPage from "./pages/proofread/ProofreadPage";
 import "./index.css";
-import { Edit3 } from "lucide-react";
 
 function App() {
   return (
@@ -19,7 +18,7 @@ function App() {
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/translation" element={<TranslationPage />} />
-          <Route path="/proofread" element={<PlaceholderPage title="字幕校对" icon={Edit3} />} />
+          <Route path="/proofread" element={<ProofreadPage />} />
           <Route path="/subtitle-merge" element={<SubtitleMergePage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

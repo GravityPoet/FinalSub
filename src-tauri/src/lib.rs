@@ -39,6 +39,9 @@ pub fn run() {
             commands::transcribe_parakeet,
             commands::list_translation_providers,
             commands::test_translation,
+            commands::set_provider_secret,
+            commands::get_provider_secret,
+            commands::delete_provider_secret,
             commands::get_ffmpeg_version,
             commands::get_settings,
             commands::save_settings_cmd,
@@ -47,6 +50,12 @@ pub fn run() {
             commands::import_config,
             commands::export_config_to_path,
             commands::import_config_from_path,
+            commands::load_proofread_tasks,
+            commands::save_proofread_tasks,
+            commands::fs_read_dir,
+            commands::fs_exists,
+            commands::fs_read_text,
+            commands::fs_write_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -15,9 +15,9 @@ export default function PlaceholderPage({ title, icon: Icon }: PlaceholderPagePr
             <Icon size={20} />
           </div>
           <div>
-            <h3 className="font-semibold text-gray-900 dark:text-white">待迁移</h3>
+            <h3 className="font-semibold text-gray-900 dark:text-white">敬请期待</h3>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              当前 Tauri 预览版已保留入口，完整功能将在后续迁移阶段接入。
+              本功能即将上线，敬请期待。
             </p>
           </div>
         </div>

@@ -50,7 +50,7 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
             id: "large-v3".into(),
             engine_id: "whisper-cpp".into(),
             name: "Whisper Large V3".into(),
-            description: "高精度多语言 Whisper 模型，适合质量优先的任务".into(),
+            description: "高精度多语言 Whisper 模型，推荐用于中文等高精度场景（推荐·中文）".into(),
             languages: vec![
                 "en".into(),
                 "zh".into(),
@@ -107,7 +107,7 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
             id: "sensevoice-small".into(),
             engine_id: "sensevoice".into(),
             name: "SenseVoice Small".into(),
-            description: "中文和粤语识别候选模型，等待运行时验证接入".into(),
+            description: "中文和粤语识别候选模型，敬请期待".into(),
             languages: vec![
                 "zh".into(),
                 "yue".into(),
@@ -124,7 +124,7 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
             id: "custom-command".into(),
             engine_id: "custom-command".into(),
             name: "Custom Command".into(),
-            description: "高级用户自定义识别命令，等待权限方案设计".into(),
+            description: "高级用户自定义识别命令，敬请期待".into(),
             languages: vec!["any".into()],
             best_for: "advanced-users".into(),
             size_mb: None,

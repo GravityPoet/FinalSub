@@ -24,7 +24,7 @@ function StatusBadge({ status }: { status: AsrModelInfo["status"] }) {
   if (status === "not-ready")
     return (
       <span className="flex items-center gap-1 text-gray-400">
-        <Clock size={14} /> 待接入
+        <Clock size={14} /> 敬请期待
       </span>
     );
   if (typeof status === "object" && "error" in status)
@@ -149,7 +149,7 @@ export default function ModelsPage() {
       <div className="mt-6 text-xs text-gray-400">
         <p>Whisper 模型路径：~/Tools/Local-LLM/whisper-models</p>
         <p>Parakeet 模型：首次使用时自动缓存，无需手动下载</p>
-        <p>SenseVoice：待运行时验证后接入</p>
+        <p>SenseVoice：敬请期待</p>
       </div>
     </div>
   );

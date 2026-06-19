@@ -1,10 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, State};
-#[cfg(not(debug_assertions))]
-use tauri::Manager;
-use tauri_plugin_shell::ShellExt;
+use tauri::{AppHandle, Emitter, State, Manager};
 
 use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
@@ -13,6 +10,7 @@ use crate::core::audio;
 use crate::core::models::{self, AsrModelInfo};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
+use keyring::Entry;
 use crate::core::task_queue::{self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType};
 use crate::core::translation::{self, TranslationProvider};
 use crate::state::AppState;
@@ -28,8 +26,8 @@ pub struct AppInfo {
 #[tauri::command]
 pub fn get_app_info() -> AppInfo {
     AppInfo {
-        version: "0.1.0".into(),
-        name: "FinalSub Tauri 预览版".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        name: "FinalSub".into(),
     }
 }
 
@@ -174,10 +172,8 @@ pub async fn extract_audio(
         &output_path.to_string_lossy(),
     );
 
-    let output = app
-        .shell()
-        .sidecar("binaries/ffmpeg")
-        .map_err(|e| format!("准备 FFmpeg sidecar 失败：{e}"))?
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let output = tokio::process::Command::new(ffmpeg_path)
         .args(&args)
         .output()
         .await
@@ -221,10 +217,8 @@ pub async fn burn_subtitle(app: AppHandle, req: BurnSubtitleRequest) -> Result<S
         &style,
     );
 
-    let output = app
-        .shell()
-        .sidecar("binaries/ffmpeg")
-        .map_err(|e| format!("准备 FFmpeg sidecar 失败：{e}"))?
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let output = tokio::process::Command::new(ffmpeg_path)
         .args(&args)
         .output()
         .await
@@ -365,19 +359,71 @@ pub fn list_translation_providers() -> Vec<TranslationProvider> {
 
 #[tauri::command]
 pub async fn test_translation(
-    req: translation::TranslateRequest,
+    app: AppHandle,
+    mut req: translation::TranslateRequest,
 ) -> Result<translation::TranslateResponse, String> {
+    let state = app.state::<AppState>();
+    if let Ok(settings) = crate::core::settings::load_settings(&state.app_config_dir) {
+        if req.api_url.is_none() || req.api_url.as_deref().unwrap_or("").is_empty() {
+            req.api_url = settings.translate_endpoints.get(&req.provider).cloned();
+        }
+        if req.model_name.is_none() || req.model_name.as_deref().unwrap_or("").is_empty() {
+            req.model_name = settings.translate_models.get(&req.provider).cloned();
+        }
+    }
+
+    if req.api_key.is_none() || req.api_key.as_deref().unwrap_or("").is_empty() {
+        let service = "com.gravitypoet.finalsub";
+        let account = format!("translate:{}:apiKey", req.provider);
+        if let Ok(entry) = Entry::new(service, &account) {
+            if let Ok(pwd) = entry.get_password() {
+                req.api_key = Some(pwd);
+            }
+        }
+    }
+
     translation::translate_text(&req)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+pub fn set_provider_secret(provider_id: String, field: String, value: String) -> std::result::Result<(), String> {
+    let service = "com.gravitypoet.finalsub";
+    let account = format!("translate:{provider_id}:{field}");
+    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
+    entry.set_password(&value).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_provider_secret(provider_id: String, field: String) -> std::result::Result<String, String> {
+    let service = "com.gravitypoet.finalsub";
+    let account = format!("translate:{provider_id}:{field}");
+    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(password) => Ok(password),
+        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn delete_provider_secret(provider_id: String, field: String) -> std::result::Result<(), String> {
+    let service = "com.gravitypoet.finalsub";
+    let account = format!("translate:{provider_id}:{field}");
+    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(_) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
 pub async fn get_ffmpeg_version(app: AppHandle) -> Result<String, String> {
-    let output = app
-        .shell()
-        .sidecar("binaries/ffmpeg")
-        .map_err(|e| format!("准备 FFmpeg sidecar 失败：{e}"))?
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let output = tokio::process::Command::new(ffmpeg_path)
         .args(["-version"])
         .output()
         .await
@@ -708,6 +754,70 @@ fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, Strin
             Err(format!("生产环境下找不到 sidecar 二进制：{}", target_path.display()))
         }
     }
+}
+
+#[tauri::command]
+pub fn load_proofread_tasks(app: AppHandle) -> std::result::Result<String, String> {
+    let state = app.state::<AppState>();
+    let path = state.app_config_dir.join("proofread_tasks.json");
+    if !path.exists() {
+        return Ok("[]".to_string());
+    }
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_proofread_tasks(app: AppHandle, data: String) -> std::result::Result<(), String> {
+    let state = app.state::<AppState>();
+    let path = state.app_config_dir.join("proofread_tasks.json");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, &data).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn fs_read_dir(dir_path: String) -> std::result::Result<Vec<String>, String> {
+    let path = std::path::Path::new(&dir_path);
+    if !path.is_dir() {
+        return Err("不是一个有效的目录".to_string());
+    }
+    let entries = std::fs::read_dir(path).map_err(|e| e.to_string())?;
+    let mut files = Vec::new();
+    for entry in entries {
+        if let Ok(entry) = entry {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        files.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[tauri::command]
+pub fn fs_exists(file_path: String) -> std::result::Result<bool, String> {
+    Ok(std::path::Path::new(&file_path).exists())
+}
+
+#[tauri::command]
+pub fn fs_read_text(file_path: String) -> std::result::Result<String, String> {
+    std::fs::read_to_string(file_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn fs_write_text(file_path: String, content: String) -> std::result::Result<(), String> {
+    let path = std::path::Path::new(&file_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, content).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

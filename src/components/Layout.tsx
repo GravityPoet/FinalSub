@@ -19,7 +19,6 @@ export default function Layout() {
       <aside className="w-full shrink-0 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 sm:flex sm:h-screen sm:w-56 sm:flex-col sm:border-b-0 sm:border-r">
         <div className="border-b border-gray-200 p-4 dark:border-gray-700">
           <h1 className="text-lg font-bold text-gray-900 dark:text-white">FinalSub</h1>
-          <p className="text-xs text-gray-500">Tauri 预览版</p>
         </div>
         <nav className="flex gap-2 overflow-x-auto p-2 sm:block sm:flex-1 sm:space-y-1">
           {navItems.map(({ to, label, icon: Icon }) => (
