@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::ShellExt;
 
 use crate::core::audio;
+use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
 use crate::core::models::AsrModelInfo;
@@ -266,6 +267,54 @@ pub async fn transcribe_audio(
         audio_path: req.audio_path,
         output_path: req.output_path.clone(),
         language: req.language,
+        model: model_ref,
+    };
+
+    let track = engine.transcribe(job, tx).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+
+    let srt = track.to_srt();
+    tokio::fs::write(&req.output_path, &srt)
+        .await
+        .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
+
+    Ok(req.output_path)
+}
+
+#[derive(serde::Deserialize)]
+pub struct TranscribeParakeetRequest {
+    pub audio_path: String,
+    pub output_path: String,
+    pub language: Option<String>,
+}
+
+#[tauri::command]
+pub async fn transcribe_parakeet(
+    _state: State<'_, AppState>,
+    req: TranscribeParakeetRequest,
+) -> Result<String, String> {
+    let uv_bin = crate::core::asr::parakeet::default_uv_bin();
+    let transcribe_script = std::path::PathBuf::from(
+        "/Users/moonlitpoet/Tools/AI-tools/FinalSub/extraResources/parakeet/parakeet_transcribe.py",
+    );
+    let cache_root = std::path::PathBuf::from("/Users/moonlitpoet/Tools/Local-LLM");
+    let ffmpeg_path = Some(std::path::PathBuf::from(
+        "/opt/homebrew/Cellar/ffmpeg/8.1.1/bin/ffmpeg",
+    ));
+
+    let engine = ParakeetMlxEngine::new(uv_bin, transcribe_script, cache_root, ffmpeg_path);
+    let model_ref = AsrModelRef {
+        engine_id: "parakeet-mlx".into(),
+        model_id: "parakeet-tdt-0.6b-v2".into(),
+        model_path: None,
+    };
+
+    engine.prepare(&model_ref).await.map_err(|e: crate::error::FinalSubError| e.to_string())?;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let job = TranscribeJob {
+        audio_path: req.audio_path,
+        output_path: req.output_path.clone(),
+        language: req.language.or_else(|| Some("en".into())),
         model: model_ref,
     };
 

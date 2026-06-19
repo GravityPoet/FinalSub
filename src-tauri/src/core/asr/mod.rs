@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::subtitle::SubtitleTrack;
 
+pub mod parakeet;
 pub mod whisper;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

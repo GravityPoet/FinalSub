@@ -127,6 +127,16 @@ export async function transcribeAudio(req: TranscribeRequest): Promise<string> {
   return invoke("transcribe_audio", { req });
 }
 
+export interface TranscribeParakeetRequest {
+  audio_path: string;
+  output_path: string;
+  language?: string;
+}
+
+export async function transcribeParakeet(req: TranscribeParakeetRequest): Promise<string> {
+  return invoke("transcribe_parakeet", { req });
+}
+
 export interface Settings {
   language: string;
   asr_engine: string;

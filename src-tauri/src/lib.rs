@@ -35,6 +35,7 @@ pub fn run() {
             commands::extract_audio,
             commands::burn_subtitle,
             commands::transcribe_audio,
+            commands::transcribe_parakeet,
             commands::get_ffmpeg_version,
             commands::get_settings,
             commands::save_settings_cmd,
