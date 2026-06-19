@@ -74,7 +74,7 @@
 | 字幕烧录 | `burn_subtitle` | 🟡 命令存在，校验视频/字幕/输出路径和 ASS 颜色；无进度解析/取消 |
 | 进度解析 | `parse_duration_ms` / `parse_current_time_ms` | 🟡 工具函数有测试，但未接入 UI |
 | sidecar 打包 | `bundle.externalBin` | 🟢 |
-| sidecar 来源 | Homebrew 动态版 | ⚠️ 仅 Apple Silicon 本机预览，不适合正式分发 |
+| sidecar 来源 | osxexperts.net 静态 arm64 构建（GPL，ffmpeg 7.1.1） | 🟢 静态构建，无 Homebrew 依赖，可再分发 |
 
 ## 5. 翻译
 
