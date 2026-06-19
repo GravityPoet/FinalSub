@@ -23,3 +23,5 @@ dist-ssr
 *.sln
 *.sw?
 src-tauri/binaries/.bak/
+# generated at build time by `npm run binaries:universal` (lipo of the two thin sidecars)
+src-tauri/binaries/ffmpeg-universal-apple-darwin

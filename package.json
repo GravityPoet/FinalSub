@@ -11,7 +11,12 @@
     "tauri:build": "tauri build",
     "sign:local": "codesign --force --deep --sign - \"src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app\"",
     "verify:bundle": "codesign --verify --deep --strict --verbose=4 \"src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app\"",
-    "build:local": "npm run tauri:build && npm run sign:local && npm run verify:bundle"
+    "build:local": "npm run tauri:build && npm run sign:local && npm run verify:bundle",
+    "binaries:universal": "lipo -create src-tauri/binaries/ffmpeg-aarch64-apple-darwin src-tauri/binaries/ffmpeg-x86_64-apple-darwin -output src-tauri/binaries/ffmpeg-universal-apple-darwin && codesign --force --sign - src-tauri/binaries/ffmpeg-universal-apple-darwin",
+    "tauri:build:universal": "tauri build --target universal-apple-darwin",
+    "sign:local:universal": "codesign --force --deep --sign - \"src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub Tauri Preview.app\"",
+    "verify:bundle:universal": "codesign --verify --deep --strict --verbose=4 \"src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub Tauri Preview.app\"",
+    "build:universal": "npm run binaries:universal && npm run tauri:build:universal && npm run sign:local:universal && npm run verify:bundle:universal"
   },
   "dependencies": {
     "react": "^19.1.0",
