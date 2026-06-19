@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, State};
+#[cfg(not(debug_assertions))]
+use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
 use crate::core::asr::parakeet::ParakeetMlxEngine;
@@ -246,10 +248,11 @@ pub struct TranscribeRequest {
 
 #[tauri::command]
 pub async fn transcribe_audio(
+    app: AppHandle,
     state: State<'_, AppState>,
     req: TranscribeRequest,
 ) -> Result<String, String> {
-    let whisper_bin = std::path::PathBuf::from("/opt/homebrew/bin/whisper-cli");
+    let whisper_bin = resolve_sidecar(&app, "whisper-cli")?;
     let models_dir = whisper_models_dir(&state.app_config_dir)?;
     let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
     let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
@@ -296,19 +299,31 @@ pub struct TranscribeParakeetRequest {
 
 #[tauri::command]
 pub async fn transcribe_parakeet(
+    app: AppHandle,
     _state: State<'_, AppState>,
     req: TranscribeParakeetRequest,
 ) -> Result<String, String> {
     let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
     let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
     let uv_bin = crate::core::asr::parakeet::default_uv_bin();
-    let transcribe_script = std::path::PathBuf::from(
-        "/Users/moonlitpoet/Tools/AI-tools/FinalSub/extraResources/parakeet/parakeet_transcribe.py",
-    );
+    
+    #[cfg(debug_assertions)]
+    let transcribe_script = {
+        let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+        let p1 = current_dir.join("src-tauri").join("resources").join("parakeet").join("parakeet_transcribe.py");
+        if p1.exists() {
+            p1
+        } else {
+            current_dir.join("resources").join("parakeet").join("parakeet_transcribe.py")
+        }
+    };
+    #[cfg(not(debug_assertions))]
+    let transcribe_script = app.path()
+        .resolve("resources/parakeet/parakeet_transcribe.py", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("解析 Parakeet 脚本路径失败：{e}"))?;
+
     let cache_root = default_local_llm_dir();
-    let ffmpeg_path = Some(std::path::PathBuf::from(
-        "/opt/homebrew/Cellar/ffmpeg/8.1.1/bin/ffmpeg",
-    ));
+    let ffmpeg_path = Some(resolve_sidecar(&app, "ffmpeg")?);
 
     let engine = ParakeetMlxEngine::new(uv_bin, transcribe_script, cache_root, ffmpeg_path);
     let model_ref = AsrModelRef {
@@ -624,6 +639,77 @@ fn validate_ass_color(label: &str, value: &str) -> Result<(), String> {
     }
 }
 
+fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(current_dir) = std::env::current_dir() {
+            let target_triple = if cfg!(target_arch = "aarch64") {
+                "aarch64-apple-darwin"
+            } else {
+                "x86_64-apple-darwin"
+            };
+            let file_name = format!("{name}-{target_triple}");
+            
+            let path1 = current_dir.join("src-tauri").join("binaries").join(&file_name);
+            if path1.exists() {
+                return Ok(path1);
+            }
+            let path2 = current_dir.join("binaries").join(&file_name);
+            if path2.exists() {
+                return Ok(path2);
+            }
+        }
+
+        if let Ok(exe_path) = std::env::current_exe() {
+            let target_triple = if cfg!(target_arch = "aarch64") {
+                "aarch64-apple-darwin"
+            } else {
+                "x86_64-apple-darwin"
+            };
+            let file_name = format!("{name}-{target_triple}");
+            
+            let mut current = exe_path.as_path();
+            for _ in 0..10 {
+                if let Some(parent) = current.parent() {
+                    let path1 = parent.join("src-tauri").join("binaries").join(&file_name);
+                    if path1.exists() {
+                        return Ok(path1);
+                    }
+                    let path2 = parent.join("binaries").join(&file_name);
+                    if path2.exists() {
+                        return Ok(path2);
+                    }
+                    current = parent;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        Err(format!("开发环境下找不到 sidecar 二进制：{}", name))
+    }
+    
+    #[cfg(not(debug_assertions))]
+    {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("获取当前可执行文件路径失败：{e}"))?;
+        let exe_dir = exe_path.parent()
+            .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?;
+        
+        let base_name = PathBuf::from(name)
+            .file_name()
+            .ok_or_else(|| format!("无效的 sidecar 名字：{name}"))?
+            .to_os_string();
+            
+        let target_path = exe_dir.join(&base_name);
+        if target_path.exists() {
+            Ok(target_path)
+        } else {
+            Err(format!("生产环境下找不到 sidecar 二进制：{}", target_path.display()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,5 +827,35 @@ mod tests {
         let expanded = expand_home_path("~/Tools/Local-LLM");
         assert!(expanded.is_absolute());
         assert!(expanded.ends_with("Tools/Local-LLM"));
+    }
+
+    #[test]
+    fn test_resolve_sidecar_whisper_logic() {
+        let name = "whisper-cli";
+        let target_triple = if cfg!(target_arch = "aarch64") {
+            "aarch64-apple-darwin"
+        } else {
+            "x86_64-apple-darwin"
+        };
+        let file_name = format!("{name}-{target_triple}");
+        let current_dir = std::env::current_dir().unwrap();
+        let path1 = current_dir.join("binaries").join(&file_name);
+        let path2 = current_dir.join("src-tauri").join("binaries").join(&file_name);
+        assert!(path1.exists() || path2.exists(), "开发环境缺少 whisper-cli thin sidecar：{file_name}");
+    }
+
+    #[test]
+    fn test_resolve_sidecar_ffmpeg_logic() {
+        let name = "ffmpeg";
+        let target_triple = if cfg!(target_arch = "aarch64") {
+            "aarch64-apple-darwin"
+        } else {
+            "x86_64-apple-darwin"
+        };
+        let file_name = format!("{name}-{target_triple}");
+        let current_dir = std::env::current_dir().unwrap();
+        let path1 = current_dir.join("binaries").join(&file_name);
+        let path2 = current_dir.join("src-tauri").join("binaries").join(&file_name);
+        assert!(path1.exists() || path2.exists(), "开发环境缺少 ffmpeg thin sidecar：{file_name}");
     }
 }
