@@ -180,16 +180,29 @@ impl AsrEngine for ParakeetMlxEngine {
 }
 
 pub fn default_uv_bin() -> PathBuf {
-    let mut candidates: Vec<PathBuf> = vec![PathBuf::from("/opt/homebrew/bin/uv")];
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/bin/uv"));
+    // 优先尊重用户 PATH 环境（brew / 官方安装器 / cargo / asdf 等任意来源）
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let cand = dir.join("uv");
+            if cand.exists() {
+                return cand;
+            }
+        }
     }
+    // PATH 未命中时回退常见安装位置（不偏向某个包管理器）
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(&home).join(".local/bin/uv"));
+        candidates.push(PathBuf::from(&home).join(".cargo/bin/uv"));
+    }
+    candidates.push(PathBuf::from("/opt/homebrew/bin/uv"));
     candidates.push(PathBuf::from("/usr/local/bin/uv"));
     for p in &candidates {
         if p.exists() {
             return p.clone();
         }
     }
+    // 最终回退，交由运行时 PATH 解析
     PathBuf::from("uv")
 }
 
@@ -213,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn default_uv_bin_finds_homebrew() {
+    fn default_uv_bin_returns_uv_path() {
         let bin = default_uv_bin();
         assert!(bin.to_string_lossy().contains("uv"));
     }
