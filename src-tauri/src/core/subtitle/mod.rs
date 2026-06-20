@@ -34,6 +34,20 @@ impl SubtitleTrack {
     pub fn is_empty(&self) -> bool {
         self.cues.is_empty()
     }
+
+    pub fn to_format(&self, format: &str) -> crate::error::Result<String> {
+        match format.to_lowercase().as_str() {
+            "srt" => Ok(self.to_srt()),
+            "vtt" => Ok(serialize_vtt(&self.cues)),
+            "txt" => Ok(serialize_txt(&self.cues)),
+            "lrc" => Ok(serialize_lrc(&self.cues)),
+            "ass" => Ok(serialize_ass(&self.cues)),
+            _ => Err(crate::error::FinalSubError::Validation(format!(
+                "不支持的字幕格式：{}",
+                format
+            ))),
+        }
+    }
 }
 
 impl Default for SubtitleTrack {
@@ -175,6 +189,77 @@ pub fn serialize_srt(cues: &[Cue]) -> String {
     out
 }
 
+pub fn format_vtt_time(ms: u64) -> String {
+    let h = ms / 3_600_000;
+    let m = (ms % 3_600_000) / 60_000;
+    let s = (ms % 60_000) / 1_000;
+    let millis = ms % 1_000;
+    format!("{h:02}:{m:02}:{s:02}.{millis:03}")
+}
+
+pub fn serialize_vtt(cues: &[Cue]) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for (i, cue) in cues.iter().enumerate() {
+        let idx = i + 1;
+        out.push_str(&format!(
+            "{idx}\n{} --> {}\n{}\n\n",
+            format_vtt_time(cue.start_ms),
+            format_vtt_time(cue.end_ms),
+            cue.text
+        ));
+    }
+    out
+}
+
+pub fn serialize_txt(cues: &[Cue]) -> String {
+    cues.iter()
+        .map(|c| c.text.as_str())
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+pub fn serialize_lrc(cues: &[Cue]) -> String {
+    let mut out = String::new();
+    for cue in cues {
+        let min = cue.start_ms / 60_000;
+        let sec = (cue.start_ms % 60_000) / 1000;
+        let centis = (cue.start_ms % 1000) / 10;
+        out.push_str(&format!("[{min:02}:{sec:02}.{centis:02}]{}\n", cue.text));
+    }
+    out
+}
+
+pub fn format_ass_time(ms: u64) -> String {
+    let h = ms / 3_600_000;
+    let m = (ms % 3_600_000) / 60_000;
+    let s = (ms % 60_000) / 1_000;
+    let centis = (ms % 1_000) / 10;
+    format!("{h}:{m:02}:{s:02}.{centis:02}")
+}
+
+pub fn serialize_ass(cues: &[Cue]) -> String {
+    let mut out = String::from(
+        "[Script Info]\n\
+         ScriptType: v4.00+\n\
+         PlayResX: 384\n\
+         PlayResY: 288\n\n\
+         [V4+ Styles]\n\
+         Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\
+         Style: Default,Arial,16,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n\
+         [Events]\n\
+         Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    );
+    for cue in cues {
+        out.push_str(&format!(
+            "Dialogue: 0,{},{},Default,,0,0,0,,{}\n",
+            format_ass_time(cue.start_ms),
+            format_ass_time(cue.end_ms),
+            cue.text.replace('\n', "\\N")
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +356,25 @@ mod tests {
         let input = "1\n00:00:01,000 --> 00:00:01,000\nHello\n\n";
         let err = SubtitleTrack::from_srt(input).unwrap_err();
         assert!(err.to_string().contains("cue end must be after start"));
+    }
+
+    #[test]
+    fn to_format_conversions() {
+        let input = "1\n00:00:01,000 --> 00:00:03,500\nHello world\n\n";
+        let track = SubtitleTrack::from_srt(input).unwrap();
+
+        let vtt = track.to_format("vtt").unwrap();
+        assert!(vtt.contains("WEBVTT"));
+        assert!(vtt.contains("00:00:01.000 --> 00:00:03.500"));
+
+        let txt = track.to_format("txt").unwrap();
+        assert_eq!(txt, "Hello world");
+
+        let lrc = track.to_format("lrc").unwrap();
+        assert!(lrc.contains("[00:01.00]Hello world"));
+
+        let ass = track.to_format("ass").unwrap();
+        assert!(ass.contains("[Events]"));
+        assert!(ass.contains("Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,Hello world"));
     }
 }

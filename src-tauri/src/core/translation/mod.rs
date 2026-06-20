@@ -259,7 +259,7 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
         "deeplx" => translate_deeplx(req).await,
         "ollama" => translate_ollama(req).await,
         "deepseek" => translate_openai_compatible(req, "DeepSeek").await,
-        "gemini" => translate_openai_compatible(req, "Gemini").await,
+        "gemini" => translate_gemini(req).await,
         "siliconflow" => translate_openai_compatible(req, "SiliconFlow").await,
         "qwen" => translate_openai_compatible(req, "Qwen").await,
         _ => Err(FinalSubError::Validation(format!(
@@ -384,10 +384,11 @@ async fn translate_openai_compatible(
     req: &TranslateRequest,
     provider_name: &str,
 ) -> Result<TranslateResponse> {
-    let api_url = req
-        .api_url
-        .as_deref()
-        .unwrap_or("https://api.openai.com/v1/chat/completions");
+    let api_url = openai_chat_completions_url(
+        req.api_url
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1"),
+    );
     let api_key = req.api_key.as_deref().unwrap_or("");
     let model = req.model_name.as_deref().unwrap_or("gpt-4o-mini");
 
@@ -409,7 +410,7 @@ async fn translate_openai_compatible(
     });
 
     let resp = client
-        .post(api_url)
+        .post(&api_url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .json(&body)
@@ -445,6 +446,110 @@ async fn translate_openai_compatible(
     })
 }
 
+async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
+    let api_url = gemini_generate_content_url(
+        req.api_url
+            .as_deref()
+            .unwrap_or("https://generativelanguage.googleapis.com/v1beta"),
+        req.model_name.as_deref().unwrap_or("gemini-3.5-flash"),
+    );
+    let api_key = req.api_key.as_deref().unwrap_or("");
+
+    let system_prompt = format!(
+        "You are a professional translator. Translate subtitles from {} to {}. \
+         Only output the translated text. Preserve line breaks. Do not add explanations.",
+        req.source_language, req.target_language
+    );
+    let user_prompt = format!(
+        "Translate this subtitle text from {} to {}:\n\n{}",
+        req.source_language, req.target_language, req.text
+    );
+
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": user_prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0.2
+        }
+    });
+
+    let resp = client
+        .post(&api_url)
+        .header("x-goog-api-key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| FinalSubError::Validation(format!("Gemini 请求失败：{e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(FinalSubError::Validation(format!(
+            "Gemini 返回错误 {status}：{body_text}"
+        )));
+    }
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| FinalSubError::Validation(format!("Gemini 响应解析失败：{e}")))?;
+
+    let translated = data["candidates"][0]["content"]["parts"]
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if translated.is_empty() {
+        return Err(FinalSubError::Validation(
+            "Gemini 响应中没有可用译文".into(),
+        ));
+    }
+
+    Ok(TranslateResponse {
+        translated_text: translated,
+        provider: req.provider.clone(),
+        success: true,
+        error: None,
+    })
+}
+
+fn openai_chat_completions_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/chat/completions")
+    }
+}
+
+fn gemini_generate_content_url(raw: &str, model: &str) -> String {
+    let mut base = raw.trim().trim_end_matches('/').to_string();
+    if base.contains(":generateContent") {
+        return base;
+    }
+    if base.ends_with("generativelanguage.googleapis.com") {
+        base.push_str("/v1beta");
+    }
+    let model = model.trim().trim_start_matches("models/");
+    format!("{base}/models/{model}:generateContent")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,5 +579,29 @@ mod tests {
         assert!(!provider_requires_api_key("ollama"));
         assert!(!provider_requires_api_key("deeplx"));
         assert!(provider_requires_api_key("google"));
+    }
+
+    #[test]
+    fn openai_compatible_url_appends_chat_completions() {
+        assert_eq!(
+            openai_chat_completions_url("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_completions_url("https://api.deepseek.com/v1/chat/completions"),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn gemini_url_builds_generate_content_endpoint() {
+        assert_eq!(
+            gemini_generate_content_url("https://generativelanguage.googleapis.com", "gemini-2.5-flash"),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        );
+        assert_eq!(
+            gemini_generate_content_url("https://generativelanguage.googleapis.com/v1beta", "models/gemini-2.5-flash"),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        );
     }
 }

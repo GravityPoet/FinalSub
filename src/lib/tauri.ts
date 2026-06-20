@@ -240,8 +240,8 @@ export async function setProviderSecret(providerId: string, field: string, value
   return invoke("set_provider_secret", { providerId, field, value });
 }
 
-export async function getProviderSecret(providerId: string, field: string): Promise<string> {
-  return invoke("get_provider_secret", { providerId, field });
+export async function hasProviderSecret(providerId: string, field: string): Promise<boolean> {
+  return invoke("has_provider_secret", { providerId, field });
 }
 
 export async function deleteProviderSecret(providerId: string, field: string): Promise<void> {
@@ -256,18 +256,8 @@ export async function saveProofreadTasks(data: string): Promise<void> {
   return invoke("save_proofread_tasks", { data });
 }
 
-export async function fsReadDir(dirPath: string): Promise<string[]> {
-  return invoke("fs_read_dir", { dirPath });
-}
-
-export async function fsExists(filePath: string): Promise<boolean> {
-  return invoke("fs_exists", { filePath });
-}
-
-export async function fsReadText(filePath: string): Promise<string> {
-  return invoke("fs_read_text", { filePath });
-}
-
-export async function fsWriteText(filePath: string, content: string): Promise<void> {
-  return invoke("fs_write_text", { filePath, content });
+// 受控运行时 scope 授权：导入视频时把视频所在目录加入 plugin-fs 允许范围，
+// 以便扫描同目录字幕。文件读写一律改用 @tauri-apps/plugin-fs（dialog 选中即授权）。
+export async function authorizeSubtitleDirectory(dirPath: string): Promise<void> {
+  return invoke("authorize_subtitle_directory", { dirPath });
 }

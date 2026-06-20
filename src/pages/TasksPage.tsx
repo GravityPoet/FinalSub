@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { cancelTask, listTasks, TASK_UPDATED_EVENT, type Task } from "../lib/tauri";
 import { RefreshCw, XCircle } from "lucide-react";
 
@@ -58,6 +59,22 @@ function upsertTask(tasks: Task[], task: Task): Task[] {
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const handleOpenFolder = async (outputPath: string) => {
+    try {
+      await revealItemInDir(outputPath);
+    } catch (e) {
+      console.error("无法打开目录", e);
+    }
+  };
+
+  const handleOpenFile = async (outputPath: string) => {
+    try {
+      await openPath(outputPath);
+    } catch (e) {
+      console.error("无法打开文件", e);
+    }
+  };
 
   const refresh = () => {
     setLoading(true);
@@ -156,6 +173,29 @@ export default function TasksPage() {
                     />
                   </div>
                   <p className="text-xs text-gray-500 mt-1">{task.status_message}</p>
+                </div>
+              )}
+              {task.status === "done" && task.output_path && (
+                <div className="mt-3 bg-gray-50 dark:bg-gray-900/40 p-2.5 rounded border border-gray-100 dark:border-gray-800 text-xs">
+                  <p className="font-medium text-gray-700 dark:text-gray-300 truncate mb-2" title={task.output_path}>
+                    输出路径：{task.output_path}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenFile(task.output_path!)}
+                      className="inline-flex items-center gap-1.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 px-2.5 py-1 font-medium transition"
+                    >
+                      打开输出文件
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenFolder(task.output_path!)}
+                      className="inline-flex items-center gap-1.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 px-2.5 py-1 font-medium transition"
+                    >
+                      打开所在目录
+                    </button>
+                  </div>
                 </div>
               )}
               {task.error && <p className="text-sm text-red-600 mt-2">{task.error}</p>}

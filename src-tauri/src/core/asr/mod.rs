@@ -45,6 +45,7 @@ pub trait AsrEngine: Send + Sync {
         &self,
         job: TranscribeJob,
         progress: ProgressSink,
+        cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> crate::error::Result<SubtitleTrack>;
 }
 

@@ -9,6 +9,7 @@ import {
 } from './subtitleDetector';
 import { detectLanguageFromFilename } from './languageDetector';
 import { DetectedSubtitle, ProofreadItem } from './types';
+import { authorizeSubtitleDirectory } from '../../lib/tauri';
 
 // 生成 UUID
 function generateUUID(): string {
@@ -70,11 +71,26 @@ export function selectBestSubtitles(
 }
 
 /**
+ * 尝试授权指定路径所在目录，使 plugin-fs 能读取该文件并扫描同目录字幕。
+ * 失败（如敏感目录被拒）时仅降级，不抛出，由后续读取/检测的 try/catch 兜底。
+ */
+async function tryAuthorizeDir(path: string | undefined): Promise<void> {
+  if (!path) return;
+  try {
+    await authorizeSubtitleDirectory(path);
+  } catch (e) {
+    console.warn('授权字幕目录失败，自动检测可能降级:', e);
+  }
+}
+
+/**
  * 从视频路径创建 PendingFile
  */
 export async function createPendingFileFromVideo(
   videoPath: string,
 ): Promise<PendingFile> {
+  // 先授权视频所在目录，确保 plugin-fs 可扫描同目录字幕
+  await tryAuthorizeDir(videoPath);
   // 检测关联的字幕
   const detectResult = await detectSubtitlesForVideo(videoPath, '', '');
   const detectedSubtitles = detectResult.detectedSubtitles || [];
@@ -103,6 +119,8 @@ export async function createPendingFileFromSubtitle(
   sourceFilePath: string,
   detectRelated: boolean = true,
 ): Promise<PendingFile> {
+  // 先授权字幕所在目录，确保 plugin-fs 可读取并扫描同目录字幕
+  await tryAuthorizeDir(sourceFilePath);
   const sourceFileName = sourceFilePath.split('/').pop() || '';
   const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, '');
 
@@ -165,6 +183,7 @@ export async function createPendingFileFromSubtitle(
 export async function getAvailableSubtitles(
   subtitlePath: string,
 ): Promise<DetectedSubtitle[]> {
+  await tryAuthorizeDir(subtitlePath);
   const lastSlash = subtitlePath.lastIndexOf('/');
   const dir = lastSlash === -1 ? '.' : subtitlePath.substring(0, lastSlash);
 
@@ -243,6 +262,11 @@ export function ensureSubtitleInList(
  * @param item ProofreadItem 数据
  */
 export async function loadPendingFileFromItem(item: ProofreadItem): Promise<PendingFile> {
+  // 历史任务重新加载：运行时 scope 重启后已清空，重新授权已保存的文件路径所在目录
+  await tryAuthorizeDir(item.videoPath);
+  await tryAuthorizeDir(item.sourceSubtitlePath);
+  await tryAuthorizeDir(item.targetSubtitlePath);
+
   let detectedSubtitles: DetectedSubtitle[] = [];
   const isSubtitleOnlyMode = !item.videoPath;
 

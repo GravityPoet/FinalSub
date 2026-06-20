@@ -12,6 +12,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let config_dir = app
                 .path()
@@ -40,7 +41,7 @@ pub fn run() {
             commands::list_translation_providers,
             commands::test_translation,
             commands::set_provider_secret,
-            commands::get_provider_secret,
+            commands::has_provider_secret,
             commands::delete_provider_secret,
             commands::get_ffmpeg_version,
             commands::get_settings,
@@ -52,10 +53,7 @@ pub fn run() {
             commands::import_config_from_path,
             commands::load_proofread_tasks,
             commands::save_proofread_tasks,
-            commands::fs_read_dir,
-            commands::fs_exists,
-            commands::fs_read_text,
-            commands::fs_write_text,
+            commands::authorize_subtitle_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

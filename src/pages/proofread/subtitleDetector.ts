@@ -3,7 +3,7 @@
  * 负责检测视频对应的字幕文件，以及根据规则匹配字幕文件对
  */
 
-import { fsReadDir, fsExists } from '../../lib/tauri';
+import { readDir, exists } from '@tauri-apps/plugin-fs';
 import {
   DetectedSubtitle,
   SubtitleDetectionResult,
@@ -99,8 +99,10 @@ export async function detectSubtitlesForVideo(
   // 获取目录下所有字幕文件
   let files: string[] = [];
   try {
-    const allFiles = await fsReadDir(directory);
-    files = allFiles.filter((f: string) => isSubtitleExtension(f));
+    const entries = await readDir(directory);
+    files = entries
+      .filter((e) => e.isFile && isSubtitleExtension(e.name))
+      .map((e) => e.name);
   } catch (error) {
     console.error('Error reading directory:', error);
     return { videoFile: videoPath, detectedSubtitles: [] };
@@ -352,7 +354,8 @@ export async function scanDirectoryForSubtitles(
   const subtitleFiles: string[] = [];
 
   try {
-    const files = await fsReadDir(directoryPath);
+    const entries = await readDir(directoryPath);
+    const files = entries.filter((e) => e.isFile).map((e) => e.name);
 
     for (const file of files) {
       const filePath = pathShim.join(directoryPath, file);
@@ -377,7 +380,8 @@ export async function smartScanDirectory(
   const subtitles: string[] = [];
 
   try {
-    const files = await fsReadDir(directoryPath);
+    const entries = await readDir(directoryPath);
+    const files = entries.filter((e) => e.isFile).map((e) => e.name);
 
     for (const file of files) {
       const filePath = pathShim.join(directoryPath, file);
@@ -399,8 +403,8 @@ export async function smartScanDirectory(
  */
 export async function validateSubtitleFile(filePath: string): Promise<boolean> {
   try {
-    const exists = await fsExists(filePath);
-    return exists && isSubtitleExtension(filePath);
+    const fileExists = await exists(filePath);
+    return fileExists && isSubtitleExtension(filePath);
   } catch {
     return false;
   }
