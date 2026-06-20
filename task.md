@@ -1,4 +1,4 @@
-# FinalSubTauri Phase 2 ASR Task List
+# FinalSub Phase 2 ASR Task List
 
 - `[x]` 编译与落位 whisper-cli
   - `[x]` 检索或使用 CMake 编译 arm64 / x86_64 架构二进制
