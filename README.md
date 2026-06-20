@@ -9,10 +9,8 @@
 生成 Tauri 全平台图标时执行：
 
 ```bash
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSubTauri && npx tauri icon src-tauri/icons/app-icon-source.png
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/app-icon-source.png
 ```
-
-旧 Electron 兼容仓库使用同一母版同步到 `/Users/moonlitpoet/Tools/AI-tools/FinalSub/resources/icon-source.png` 和 `resources/icon.*`，迁移过程中不得恢复旧图标。
 
 ## 当前可用
 
@@ -52,4 +50,4 @@ cd .. && npm run build:local
 
 FinalSub 是一个独立的字幕生成与翻译应用。本项目在研发与设计过程中，其早期的基础架构及部分功能设计灵感来自优秀的开源项目 **SmartSub (妙幕)** (`https://github.com/buxuku/SmartSub`，基于 MIT 许可证开源，Copyright (c) 2024 Lin Xiaodong)。我们对此表示诚挚的谢意。
 
-关于第三方开源依赖及上游基座的完整许可协议与版权声明，请参阅 [THIRD_PARTY_NOTICES.md](file:///Users/moonlitpoet/Tools/AI-tools/FinalSubTauri/THIRD_PARTY_NOTICES.md)。
+关于第三方开源依赖及上游基座的完整许可协议与版权声明，请参阅 [THIRD_PARTY_NOTICES.md](file:///Users/moonlitpoet/Tools/AI-tools/FinalSub/THIRD_PARTY_NOTICES.md)。

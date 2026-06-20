@@ -3,7 +3,7 @@
 ## 构建验证命令
 
 ```bash
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSubTauri
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub
 
 # 前端构建
 npm run build
@@ -23,7 +23,7 @@ npm run build:local
 ### 启动开发服务器
 
 ```bash
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSubTauri && npm run dev -- --host 127.0.0.1 --port 5173
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 ### 截取 7 个主导航页面
@@ -59,22 +59,22 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSubTauri && npm run dev -- --host 127.
 ```bash
 # 签名有效性
 codesign --verify --deep --strict --verbose=4 \
-  "src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app"
+  "src-tauri/target/release/bundle/macos/FinalSub.app"
 
 # Gatekeeper（预期 rejected，未做 notarization）
 spctl -a -vvv -t exec \
-  "src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app"
+  "src-tauri/target/release/bundle/macos/FinalSub.app"
 ```
 
 ## 产物检查
 
 ```bash
 # App 大小
-du -sh "src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app"
+du -sh "src-tauri/target/release/bundle/macos/FinalSub.app"
 
 # DMG 大小
-du -sh "src-tauri/target/release/bundle/dmg/FinalSub Tauri Preview_0.1.0_aarch64.dmg"
+du -sh "src-tauri/target/release/bundle/dmg/FinalSub_2.17.0_aarch64.dmg"
 
 # FFmpeg sidecar 内嵌
-ls -la "src-tauri/target/release/bundle/macos/FinalSub Tauri Preview.app/Contents/MacOS/ffmpeg"
+ls -la "src-tauri/target/release/bundle/macos/FinalSub.app/Contents/MacOS/ffmpeg"
 ```

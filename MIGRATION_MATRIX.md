@@ -1,11 +1,11 @@
-# FinalSub Tauri 迁移矩阵
+# FinalSub 迁移矩阵（Electron → Tauri）
 
 生成时间：2026-06-19  
 审查更新时间：2026-06-19
-来源：旧 Electron 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSub` + 新 Tauri 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri`  
+来源：旧 Electron 仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSub`（已删除）+ 新仓库 `/Users/moonlitpoet/Tools/AI-tools/FinalSub`（原 FinalSubTauri，2026-06-20 改名占用同一路径）  
 计划书：`/Users/moonlitpoet/Desktop/交接书/handoff-20260619-0238-finalsub-tauri-full-migration-plan.md`
 
-品牌图标母版：`/Users/moonlitpoet/Tools/AI-tools/FinalSubTauri/src-tauri/icons/app-icon-source.png`。从 2026-06-19 起，Tauri 版、旧 Electron 兼容包和文档图标均使用该母版生成，不得恢复旧图标。
+品牌图标母版：`/Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/icons/app-icon-source.png`。从 2026-06-19 起，Tauri 版、旧 Electron 兼容包和文档图标均使用该母版生成，不得恢复旧图标。
 
 ## 1. 主导航迁移状态
 
