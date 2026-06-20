@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fsReadText, fsWriteText } from '../../lib/tauri';
+import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import {
   detectSubtitleFormat,
   parseSubtitleEntries,
@@ -106,7 +106,7 @@ export const useStandaloneSubtitles = (
   // 读取字幕文件并解析为 Subtitle 格式
   const readSubtitleFile = async (filePath: string): Promise<Subtitle[]> => {
     try {
-      const content = await fsReadText(filePath);
+      const content = await readTextFile(filePath);
       const format = detectSubtitleFormat(filePath);
       const entries = parseSubtitleEntries(content, format);
       return entries.map((e) => {
@@ -135,7 +135,7 @@ export const useStandaloneSubtitles = (
   ): Promise<PlayerSubtitleTrack | null> => {
     if (!srtPath) return null;
     try {
-      const content = await fsReadText(srtPath);
+      const content = await readTextFile(srtPath);
       const fromFormat = detectSubtitleFormat(srtPath);
       const vttContent = convertSubtitleContent(content, fromFormat, 'vtt');
       const vttBlob = new Blob([vttContent], { type: 'text/vtt' });
@@ -307,7 +307,7 @@ export const useStandaloneSubtitles = (
           text: buildText(sub, 'source'),
         }));
         const content = serializeSubtitleEntries(entries, format);
-        await fsWriteText(config.sourceSubtitlePath, content);
+        await writeTextFile(config.sourceSubtitlePath, content);
       }
 
       // 保存翻译字幕
@@ -319,7 +319,7 @@ export const useStandaloneSubtitles = (
           text: buildText(sub, 'onlyTranslate'),
         }));
         const content = serializeSubtitleEntries(entries, format);
-        await fsWriteText(config.targetSubtitlePath, content);
+        await writeTextFile(config.targetSubtitlePath, content);
       }
 
       // 保存到目标翻译文件（如双语）
@@ -332,7 +332,7 @@ export const useStandaloneSubtitles = (
           text: buildText(sub, contentType),
         }));
         const content = serializeSubtitleEntries(entries, format);
-        await fsWriteText(config.finalTargetSubtitlePath, content);
+        await writeTextFile(config.finalTargetSubtitlePath, content);
       }
 
       toast.success('字幕保存成功');

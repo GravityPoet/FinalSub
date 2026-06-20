@@ -7,6 +7,20 @@
     "core:default",
     "opener:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    {
+      "identifier": "fs:scope",
+      "deny": [
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.config/**" },
+        { "path": "$HOME/Library/**" }
+      ]
+    }
   ]
 }

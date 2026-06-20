@@ -11,8 +11,8 @@
 
 | # | 路由 | 中文名 | 新 Tauri 文件 | 当前状态 |
 |---|------|--------|---------------|----------|
-| 1 | `/` | 任务 | `src/pages/HomePage.tsx` | 🟡 部分。完整配置 UI 存在，但真实 `create_task` 流水线未接入；审查修复后不再伪装完成，只允许 `快速预览` 走模拟队列 |
-| 2 | `/tasks` | 任务队列 | `src/pages/TasksPage.tsx` | 🟡 部分。内存队列、事件刷新、取消预览任务可用；无持久化、暂停/恢复/重试 |
+| 1 | `/` | 任务 | `src/pages/HomePage.tsx` | 🟡 核心可用。真实 `create_task` 流水线已接入，包含音频提取、ASR（Whisper/Parakeet）、翻译及多格式字幕写出；GUI 点击流仍需人工验收 |
+| 2 | `/tasks` | 任务队列 | `src/pages/TasksPage.tsx` | 🟡 核心可用。支持真实/预览任务生命周期，提供“打开输出文件”和“打开所在目录”功能；无持久化、暂停/恢复/重试 |
 | 3 | `/models` | 模型管理 | `src/pages/ModelsPage.tsx` | 🟡 部分。可扫描设置中的 Whisper 模型目录，可删除受管 Whisper 模型；无下载、导入、checksum |
 | 4 | `/translation` | 翻译管理 | `src/pages/TranslationPage.tsx` | 🟡 部分。Provider 列表和测试入口存在；DeepLX/Ollama 本地路径可走，多数商业 provider 仍未实现或缺配置 UI |
 | 5 | `/proofread` | 字幕校对 | `src/pages/PlaceholderPage.tsx` | 🔴 未迁移。仍为占位 |
@@ -24,9 +24,9 @@
 | 能力 | 新 Tauri | 当前状态 |
 |------|----------|----------|
 | 任务类型枚举 | `GenerateAndTranslate` / `GenerateOnly` / `TranslateOnly` | 🟡 类型存在 |
-| 真实任务创建 | `create_task` | 🔴 审查后改为显式报错，避免把未执行 ASR/翻译的任务标为完成 |
+| 真实任务创建 | `create_task` | 🟡 核心可用。接入后台 task_runner 真实流水线，FFmpeg/ASR/翻译阶段均接入取消信号；商业翻译 provider 仍需真实 API Key 验证 |
 | 预览任务 | `create_preview_task` | 🟢 可用于验证队列事件和 UI 流 |
-| 队列状态 | `pending/running/cancelled/done/error` | 🟡 预览任务可用；真实任务未接入 |
+| 队列状态 | `pending/running/cancelled/done/error` | 🟡 核心可用。真实任务与预览任务均支持全状态流转，前端稳定更新；任务队列尚未持久化 |
 | 任务事件 | `task-updated` | 🟢 已实现 |
 | 日志流 | `task-log` | 🔴 未实现 |
 | 暂停/恢复/重试 | — | 🔴 未实现 |
@@ -38,8 +38,8 @@
 
 | 引擎 | 新实现 | 当前状态 |
 |------|--------|----------|
-| Whisper.cpp | `WhisperCppEngine` + `transcribe_audio` | 🟡 命令存在，使用设置中的模型目录；仍硬编码 `/opt/homebrew/bin/whisper-cli`，未接入任务流水线 |
-| Parakeet MLX | `ParakeetMlxEngine` + `transcribe_parakeet` | 🟡 命令存在；仍依赖旧 Electron 仓库脚本路径和本机 `uv`/FFmpeg，属于本机 spike，不可标为正式可分发 |
+| Whisper.cpp | `WhisperCppEngine` + `transcribe_audio` | 🟢 已接入。接入任务流水线，支持 cancel_rx 中断，使用 sidecar 自动解析，并正确读写指定目录模型 |
+| Parakeet MLX | `ParakeetMlxEngine` + `transcribe_parakeet` | 🟡 已接入。本机流水线支持 cancel_rx 中断，仍依赖本机 `uv`、MLX 与 Hugging Face 缓存，目标机器需单独验收 |
 | SenseVoice | catalog only | 🔴 仅模型候选，未接入运行时 |
 | Custom Command | catalog only | 🔴 未设计权限方案，不可用 |
 

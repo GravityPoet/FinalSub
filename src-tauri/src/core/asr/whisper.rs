@@ -81,6 +81,7 @@ impl AsrEngine for WhisperCppEngine {
         &self,
         job: TranscribeJob,
         progress: ProgressSink,
+        cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<SubtitleTrack> {
         let model_path = self.model_path(&job.model.model_id);
         if !model_path.exists() {
@@ -129,11 +130,41 @@ impl AsrEngine for WhisperCppEngine {
             .await
             .ok();
 
-        let output = tokio::process::Command::new(&self.whisper_bin)
-            .args(&args)
-            .output()
-            .await
-            .map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?;
+        let mut cmd = tokio::process::Command::new(&self.whisper_bin);
+        cmd.args(&args);
+        cmd.kill_on_drop(true);
+
+        let output_fut = cmd.output();
+        tokio::pin!(output_fut);
+
+        let output = if let Some(mut rx) = cancel_rx {
+            tokio::select! {
+                res = &mut output_fut => {
+                    res.map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?
+                }
+                _ = rx.changed() => {
+                    if *rx.borrow() {
+                        return Err(FinalSubError::Validation("任务已取消".into()));
+                    }
+                    loop {
+                        tokio::select! {
+                            res = &mut output_fut => {
+                                break res.map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?;
+                            }
+                            change_res = rx.changed() => {
+                                if change_res.is_err() || *rx.borrow() {
+                                    return Err(FinalSubError::Validation("任务已取消".into()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            output_fut
+                .await
+                .map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

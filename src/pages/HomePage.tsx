@@ -63,13 +63,22 @@ export default function HomePage() {
   }, []);
 
   const engineModels = models.filter((m) => m.engine_id === engineId);
-  const engines = [...new Set(models.map((m) => m.engine_id))];
+  const engines = [...new Set(models.map((m) => m.engine_id))].filter(
+    (id) => id !== "sensevoice" && id !== "custom-command"
+  );
+
+  const taskNeedsAsr = taskType !== "translate-only";
+  const activeModel = models.find((m) => m.id === modelId && m.engine_id === engineId);
+  const canStartTask = !taskNeedsAsr || Boolean(activeModel && (engineId !== "whisper-cpp" || activeModel.status === "downloaded"));
 
   const handleSelectMedia = async () => {
     setError("");
+    const isTranslateOnly = taskType === "translate-only";
     const selected = await open({
       multiple: false,
-      filters: [{ name: "音视频文件", extensions: mediaExtensions }],
+      filters: isTranslateOnly
+        ? [{ name: "字幕文件", extensions: ["srt"] }]
+        : [{ name: "音视频文件", extensions: mediaExtensions }],
     });
     if (typeof selected === "string") {
       setSelectedPath(selected);
@@ -78,7 +87,7 @@ export default function HomePage() {
 
   const handleCreate = async () => {
     if (!selectedPath) {
-      setError("请先选择音视频文件。");
+      setError(taskType === "translate-only" ? "请先选择字幕文件。" : "请先选择音视频文件。");
       return;
     }
     setCreating(true);
@@ -102,6 +111,10 @@ export default function HomePage() {
   };
 
   const handlePreview = async () => {
+    if (taskType === "translate-only") {
+      setError("快速预览仅支持音视频任务；仅翻译请使用“开始任务”。");
+      return;
+    }
     if (!selectedPath) {
       setError("请先选择音视频文件。");
       return;
@@ -159,7 +172,7 @@ export default function HomePage() {
               className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               <FolderOpen size={16} />
-              选择音视频
+              {taskType === "translate-only" ? "选择字幕文件" : "选择音视频"}
             </button>
           </section>
 
@@ -176,7 +189,11 @@ export default function HomePage() {
                   return (
                     <button
                       key={t.value}
-                      onClick={() => setTaskType(t.value)}
+                      onClick={() => {
+                        setTaskType(t.value);
+                        setSelectedPath("");
+                        setError("");
+                      }}
                       className={`flex flex-col items-center gap-1 rounded-lg border p-3 text-xs transition ${
                         taskType === t.value
                           ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300"
@@ -222,6 +239,12 @@ export default function HomePage() {
                 </select>
               </div>
             </div>
+
+            {taskType === "translate-only" && (
+              <div className="mb-4 rounded-md bg-gray-50 p-2.5 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-300">
+                仅翻译模式会读取已选择的 SRT 字幕文件，不使用 ASR 引擎或模型。
+              </div>
+            )}
 
             {/* 语言 */}
             <div className="mb-4 grid grid-cols-2 gap-4">
@@ -270,22 +293,30 @@ export default function HomePage() {
               </select>
             </div>
 
+            {engineId === "parakeet-mlx" && (
+              <div className="mb-4 text-xs text-blue-600 bg-blue-50 dark:bg-blue-900/20 dark:text-blue-300 p-2.5 rounded-md">
+                提示：Parakeet-MLX 引擎首次运行依赖本地 `uv` 并会在后台自动从 Hugging Face 缓存模型，请确保网络通畅。
+              </div>
+            )}
+
             {/* 操作按钮 */}
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
                 onClick={handleCreate}
-                disabled={!selectedPath || creating}
+                disabled={!selectedPath || creating || !canStartTask}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-gray-700"
+                title={!canStartTask ? "请先在模型管理页下载对应的 Whisper 模型" : undefined}
               >
                 <Play size={16} />
-                {creating ? "正在创建..." : "开始任务"}
+                {creating ? "正在创建..." : !canStartTask ? "模型未下载" : "开始任务"}
               </button>
               <button
                 type="button"
                 onClick={handlePreview}
-                disabled={!selectedPath || creating}
+                disabled={!selectedPath || creating || taskType === "translate-only"}
                 className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+                title={taskType === "translate-only" ? "快速预览仅支持音视频任务" : undefined}
               >
                 快速预览
               </button>

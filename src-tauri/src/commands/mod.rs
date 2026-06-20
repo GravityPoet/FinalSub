@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, State, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
@@ -10,10 +10,11 @@ use crate::core::audio;
 use crate::core::models::{self, AsrModelInfo};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
-use keyring::Entry;
 use crate::core::task_queue::{self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType};
 use crate::core::translation::{self, TranslationProvider};
 use crate::state::AppState;
+use keyring::Entry;
+use tauri_plugin_fs::FsExt;
 
 const TASK_UPDATED_EVENT: &str = "task-updated";
 
@@ -70,24 +71,101 @@ pub struct CreateTaskRequest {
 
 #[tauri::command]
 pub async fn create_task(
-    _app: AppHandle,
-    _state: State<'_, AppState>,
+    app: AppHandle,
+    state: State<'_, AppState>,
     req: CreateTaskRequest,
 ) -> Result<Task, String> {
-    let _media_path = validate_media_path(&req.media_path)?;
-    let _engine_id = validate_non_empty("engine_id", req.engine_id)?;
-    let _model_id = validate_non_empty("model_id", req.model_id)?;
-    let _task_type = match req.task_type.as_str() {
+    let task_type = match req.task_type.as_str() {
         "generate-and-translate" => TaskType::GenerateAndTranslate,
         "generate-only" => TaskType::GenerateOnly,
         "translate-only" => TaskType::TranslateOnly,
         _ => return Err(format!("未知任务类型：{}", req.task_type)),
     };
-    let _source_language = req.source_language;
-    let _target_language = req.target_language;
-    let _output_format = req.output_format;
 
-    Err("真实任务流水线尚未接入：当前只能使用“快速预览”验证任务队列事件，不能把未执行的 ASR/翻译任务标为完成。".into())
+    let media_path = if task_type == TaskType::TranslateOnly {
+        validate_existing_file_path(&req.media_path, "字幕文件")?
+    } else {
+        validate_media_path(&req.media_path)?
+    };
+
+    let (engine_id, model_id) = if task_type == TaskType::TranslateOnly {
+        ("subtitle-translation".to_string(), "srt-input".to_string())
+    } else {
+        (
+            validate_non_empty("engine_id", req.engine_id)?,
+            validate_non_empty("model_id", req.model_id)?,
+        )
+    };
+
+    // 如果是 translate-only，校验字幕格式
+    if task_type == TaskType::TranslateOnly {
+        let ext = media_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "srt" {
+            return Err("仅翻译模式只支持 .srt 字幕文件输入".into());
+        }
+    }
+
+    let output_format = validate_subtitle_output_format(req.output_format)?;
+    let source_language = req
+        .source_language
+        .map(|lang| lang.trim().to_string())
+        .filter(|lang| !lang.is_empty());
+    let target_language = match task_type {
+        TaskType::GenerateAndTranslate | TaskType::TranslateOnly => Some(validate_non_empty(
+            "target_language",
+            req.target_language.unwrap_or_default(),
+        )?),
+        TaskType::GenerateOnly => req
+            .target_language
+            .map(|lang| lang.trim().to_string())
+            .filter(|lang| !lang.is_empty()),
+    };
+
+    let media_name = media_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("未命名媒体")
+        .to_string();
+
+    let task = task_queue::create_task(CreateTaskParams {
+        task_type,
+        media_path: media_path.to_string_lossy().to_string(),
+        media_name,
+        engine_id,
+        model_id,
+        source_language,
+        target_language,
+        output_format,
+    });
+
+    let task_clone = task.clone();
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let tasks = state.tasks.clone();
+    let task_controls = state.task_controls.clone();
+    let app_config_dir = state.app_config_dir.clone();
+
+    tasks.write().await.insert(task.id.clone(), task);
+    task_controls
+        .write()
+        .await
+        .insert(task_clone.id.clone(), cancel_tx);
+    emit_task_update(&app, &task_clone);
+
+    // 启动后台 worker
+    crate::core::task_runner::start_task(
+        app,
+        tasks,
+        task_controls,
+        app_config_dir,
+        task_clone.id.clone(),
+        cancel_rx,
+    );
+
+    Ok(task_clone)
 }
 
 #[tauri::command]
@@ -144,6 +222,12 @@ pub async fn cancel_task(
     task.updated_at = chrono::Utc::now().to_rfc3339();
     let task_clone = task.clone();
     drop(tasks);
+
+    // 向 cancel_sender 发送取消信号并移除
+    if let Some(sender) = state.task_controls.write().await.remove(&task_id) {
+        sender.send(true).ok();
+    }
+
     emit_task_update(&app, &task_clone);
     Ok(task_clone)
 }
@@ -272,7 +356,7 @@ pub async fn transcribe_audio(
     };
 
     let track = engine
-        .transcribe(job, tx)
+        .transcribe(job, tx, None)
         .await
         .map_err(|e: crate::error::FinalSubError| e.to_string())?;
 
@@ -300,20 +384,31 @@ pub async fn transcribe_parakeet(
     let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
     let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
     let uv_bin = crate::core::asr::parakeet::default_uv_bin();
-    
+
     #[cfg(debug_assertions)]
     let transcribe_script = {
         let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-        let p1 = current_dir.join("src-tauri").join("resources").join("parakeet").join("parakeet_transcribe.py");
+        let p1 = current_dir
+            .join("src-tauri")
+            .join("resources")
+            .join("parakeet")
+            .join("parakeet_transcribe.py");
         if p1.exists() {
             p1
         } else {
-            current_dir.join("resources").join("parakeet").join("parakeet_transcribe.py")
+            current_dir
+                .join("resources")
+                .join("parakeet")
+                .join("parakeet_transcribe.py")
         }
     };
     #[cfg(not(debug_assertions))]
-    let transcribe_script = app.path()
-        .resolve("resources/parakeet/parakeet_transcribe.py", tauri::path::BaseDirectory::Resource)
+    let transcribe_script = app
+        .path()
+        .resolve(
+            "resources/parakeet/parakeet_transcribe.py",
+            tauri::path::BaseDirectory::Resource,
+        )
         .map_err(|e| format!("解析 Parakeet 脚本路径失败：{e}"))?;
 
     let cache_root = default_local_llm_dir();
@@ -340,7 +435,7 @@ pub async fn transcribe_parakeet(
     };
 
     let track = engine
-        .transcribe(job, tx)
+        .transcribe(job, tx, None)
         .await
         .map_err(|e: crate::error::FinalSubError| e.to_string())?;
 
@@ -388,7 +483,11 @@ pub async fn test_translation(
 }
 
 #[tauri::command]
-pub fn set_provider_secret(provider_id: String, field: String, value: String) -> std::result::Result<(), String> {
+pub fn set_provider_secret(
+    provider_id: String,
+    field: String,
+    value: String,
+) -> std::result::Result<(), String> {
     let service = "com.gravitypoet.finalsub";
     let account = format!("translate:{provider_id}:{field}");
     let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
@@ -396,20 +495,28 @@ pub fn set_provider_secret(provider_id: String, field: String, value: String) ->
     Ok(())
 }
 
+/// 仅返回「该 provider 字段是否已配置密钥」，绝不把明文密钥经 IPC 回传渲染层。
+/// 翻译时由后端 test_translation 直接从 Keychain 取用，前端无需接触明文。
 #[tauri::command]
-pub fn get_provider_secret(provider_id: String, field: String) -> std::result::Result<String, String> {
+pub fn has_provider_secret(
+    provider_id: String,
+    field: String,
+) -> std::result::Result<bool, String> {
     let service = "com.gravitypoet.finalsub";
     let account = format!("translate:{provider_id}:{field}");
     let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
     match entry.get_password() {
-        Ok(password) => Ok(password),
-        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Ok(password) => Ok(!password.is_empty()),
+        Err(keyring::Error::NoEntry) => Ok(false),
         Err(e) => Err(e.to_string()),
     }
 }
 
 #[tauri::command]
-pub fn delete_provider_secret(provider_id: String, field: String) -> std::result::Result<(), String> {
+pub fn delete_provider_secret(
+    provider_id: String,
+    field: String,
+) -> std::result::Result<(), String> {
     let service = "com.gravitypoet.finalsub";
     let account = format!("translate:{provider_id}:{field}");
     let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
@@ -568,8 +675,7 @@ fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> 
     models::scan_model_status(&mut catalog, &whisper_dir, &parakeet_dir);
     Ok(catalog)
 }
-
-fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
     let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
     let path = expand_home_path(&settings.models_path);
     if !path.is_absolute() {
@@ -578,7 +684,7 @@ fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn default_local_llm_dir() -> PathBuf {
+pub(crate) fn default_local_llm_dir() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
@@ -654,6 +760,20 @@ fn validate_json_extension(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_subtitle_output_format(raw: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let format = raw.trim().to_ascii_lowercase();
+    if format.is_empty() {
+        return Ok(None);
+    }
+    match format.as_str() {
+        "srt" | "vtt" | "txt" | "lrc" | "ass" => Ok(Some(format)),
+        _ => Err("输出格式仅支持 srt、vtt、txt、lrc、ass".into()),
+    }
+}
+
 fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
     if let Some(font_size) = req.font_size {
         if !(10..=120).contains(&font_size) {
@@ -685,7 +805,7 @@ fn validate_ass_color(label: &str, value: &str) -> Result<(), String> {
     }
 }
 
-fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
     {
         if let Ok(current_dir) = std::env::current_dir() {
@@ -695,8 +815,11 @@ fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, Strin
                 "x86_64-apple-darwin"
             };
             let file_name = format!("{name}-{target_triple}");
-            
-            let path1 = current_dir.join("src-tauri").join("binaries").join(&file_name);
+
+            let path1 = current_dir
+                .join("src-tauri")
+                .join("binaries")
+                .join(&file_name);
             if path1.exists() {
                 return Ok(path1);
             }
@@ -713,7 +836,7 @@ fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, Strin
                 "x86_64-apple-darwin"
             };
             let file_name = format!("{name}-{target_triple}");
-            
+
             let mut current = exe_path.as_path();
             for _ in 0..10 {
                 if let Some(parent) = current.parent() {
@@ -734,24 +857,28 @@ fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<PathBuf, Strin
 
         Err(format!("开发环境下找不到 sidecar 二进制：{}", name))
     }
-    
+
     #[cfg(not(debug_assertions))]
     {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("获取当前可执行文件路径失败：{e}"))?;
-        let exe_dir = exe_path.parent()
+        let exe_path =
+            std::env::current_exe().map_err(|e| format!("获取当前可执行文件路径失败：{e}"))?;
+        let exe_dir = exe_path
+            .parent()
             .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?;
-        
+
         let base_name = PathBuf::from(name)
             .file_name()
             .ok_or_else(|| format!("无效的 sidecar 名字：{name}"))?
             .to_os_string();
-            
+
         let target_path = exe_dir.join(&base_name);
         if target_path.exists() {
             Ok(target_path)
         } else {
-            Err(format!("生产环境下找不到 sidecar 二进制：{}", target_path.display()))
+            Err(format!(
+                "生产环境下找不到 sidecar 二进制：{}",
+                target_path.display()
+            ))
         }
     }
 }
@@ -779,45 +906,63 @@ pub fn save_proofread_tasks(app: AppHandle, data: String) -> std::result::Result
     Ok(())
 }
 
-#[tauri::command]
-pub fn fs_read_dir(dir_path: String) -> std::result::Result<Vec<String>, String> {
-    let path = std::path::Path::new(&dir_path);
-    if !path.is_dir() {
-        return Err("不是一个有效的目录".to_string());
+/// 判断 canonicalize 之后的路径是否落在敏感目录内（纵深防御黑名单）。
+/// canonicalize 已解析符号链接，可挡住软链逃逸。
+fn is_sensitive_dir(path: &Path) -> bool {
+    let p = path.to_string_lossy();
+    // 系统级目录：一律拒绝授权
+    const SYSTEM_PREFIXES: [&str; 8] = [
+        "/etc", "/var", "/usr", "/bin", "/sbin", "/System", "/private", "/Library",
+    ];
+    for sys in SYSTEM_PREFIXES {
+        if p == sys || p.starts_with(&format!("{sys}/")) {
+            return true;
+        }
     }
-    let entries = std::fs::read_dir(path).map_err(|e| e.to_string())?;
-    let mut files = Vec::new();
-    for entry in entries {
-        if let Ok(entry) = entry {
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_file() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        files.push(name.to_string());
-                    }
+    // 用户 home 下的敏感子目录（密钥、凭据、应用私有配置）
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            const HOME_SENSITIVE: [&str; 7] = [
+                ".ssh", ".aws", ".gnupg", ".config", ".docker", ".kube", "Library",
+            ];
+            for sub in HOME_SENSITIVE {
+                let banned = format!("{home}/{sub}");
+                if p == banned || p.starts_with(&format!("{banned}/")) {
+                    return true;
                 }
             }
         }
     }
-    Ok(files)
+    false
 }
 
+/// 受控的运行时 scope 授权命令：把「用户主动导入的字幕/视频所在目录」加入
+/// tauri-plugin-fs 的允许范围，使前端 plugin-fs 能读取该文件并扫描同目录字幕。
+/// 与已删除的裸 fs_* 命令本质不同——本命令不直接读写任何文件，只做最小授权：
+/// 传文件则授权其父目录、传目录则授权自身，均非递归，并用 is_sensitive_dir
+/// 黑名单挡住敏感路径。dialog 选中的文件/文件夹已由 tauri-plugin-dialog 自动授权。
 #[tauri::command]
-pub fn fs_exists(file_path: String) -> std::result::Result<bool, String> {
-    Ok(std::path::Path::new(&file_path).exists())
-}
-
-#[tauri::command]
-pub fn fs_read_text(file_path: String) -> std::result::Result<String, String> {
-    std::fs::read_to_string(file_path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn fs_write_text(file_path: String, content: String) -> std::result::Result<(), String> {
-    let path = std::path::Path::new(&file_path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+pub fn authorize_subtitle_directory(
+    app: AppHandle,
+    dir_path: String,
+) -> std::result::Result<(), String> {
+    let canonical = std::fs::canonicalize(&dir_path).map_err(|e| e.to_string())?;
+    // 传入文件则授权其所在目录，传入目录则授权目录本身
+    let dir = if canonical.is_dir() {
+        canonical.clone()
+    } else {
+        canonical
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| "无法解析所在目录".to_string())?
+    };
+    if is_sensitive_dir(&dir) {
+        return Err("拒绝授权敏感目录".to_string());
     }
-    std::fs::write(path, content).map_err(|e| e.to_string())
+    app.fs_scope()
+        .allow_directory(&dir, false)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -894,6 +1039,16 @@ mod tests {
     }
 
     #[test]
+    fn validate_subtitle_output_format_normalizes_supported_values() {
+        assert_eq!(validate_subtitle_output_format(None).unwrap(), None);
+        assert_eq!(
+            validate_subtitle_output_format(Some(" VTT ".into())).unwrap(),
+            Some("vtt".into())
+        );
+        assert!(validate_subtitle_output_format(Some("srt/evil".into())).is_err());
+    }
+
+    #[test]
     fn validate_new_output_path_rejects_existing_file() {
         let tmp = std::env::temp_dir().join("finalsub_existing_output.srt");
         std::fs::write(&tmp, b"exists").unwrap();
@@ -950,8 +1105,14 @@ mod tests {
         let file_name = format!("{name}-{target_triple}");
         let current_dir = std::env::current_dir().unwrap();
         let path1 = current_dir.join("binaries").join(&file_name);
-        let path2 = current_dir.join("src-tauri").join("binaries").join(&file_name);
-        assert!(path1.exists() || path2.exists(), "开发环境缺少 whisper-cli thin sidecar：{file_name}");
+        let path2 = current_dir
+            .join("src-tauri")
+            .join("binaries")
+            .join(&file_name);
+        assert!(
+            path1.exists() || path2.exists(),
+            "开发环境缺少 whisper-cli thin sidecar：{file_name}"
+        );
     }
 
     #[test]
@@ -965,7 +1126,13 @@ mod tests {
         let file_name = format!("{name}-{target_triple}");
         let current_dir = std::env::current_dir().unwrap();
         let path1 = current_dir.join("binaries").join(&file_name);
-        let path2 = current_dir.join("src-tauri").join("binaries").join(&file_name);
-        assert!(path1.exists() || path2.exists(), "开发环境缺少 ffmpeg thin sidecar：{file_name}");
+        let path2 = current_dir
+            .join("src-tauri")
+            .join("binaries")
+            .join(&file_name);
+        assert!(
+            path1.exists() || path2.exists(),
+            "开发环境缺少 ffmpeg thin sidecar：{file_name}"
+        );
     }
 }

@@ -61,6 +61,7 @@ impl AsrEngine for ParakeetMlxEngine {
         &self,
         job: TranscribeJob,
         progress: ProgressSink,
+        cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<SubtitleTrack> {
         let lang = job.language.as_deref().unwrap_or("auto");
         if !matches!(lang, "auto" | "en" | "english") {
@@ -135,10 +136,39 @@ impl AsrEngine for ParakeetMlxEngine {
             .await
             .ok();
 
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?;
+        cmd.kill_on_drop(true);
+
+        let output_fut = cmd.output();
+        tokio::pin!(output_fut);
+
+        let output = if let Some(mut rx) = cancel_rx {
+            tokio::select! {
+                res = &mut output_fut => {
+                    res.map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?
+                }
+                _ = rx.changed() => {
+                    if *rx.borrow() {
+                        return Err(FinalSubError::Validation("任务已取消".into()));
+                    }
+                    loop {
+                        tokio::select! {
+                            res = &mut output_fut => {
+                                break res.map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?;
+                            }
+                            change_res = rx.changed() => {
+                                if change_res.is_err() || *rx.borrow() {
+                                    return Err(FinalSubError::Validation("任务已取消".into()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            output_fut
+                .await
+                .map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

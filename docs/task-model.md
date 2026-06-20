@@ -42,15 +42,15 @@ pub struct Task {
 状态转换图：
 
 ```
-Pending → Running → Done      // 仅预览任务
-Pending → Running → Error     // 真实任务流水线未接入
-Pending → Running → Cancelled // 预览任务
+Pending → Running → Done      // 预览任务与真实任务完成
+Pending → Running → Error     // 真实任务发生错误（ASR/翻译/外部进程出错）
+Pending → Running → Cancelled // 预览任务与真实任务被中途取消
 Pending → Cancelled
 Running → Paused → Running    // 未实现
 Running → Cancelled
 ```
 
-## 进度阶段（规划，未实现）
+## 进度阶段（已实现）
 
 | 阶段 | progress 范围 | 说明 |
 |------|--------------|------|
@@ -70,7 +70,7 @@ Running → Cancelled
 - 载荷：完整 `Task` 结构体
 - 触发时机：预览任务创建、状态变化、进度更新、完成、取消
 
-注意：审查修复后，`create_task` 不再把真实 ASR/翻译任务伪装成完成；完整任务流水线接入前只允许 `create_preview_task` 产生模拟进度。
+注意：真实任务流水线已全部接入（通过 `create_task` 进入后台 `task_runner`），支持真实的 ASR 与翻译进程；`create_preview_task` 依然保留用于快速的事件与 UI 模拟。
 
 ### `task-log`（规划，未实现）
 

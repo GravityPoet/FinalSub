@@ -5,7 +5,7 @@ import {
   testTranslation,
   getSettings,
   saveSettingsCmd,
-  getProviderSecret,
+  hasProviderSecret,
   setProviderSecret,
   type TranslationProvider,
   type Settings,
@@ -24,6 +24,7 @@ export default function TranslationPage() {
   const [apiUrl, setApiUrl] = useState("");
   const [modelName, setModelName] = useState("");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [secretConfigured, setSecretConfigured] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     listTranslationProviders().then(setProviders).catch(console.error);
@@ -44,19 +45,20 @@ export default function TranslationPage() {
 
     if (selectedProviderInfo?.secret_fields) {
       const loadSecrets = async () => {
-        const loaded: Record<string, string> = {};
+        const configured: Record<string, boolean> = {};
         for (const field of selectedProviderInfo.secret_fields) {
           try {
-            const val = await getProviderSecret(selectedProvider, field);
-            loaded[field] = val || "";
+            configured[field] = await hasProviderSecret(selectedProvider, field);
           } catch (e) {
-            console.error(`读取密钥 ${field} 失败`, e);
+            console.error(`检查密钥 ${field} 失败`, e);
           }
         }
-        setSecrets(loaded);
+        setSecretConfigured(configured);
+        setSecrets({}); // 输入框默认空，留空表示沿用已存密钥、不覆盖
       };
       loadSecrets();
     } else {
+      setSecretConfigured({});
       setSecrets({});
     }
   }, [selectedProvider, settings, selectedProviderInfo]);
@@ -85,7 +87,12 @@ export default function TranslationPage() {
 
       if (selectedProviderInfo?.secret_fields) {
         for (const field of selectedProviderInfo.secret_fields) {
-          await setProviderSecret(selectedProvider, field, secrets[field] || "");
+          const val = secrets[field];
+          // 仅当用户输入了新值才写入；留空则保留 Keychain 中已存密钥，不覆盖
+          if (val && val.trim()) {
+            await setProviderSecret(selectedProvider, field, val);
+            setSecretConfigured((prev) => ({ ...prev, [field]: true }));
+          }
         }
       }
       setSuccessMsg("配置及密钥保存成功");
@@ -220,7 +227,7 @@ export default function TranslationPage() {
                   type="password"
                   value={secrets[field] || ""}
                   onChange={(e) => handleSecretChange(field, e.target.value)}
-                  placeholder="请输入密钥内容（本地 Keychain 加密存储）"
+                  placeholder={secretConfigured[field] ? "已配置（留空则不修改，输入则覆盖）" : "请输入密钥内容（本地 Keychain 加密存储）"}
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                 />
               </div>
