@@ -1,3 +1,5 @@
+<!-- Note: This document is for development reference only. For the user guide, please refer to README.md -->
+
 # FinalSub 开发者备忘与历史验收指南
 
 这是从旧 `README.md` 迁移过来的技术开发与验收备忘录。
