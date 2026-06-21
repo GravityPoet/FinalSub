@@ -20,9 +20,9 @@ import {
 const mediaExtensions = ["mp4", "mov", "mkv", "webm", "mp3", "wav", "m4a", "aac", "flac"];
 
 const taskTypes = [
-  { value: "generate-only", label: "仅生成字幕", icon: FileText, desc: "从音视频生成字幕文件" },
-  { value: "generate-and-translate", label: "生成并翻译", icon: Mic, desc: "生成字幕并翻译为目标语言" },
-  { value: "translate-only", label: "仅翻译", icon: Languages, desc: "翻译已有字幕文件" },
+  { value: "generate-only", icon: FileText },
+  { value: "generate-and-translate", icon: Mic },
+  { value: "translate-only", icon: Languages },
 ];
 
 const outputFormats = [
@@ -41,7 +41,7 @@ function fileNameFromPath(path: string): string {
 export default function HomePage() {
   const navigate = useNavigate();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [ffmpegVersion, setFfmpegVersion] = useState<string>("检测中...");
+  const [ffmpegVersion, setFfmpegVersion] = useState<string>("detecting");
   const [models, setModels] = useState<AsrModelInfo[]>([]);
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [creating, setCreating] = useState(false);
@@ -55,9 +55,11 @@ export default function HomePage() {
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [outputFormat, setOutputFormat] = useState("srt");
 
+  const { t } = useI18n();
+
   useEffect(() => {
     getAppInfo().then(setAppInfo).catch(console.error);
-    getFfmpegVersion().then(setFfmpegVersion).catch(() => setFfmpegVersion("未找到"));
+    getFfmpegVersion().then(setFfmpegVersion).catch(() => setFfmpegVersion("unavailable"));
     listAsrModels().then(setModels).catch(console.error);
     getSettings()
       .then((s) => {
@@ -91,11 +93,10 @@ export default function HomePage() {
   const taskNeedsAsr = taskType !== "translate-only";
   const activeModel = models.find((m) => m.id === modelId && m.engine_id === engineId);
   const canStartTask = !taskNeedsAsr || Boolean(activeModel && (engineId !== "whisper-cpp" || activeModel.status === "downloaded"));
-  const { t, locale } = useI18n();
 
   const selectedFileKind = taskType === "translate-only"
-    ? t("home.subFile", "字幕文件")
-    : t("home.mediaFile", "音视频文件");
+    ? t("home.subFile")
+    : t("home.mediaFile");
     
   const prerequisiteHint = !selectedPath
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
@@ -118,8 +119,8 @@ export default function HomePage() {
     const selected = await open({
       multiple: false,
       filters: isTranslateOnly
-        ? [{ name: "字幕文件", extensions: ["srt"] }]
-        : [{ name: "音视频文件", extensions: mediaExtensions }],
+        ? [{ name: t("home.subFile"), extensions: ["srt"] }]
+        : [{ name: t("home.mediaFile"), extensions: mediaExtensions }],
     });
     if (typeof selected === "string") {
       setSelectedPath(selected);
@@ -157,11 +158,11 @@ export default function HomePage() {
 
   const handlePreview = async () => {
     if (taskType === "translate-only") {
-      setError("快速预览仅支持音视频任务；仅翻译请使用“开始任务”。");
+      setError(t("home.previewOnlyMedia"));
       return;
     }
     if (!selectedPath) {
-      setError("请先选择音视频文件。");
+      setError(t("home.selectMediaPrereq"));
       return;
     }
     setCreating(true);
@@ -178,15 +179,15 @@ export default function HomePage() {
 
   return (
     <div className="max-w-5xl">
-      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">任务</h2>
+      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("home.title")}</h2>
 
       {updateInfo && (
         <div className="mb-6 flex items-center justify-between rounded-lg bg-blue-50 border border-blue-200 p-4 dark:bg-blue-950/20 dark:border-blue-900/30">
           <div className="flex items-center gap-3">
             <AlertCircle className="text-blue-600 dark:text-blue-400 shrink-0" size={18} />
             <div className="text-sm text-blue-700 dark:text-blue-300">
-              <span className="font-semibold">发现新版本 v{updateInfo.latest_version}！</span>
-              {updateInfo.body && <span className="ml-1 opacity-90">更新说明: {updateInfo.body.slice(0, 100)}...</span>}
+              <span className="font-semibold">{t("home.newVersionAvailable")}{updateInfo.latest_version}！</span>
+              {updateInfo.body && <span className="ml-1 opacity-90">{t("home.updateNotes")}: {updateInfo.body.slice(0, 100)}...</span>}
             </div>
           </div>
           <button
@@ -195,7 +196,7 @@ export default function HomePage() {
             }}
             className="rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition shrink-0"
           >
-            前往下载
+            {t("home.goDownload")}
           </button>
         </div>
       )}
@@ -211,7 +212,7 @@ export default function HomePage() {
               <div className="min-w-0">
                 <h3 className="font-semibold text-gray-900 dark:text-white">{t("home.newTask")}</h3>
                 <p className="truncate text-sm text-gray-500">
-                  {selectedPath ? fileNameFromPath(selectedPath) : (locale === "en" ? `No ${selectedFileKind} selected` : `未选择${selectedFileKind}`)}
+                  {selectedPath ? fileNameFromPath(selectedPath) : `${t("home.noFileSelected")} (${selectedFileKind})`}
                 </p>
               </div>
             </div>
@@ -237,13 +238,13 @@ export default function HomePage() {
               className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               <FolderOpen size={16} />
-              {taskType === "translate-only" ? (locale === "en" ? "Select Subtitle File" : "选择字幕文件") : (locale === "en" ? "Select Media" : "选择音视频")}
+              {taskType === "translate-only" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")}
             </button>
           </section>
 
           {/* 任务配置 */}
           <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-            <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{locale === "en" ? "Task Configuration" : "任务配置"}</h3>
+            <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("home.taskConfig")}</h3>
 
             {/* 任务类型 */}
             <div className="mb-4">
@@ -307,7 +308,7 @@ export default function HomePage() {
 
             {taskType === "translate-only" && (
               <div className="mb-4 rounded-md bg-gray-50 p-2.5 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-300">
-                {locale === "en" ? "Translate-only mode reads the selected SRT subtitle file, and does not use ASR engine or model." : "仅翻译模式会读取已选择的 SRT 字幕文件，不使用 ASR 引擎或模型。"}
+                {t("home.transOnlyInfo")}
               </div>
             )}
 
@@ -320,12 +321,12 @@ export default function HomePage() {
                   onChange={(e) => setSourceLanguage(e.target.value)}
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
                 >
-                  <option value="auto">{locale === "en" ? "Auto Detect" : "自动检测"} (auto)</option>
-                  <option value="zh">{locale === "en" ? "Chinese" : "中文"} (zh)</option>
-                  <option value="en">{locale === "en" ? "English" : "英文"} (en)</option>
-                  <option value="ja">{locale === "en" ? "Japanese" : "日文"} (ja)</option>
-                  <option value="ko">{locale === "en" ? "Korean" : "韩文"} (ko)</option>
-                  <option value="yue">{locale === "en" ? "Cantonese" : "粤语"} (yue)</option>
+                  <option value="auto">{t("language.auto")} (auto)</option>
+                  <option value="zh">{t("language.zh")} (zh)</option>
+                  <option value="en">{t("language.en")} (en)</option>
+                  <option value="ja">{t("language.ja")} (ja)</option>
+                  <option value="ko">{t("language.ko")} (ko)</option>
+                  <option value="yue">{t("language.yue")} (yue)</option>
                 </select>
               </div>
               <div>
@@ -335,11 +336,11 @@ export default function HomePage() {
                   onChange={(e) => setTargetLanguage(e.target.value)}
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
                 >
-                  <option value="zh">{locale === "en" ? "Chinese" : "中文"} (zh)</option>
-                  <option value="en">{locale === "en" ? "English" : "英文"} (en)</option>
-                  <option value="ja">{locale === "en" ? "Japanese" : "日文"} (ja)</option>
-                  <option value="ko">{locale === "en" ? "Korean" : "韩文"} (ko)</option>
-                  <option value="yue">{locale === "en" ? "Cantonese" : "粤语"} (yue)</option>
+                  <option value="zh">{t("language.zh")} (zh)</option>
+                  <option value="en">{t("language.en")} (en)</option>
+                  <option value="ja">{t("language.ja")} (ja)</option>
+                  <option value="ko">{t("language.ko")} (ko)</option>
+                  <option value="yue">{t("language.yue")} (yue)</option>
                 </select>
               </div>
             </div>
@@ -360,9 +361,7 @@ export default function HomePage() {
 
             {engineId === "parakeet-mlx" && (
               <div className="mb-4 text-xs text-blue-600 bg-blue-50 dark:bg-blue-900/20 dark:text-blue-300 p-2.5 rounded-md">
-                {locale === "en"
-                  ? "Tip: Parakeet-MLX engine relies on local `uv` for the first run and will automatically cache models from Hugging Face in the background. Please ensure internet access."
-                  : "提示：Parakeet-MLX 引擎首次运行依赖本地 `uv` 并会在后台自动从 Hugging Face 缓存模型，请确保网络通畅。"}
+                {t("home.parakeetNotice")}
               </div>
             )}
 
@@ -379,7 +378,7 @@ export default function HomePage() {
                     onClick={handleSelectMedia}
                     className="font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
                   >
-                    现在选择
+                    {t("home.selectModelNow")}
                   </button>
                 ) : (
                   <button
@@ -387,7 +386,7 @@ export default function HomePage() {
                     onClick={() => navigate("/models")}
                     className="font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
                   >
-                    {locale === "en" ? "Open Model Management" : "打开模型管理"}
+                    {t("home.openModelManage")}
                   </button>
                 )}
               </div>
@@ -411,7 +410,7 @@ export default function HomePage() {
                 onClick={handlePreview}
                 disabled={creating}
                 className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
-                title={taskType === "translate-only" ? (locale === "en" ? "Preview supports audio/video only" : "快速预览仅支持音视频任务") : undefined}
+                title={taskType === "translate-only" ? t("home.previewOnlyMedia") : undefined}
               >
                 {t("home.createPreview")}
               </button>
@@ -421,29 +420,29 @@ export default function HomePage() {
 
         {/* 系统信息 */}
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800 h-fit">
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{locale === "en" ? "System Info" : "系统信息"}</h3>
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("home.appInfo")}</h3>
           <dl className="space-y-3">
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-              <dt className="text-sm text-gray-500">{locale === "en" ? "App Name" : "应用名称"}</dt>
+              <dt className="text-sm text-gray-500">{t("home.appName")}</dt>
               <dd className="min-w-0 break-words text-right font-mono text-sm text-gray-900 dark:text-gray-100">
-                {appInfo?.name ?? (locale === "en" ? "Loading..." : "加载中...")}
+                {appInfo?.name ?? t("home.loading")}
               </dd>
             </div>
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-              <dt className="text-sm text-gray-500">{locale === "en" ? "Version" : "版本"}</dt>
+              <dt className="text-sm text-gray-500">{t("home.version")}</dt>
               <dd className="min-w-0 text-right font-mono text-sm text-gray-900 dark:text-gray-100">
-                {appInfo?.version ?? (locale === "en" ? "Loading..." : "加载中...")}
+                {appInfo?.version ?? t("home.loading")}
               </dd>
             </div>
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
               <dt className="text-sm text-gray-500">FFmpeg</dt>
               <dd className="min-w-0 text-right text-sm text-gray-900 dark:text-gray-100">
-                {ffmpegVersion === "检测中..." ? (
+                {ffmpegVersion === "detecting" ? (
                   <span className="text-gray-500">{t("home.detecting")}</span>
-                ) : ffmpegVersion === "未找到" ? (
+                ) : ffmpegVersion === "unavailable" ? (
                   <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
                     <AlertCircle size={14} />
-                    {locale === "en" ? "Unavailable" : "不可用"}
+                    {t("home.unavailable")}
                   </span>
                 ) : (
                   <span
@@ -451,7 +450,7 @@ export default function HomePage() {
                     title={ffmpegVersion}
                   >
                     <CheckCircle className="shrink-0" size={14} />
-                    {locale === "en" ? "Available" : "可用"}
+                    {t("home.available")}
                   </span>
                 )}
               </dd>

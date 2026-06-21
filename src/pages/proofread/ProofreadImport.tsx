@@ -13,6 +13,7 @@ import {
   matchSubtitlesByRules,
 } from './subtitleDetector';
 import { detectLanguageFromFilename } from './languageDetector';
+import { useI18n } from '../../lib/i18n';
 
 interface ProofreadImportProps {
   onImportComplete: (files: PendingFile[], type: 'video' | 'subtitle') => void;
@@ -21,6 +22,7 @@ interface ProofreadImportProps {
 export default function ProofreadImport({
   onImportComplete,
 }: ProofreadImportProps) {
+  const { t } = useI18n();
   const { showToast } = useToast();
 
   // 导入视频文件
@@ -31,7 +33,7 @@ export default function ProofreadImport({
         directory: false,
         filters: [
           {
-            name: '视频文件',
+            name: t('proofread.import.videoFilterName'),
             extensions: ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'webm', '3gp', 'ts', 'm4v'],
           },
         ],
@@ -62,7 +64,7 @@ export default function ProofreadImport({
         directory: false,
         filters: [
           {
-            name: '字幕文件',
+            name: t('proofread.import.subtitleFilterName'),
             extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'],
           },
         ],
@@ -100,7 +102,7 @@ export default function ProofreadImport({
       const { videos, subtitles } = scanResult;
 
       if (videos.length === 0 && subtitles.length === 0) {
-        showToast('error', '未找到视频或字幕文件');
+        showToast('error', t('proofread.import.noFilesFound'));
         return;
       }
 
@@ -196,9 +198,9 @@ export default function ProofreadImport({
   return (
     <div className="space-y-8 max-w-4xl mx-auto py-10">
       <div className="text-center mb-10">
-        <h2 className="text-2xl font-bold mb-3 text-slate-100">选择导入方式</h2>
+        <h2 className="text-2xl font-bold mb-3 text-slate-100">{t('proofread.import.selectMethod')}</h2>
         <p className="text-slate-400 text-sm">
-          支持导入视频或字幕文件开始批量字幕校对与双语合并
+          {t('proofread.import.selectMethodDesc')}
         </p>
       </div>
 
@@ -210,9 +212,9 @@ export default function ProofreadImport({
           <div className="w-14 h-14 bg-blue-600/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
             <Video className="w-7 h-7 text-blue-500" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-200 mb-2">导入视频</h3>
+          <h3 className="text-lg font-semibold text-slate-200 mb-2">{t('proofread.import.importVideos')}</h3>
           <p className="text-xs text-slate-400 leading-relaxed">
-            导入视频文件，自动检测同目录下文件名关联的字幕文件
+            {t('proofread.import.importVideosDesc')}
           </p>
         </div>
 
@@ -223,9 +225,9 @@ export default function ProofreadImport({
           <div className="w-14 h-14 bg-emerald-600/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
             <FileText className="w-7 h-7 text-emerald-500" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-200 mb-2">导入字幕</h3>
+          <h3 className="text-lg font-semibold text-slate-200 mb-2">{t('proofread.import.importSubtitles')}</h3>
           <p className="text-xs text-slate-400 leading-relaxed">
-            直接导入已有的字幕文件（如 .srt / .vtt / .ass），快速进行校对与编辑
+            {t('proofread.import.importSubtitlesDesc')}
           </p>
         </div>
 
@@ -236,9 +238,9 @@ export default function ProofreadImport({
           <div className="w-14 h-14 bg-amber-600/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
             <FolderOpen className="w-7 h-7 text-amber-500" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-200 mb-2">导入文件夹</h3>
+          <h3 className="text-lg font-semibold text-slate-200 mb-2">{t('proofread.import.importFolder')}</h3>
           <p className="text-xs text-slate-400 leading-relaxed">
-            批量导入选定文件夹下的所有视频和字幕，智能分类和匹配
+            {t('proofread.import.importFolderDesc')}
           </p>
         </div>
       </div>

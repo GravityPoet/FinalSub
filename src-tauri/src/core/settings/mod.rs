@@ -106,10 +106,22 @@ pub fn settings_path(app_config_dir: &Path) -> PathBuf {
     app_config_dir.join("settings.json")
 }
 
+fn detect_os_language() -> String {
+    sys_locale::get_locale()
+        .unwrap_or_else(|| "en".to_string())
+        .to_lowercase()
+        .starts_with("zh")
+        .then(|| "zh".to_string())
+        .unwrap_or_else(|| "en".to_string())
+}
+
 pub fn load_settings(app_config_dir: &Path) -> Result<Settings> {
     let path = settings_path(app_config_dir);
     if !path.exists() {
-        return Ok(Settings::default());
+        let mut s = Settings::default();
+        s.language = detect_os_language();
+        save_settings(app_config_dir, &s)?;
+        return Ok(s);
     }
     let content = std::fs::read_to_string(&path)?;
     let settings: Settings = serde_json::from_str(&content)?;
@@ -303,7 +315,7 @@ mod tests {
     fn load_missing_returns_default() {
         let (_tmp, dir) = test_config_dir();
         let settings = load_settings(&dir).unwrap();
-        assert_eq!(settings.language, "zh");
+        assert!(settings.language == "zh" || settings.language == "en");
     }
 
     #[test]

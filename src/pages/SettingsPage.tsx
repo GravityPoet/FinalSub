@@ -12,16 +12,16 @@ import {
 } from "../lib/tauri";
 
 const languages = [
-  { value: "zh", label: "中文" },
-  { value: "en", label: "English" },
-];
+  { value: "zh", label: "language.zh" },
+  { value: "en", label: "language.en" },
+] as const;
 
 const outputFormats = [
-  { value: "srt", label: "SRT (SubRip)" },
-  { value: "vtt", label: "WebVTT" },
-  { value: "ass", label: "ASS/SSA" },
-  { value: "lrc", label: "LRC 歌词" },
-  { value: "txt", label: "纯文本" },
+  { value: "srt", label: "SRT" },
+  { value: "vtt", label: "VTT" },
+  { value: "ass", label: "ASS" },
+  { value: "lrc", label: "LRC" },
+  { value: "txt", label: "TXT" },
 ];
 
 const SettingRow = ({
@@ -65,7 +65,7 @@ const SettingGroup = ({
 );
 
 export default function SettingsPage() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -89,10 +89,10 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       await saveSettingsCmd(settings);
-      showMsg("ok", locale === "en" ? "Settings saved" : "设置已保存");
+      showMsg("ok", t("settings.saved"));
       window.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (err) {
-      showMsg("err", locale === "en" ? `Save failed: ${err}` : `保存失败：${err}`);
+      showMsg("err", `${t("settings.saveFailed")}${err}`);
     } finally {
       setSaving(false);
     }
@@ -103,10 +103,10 @@ export default function SettingsPage() {
       const defaults = await resetSettings();
       setSettings(defaults);
       setConfirmReset(false);
-      showMsg("ok", locale === "en" ? "Restored to defaults" : "已恢复默认设置");
+      showMsg("ok", t("settings.restored"));
       window.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (err) {
-      showMsg("err", locale === "en" ? `Reset failed: ${err}` : `重置失败：${err}`);
+      showMsg("err", `${t("settings.resetFailed")}${err}`);
     }
   };
 
@@ -118,10 +118,10 @@ export default function SettingsPage() {
       });
       if (path) {
         await exportConfigToPath(path);
-        showMsg("ok", locale === "en" ? "Config exported" : "配置已导出");
+        showMsg("ok", t("settings.exported"));
       }
     } catch (err) {
-      showMsg("err", locale === "en" ? `Export failed: ${err}` : `导出失败：${err}`);
+      showMsg("err", `${t("settings.exportFailed")}${err}`);
     }
   };
 
@@ -134,11 +134,11 @@ export default function SettingsPage() {
       if (typeof selected === "string") {
         const imported = await importConfigFromPath(selected);
         setSettings(imported);
-        showMsg("ok", locale === "en" ? "Config imported" : "配置已导入");
+        showMsg("ok", t("settings.imported"));
         window.dispatchEvent(new CustomEvent("settings-changed"));
       }
     } catch (err) {
-      showMsg("err", locale === "en" ? `Import failed: ${err}` : `导入失败：${err}`);
+      showMsg("err", `${t("settings.importFailed")}${err}`);
     }
   };
 
@@ -153,7 +153,7 @@ export default function SettingsPage() {
     return (
       <div className="max-w-4xl">
         <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("settings.title")}</h2>
-        <p className="text-gray-500">{locale === "en" ? "Loading..." : "加载中..."}</p>
+        <p className="text-gray-500">{t("home.loading")}</p>
       </div>
     );
   }
@@ -176,7 +176,7 @@ export default function SettingsPage() {
             className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             <Save size={14} />
-            {saving ? (locale === "en" ? "Saving..." : "保存中...") : (locale === "en" ? "Save" : "保存")}
+            {saving ? t("settings.saving") : t("common.save")}
           </button>
         </div>
       </div>
@@ -193,7 +193,7 @@ export default function SettingsPage() {
               >
                 {languages.map((l) => (
                   <option key={l.value} value={l.value}>
-                    {l.label}
+                    {t(l.label)}
                   </option>
                 ))}
               </select>
@@ -213,7 +213,7 @@ export default function SettingsPage() {
                   onClick={handleSelectModelsPath}
                   className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"
                 >
-                  {locale === "en" ? "Change" : "更改"}
+                  {t("settings.change")}
                 </button>
               </div>
             </SettingRow>
@@ -384,7 +384,7 @@ export default function SettingsPage() {
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder={locale === "en" ? "Leave empty for built-in" : "留空使用内置"}
+                  placeholder={t("settings.whisperCommandPlaceholder")}
                   value={settings.whisper_command}
                   onChange={(e) => update("whisper_command", e.target.value)}
                   className="w-80 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm dark:border-gray-600 dark:bg-gray-700"

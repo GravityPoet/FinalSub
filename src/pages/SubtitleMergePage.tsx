@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { useI18n } from "../lib/i18n";
 import {
   burnSubtitle,
   cancelBurnSubtitle,
@@ -39,14 +40,15 @@ function assColorToCss(assColor: string): string {
 }
 
 const presets = [
-  { name: "经典白字黑边", font_size: 24, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 30 },
-  { name: "电影字幕", font_size: 28, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 40 },
-  { name: "YouTube", font_size: 20, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 20 },
-  { name: "清新简约", font_size: 22, font_color: "&H00FFFFFF", outline_color: "&H00808080", margin_v: 25 },
-  { name: "醒目加粗", font_size: 32, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 35 },
+  { key: "merge.style.classic", font_size: 24, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 30 },
+  { key: "merge.style.movie", font_size: 28, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 40 },
+  { key: "YouTube", font_size: 20, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 20 },
+  { key: "merge.style.minimal", font_size: 22, font_color: "&H00FFFFFF", outline_color: "&H00808080", margin_v: 25 },
+  { key: "merge.style.bold", font_size: 32, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 35 },
 ];
 
 export default function SubtitleMergePage() {
+  const { t } = useI18n();
   const [videoPath, setVideoPath] = useState("");
   const [subtitlePath, setSubtitlePath] = useState("");
   const [outputPath, setOutputPath] = useState("");
@@ -69,11 +71,13 @@ export default function SubtitleMergePage() {
   const [loadingMetadata, setLoadingMetadata] = useState(false);
 
   const missingInputs = [
-    !videoPath ? "视频" : "",
-    !subtitlePath ? "字幕" : "",
-    !outputPath ? "输出路径" : "",
+    !videoPath ? t("merge.missingVideo") : "",
+    !subtitlePath ? t("merge.missingSubtitle") : "",
+    !outputPath ? t("merge.missingOutput") : "",
   ].filter(Boolean);
-  const prerequisiteHint = missingInputs.length > 0 ? `请先选择${missingInputs.join("、")}。` : "";
+  const prerequisiteHint = missingInputs.length > 0
+    ? t("merge.pleaseSelect", { items: missingInputs.join(t("merge.listSeparator")) })
+    : "";
 
   // Fetch video metadata when videoPath changes
   useEffect(() => {
@@ -119,7 +123,7 @@ export default function SubtitleMergePage() {
   const handleSelectVideo = async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "视频文件", extensions: ["mp4", "mkv", "mov", "webm"] }],
+      filters: [{ name: t("merge.videoFiles"), extensions: ["mp4", "mkv", "mov", "webm"] }],
     });
     if (typeof selected === "string") setVideoPath(selected);
   };
@@ -127,7 +131,7 @@ export default function SubtitleMergePage() {
   const handleSelectSubtitle = async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "字幕文件", extensions: ["srt", "ass", "vtt"] }],
+      filters: [{ name: t("merge.subtitleFiles"), extensions: ["srt", "ass", "vtt"] }],
     });
     if (typeof selected === "string") setSubtitlePath(selected);
   };
@@ -151,7 +155,7 @@ export default function SubtitleMergePage() {
 
   const handleBurn = async () => {
     if (!videoPath || !subtitlePath || !outputPath) {
-      setError(prerequisiteHint || "请选择视频、字幕和输出路径");
+      setError(prerequisiteHint || t("merge.selectPrereqError"));
       return;
     }
     setProcessing(true);
@@ -172,8 +176,8 @@ export default function SubtitleMergePage() {
       setResult(out);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("已取消")) {
-        setNotice("已取消烧录，未生成输出文件。");
+      if (message.includes("已取消") || message.includes("cancelled")) {
+        setNotice(t("merge.cancelled"));
       } else {
         setError(message);
       }
@@ -193,7 +197,7 @@ export default function SubtitleMergePage() {
 
   const handlePreview = async () => {
     if (!videoPath || !subtitlePath) {
-      setError("请选择视频和字幕文件");
+      setError(t("merge.previewPrereqError"));
       return;
     }
     setPreviewing(true);
@@ -209,7 +213,7 @@ export default function SubtitleMergePage() {
         outline_color: outlineColor,
         margin_v: marginV,
       });
-      setNotice("已生成并打开 10 秒预览视频。");
+      setNotice(t("merge.previewSuccess"));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -219,76 +223,73 @@ export default function SubtitleMergePage() {
 
   return (
     <div className="max-w-4xl">
-      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">视频合字幕</h2>
+      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("merge.title")}</h2>
 
       <div className="space-y-5">
-        {/* 文件选择 */}
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">选择文件</h3>
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("merge.selectFiles")}</h3>
           <div className="space-y-3">
             <div className="flex items-center gap-3">
               <button onClick={handleSelectVideo} disabled={processing} className="flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700 disabled:opacity-50">
-                <FolderOpen size={14} /> 选择视频
+                <FolderOpen size={14} /> {t("merge.selectVideo")}
               </button>
-              <span className="truncate text-xs text-gray-500">{videoPath || "未选择"}</span>
+              <span className="truncate text-xs text-gray-500">{videoPath || t("merge.notSelected")}</span>
             </div>
             <div className="flex items-center gap-3">
               <button onClick={handleSelectSubtitle} disabled={processing} className="flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700 disabled:opacity-50">
-                <FolderOpen size={14} /> 选择字幕
+                <FolderOpen size={14} /> {t("merge.selectSubtitle")}
               </button>
-              <span className="truncate text-xs text-gray-500">{subtitlePath || "未选择"}</span>
+              <span className="truncate text-xs text-gray-500">{subtitlePath || t("merge.notSelected")}</span>
             </div>
             <div className="flex items-center gap-3">
               <button onClick={handleSelectOutput} disabled={processing} className="flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700 disabled:opacity-50">
-                <FolderOpen size={14} /> 输出路径
+                <FolderOpen size={14} /> {t("merge.selectOutput")}
               </button>
-              <span className="truncate text-xs text-gray-500">{outputPath || "未选择"}</span>
+              <span className="truncate text-xs text-gray-500">{outputPath || t("merge.notSelected")}</span>
             </div>
           </div>
         </section>
 
-        {/* 视频元数据大纲 */}
         {loadingMetadata && (
           <div className="flex items-center gap-2 text-xs text-gray-500 p-2">
             <Loader2 className="animate-spin h-3.5 w-3.5" />
-            <span>正在分析视频特征元数据...</span>
+            <span>{t("merge.analyzingMetadata")}</span>
           </div>
         )}
 
         {metadata && (
           <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-            <h3 className="mb-3 font-semibold text-gray-900 dark:text-white text-sm">视频特征大纲</h3>
+            <h3 className="mb-3 font-semibold text-gray-900 dark:text-white text-sm">{t("merge.metadataOutline")}</h3>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-xs">
               <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
-                <span className="text-gray-500 block mb-1">分辨率</span>
+                <span className="text-gray-500 block mb-1">{t("merge.resolution")}</span>
                 <span className="font-semibold text-gray-800 dark:text-gray-200">{metadata.width} x {metadata.height}</span>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
-                <span className="text-gray-500 block mb-1">时长</span>
+                <span className="text-gray-500 block mb-1">{t("merge.duration")}</span>
                 <span className="font-semibold text-gray-800 dark:text-gray-200">{metadata.duration_string} ({metadata.duration_seconds.toFixed(1)}s)</span>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
-                <span className="text-gray-500 block mb-1">帧率</span>
+                <span className="text-gray-500 block mb-1">{t("merge.fps")}</span>
                 <span className="font-semibold text-gray-800 dark:text-gray-200">{metadata.fps} fps</span>
               </div>
               <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
-                <span className="text-gray-500 block mb-1">编码格式</span>
+                <span className="text-gray-500 block mb-1">{t("merge.codec")}</span>
                 <span className="font-semibold text-gray-800 dark:text-gray-200 font-mono">{metadata.codec}</span>
               </div>
             </div>
           </section>
         )}
 
-        {/* 样式设置 */}
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">字幕样式</h3>
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("merge.subtitleStyle")}</h3>
 
           <div className="mb-4">
-            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">预设</label>
+            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("merge.preset")}</label>
             <div className="flex flex-wrap gap-2">
               {presets.map((p, i) => (
                 <button
-                  key={p.name}
+                  key={p.key}
                   onClick={() => applyPreset(i)}
                   disabled={processing}
                   className={`rounded-md border px-3 py-1 text-sm ${
@@ -297,7 +298,7 @@ export default function SubtitleMergePage() {
                       : "border-gray-200 text-gray-600 dark:border-gray-600 dark:text-gray-400"
                   } disabled:opacity-50`}
                 >
-                  {p.name}
+                  {p.key.startsWith("merge.") ? t(p.key as any) : p.key}
                 </button>
               ))}
             </div>
@@ -305,25 +306,25 @@ export default function SubtitleMergePage() {
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div>
-              <label className="mb-1 block text-xs text-gray-500">字号</label>
+              <label className="mb-1 block text-xs text-gray-500">{t("merge.fontSize")}</label>
               <input type="number" min={10} max={72} value={fontSize} disabled={processing} onChange={(e) => setFontSize(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">字色 (ASS)</label>
+              <label className="mb-1 block text-xs text-gray-500">{t("merge.fontColor")}</label>
               <input type="text" value={fontColor} disabled={processing} onChange={(e) => setFontColor(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">描边色 (ASS)</label>
+              <label className="mb-1 block text-xs text-gray-500">{t("merge.outlineColor")}</label>
               <input type="text" value={outlineColor} disabled={processing} onChange={(e) => setOutlineColor(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-gray-500">垂直边距</label>
+              <label className="mb-1 block text-xs text-gray-500">{t("merge.marginV")}</label>
               <input type="number" min={0} max={100} value={marginV} disabled={processing} onChange={(e) => setMarginV(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
           </div>
 
           <div className="mt-4">
-            <label className="mb-2 block text-xs text-gray-500">样式实时预览</label>
+            <label className="mb-2 block text-xs text-gray-500">{t("merge.previewStyle")}</label>
             <div className="relative flex h-28 w-full items-center justify-center rounded-lg border border-gray-300 bg-gray-900 overflow-hidden dark:border-gray-600">
               <div className="absolute inset-0 bg-[linear-gradient(45deg,#1f2937_25%,transparent_25%),linear-gradient(-45deg,#1f2937_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#1f2937_75%),linear-gradient(-45deg,transparent_75%,#1f2937_75%)] bg-[size:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0] opacity-40"></div>
               <div
@@ -345,13 +346,12 @@ export default function SubtitleMergePage() {
                   fontFamily: "sans-serif"
                 }}
               >
-                这是样式实时预览 / Preview Subtitle Style
+                {t("merge.previewPlaceholder")}
               </div>
             </div>
           </div>
         </section>
 
-        {/* 执行 */}
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           {error && (
             <div className="mb-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
@@ -363,7 +363,7 @@ export default function SubtitleMergePage() {
           {result && (
             <div className="mb-4 flex items-start gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300">
               <CheckCircle className="mt-0.5 shrink-0" size={16} />
-              <span>生成完成：{result}</span>
+              <span>{t("merge.burnCompleted").replace("{result}", result)}</span>
             </div>
           )}
 
@@ -386,7 +386,7 @@ export default function SubtitleMergePage() {
               <div className="flex items-center justify-between text-xs text-gray-500">
                 <span className="flex items-center gap-1.5">
                   <Loader2 className="animate-spin h-3.5 w-3.5 text-blue-500" />
-                  正在烧录字幕...
+                  {t("merge.burning")}
                 </span>
                 <span className="font-semibold text-blue-600 dark:text-blue-400">{progress.toFixed(1)}%</span>
               </div>
@@ -407,7 +407,7 @@ export default function SubtitleMergePage() {
               title={prerequisiteHint || undefined}
             >
               <Film size={16} />
-              {processing ? "处理中..." : "开始烧录"}
+              {processing ? t("merge.burningBtn") : t("merge.startBurn")}
             </button>
 
             {processing && (
@@ -415,7 +415,7 @@ export default function SubtitleMergePage() {
                 onClick={handleCancelBurn}
                 className="inline-flex items-center gap-2 rounded-md bg-red-600 hover:bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors"
               >
-                取消烧录
+                {t("merge.cancelBurn")}
               </button>
             )}
 
@@ -428,10 +428,10 @@ export default function SubtitleMergePage() {
                 {previewing ? (
                   <>
                     <Loader2 className="animate-spin h-3.5 w-3.5 text-slate-500" />
-                    正在生成预览...
+                    {t("merge.generatingPreview")}
                   </>
                 ) : (
-                  <>生成 10 秒预览视频</>
+                  <>{t("merge.generatePreview")}</>
                 )}
               </button>
             )}

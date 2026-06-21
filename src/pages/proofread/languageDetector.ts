@@ -55,6 +55,57 @@ const LANGUAGE_MAP: Record<string, string> = {
   mn: '蒙古语',
 };
 
+const LANGUAGE_MAP_EN: Record<string, string> = {
+  zh: 'Chinese',
+  en: 'English',
+  ja: 'Japanese',
+  ko: 'Korean',
+  fr: 'French',
+  de: 'German',
+  es: 'Spanish',
+  ru: 'Russian',
+  pt: 'Portuguese',
+  it: 'Italian',
+  nl: 'Dutch',
+  pl: 'Polish',
+  tr: 'Turkish',
+  sv: 'Swedish',
+  cs: 'Czech',
+  da: 'Danish',
+  fi: 'Finnish',
+  el: 'Greek',
+  hu: 'Hungarian',
+  no: 'Norwegian',
+  ro: 'Romanian',
+  sk: 'Slovak',
+  hr: 'Croatian',
+  sr: 'Serbian',
+  sl: 'Slovenian',
+  bg: 'Bulgarian',
+  uk: 'Ukrainian',
+  et: 'Estonian',
+  lv: 'Latvian',
+  lt: 'Lithuanian',
+  hi: 'Hindi',
+  th: 'Thai',
+  vi: 'Vietnamese',
+  id: 'Indonesian',
+  ms: 'Malay',
+  ta: 'Tamil',
+  ur: 'Urdu',
+  mr: 'Marathi',
+  ar: 'Arabic',
+  he: 'Hebrew',
+  fa: 'Persian',
+  af: 'Afrikaans',
+  ca: 'Catalan',
+  gl: 'Galician',
+  tl: 'Tagalog',
+  sw: 'Swahili',
+  cy: 'Welsh',
+  mn: 'Mongolian',
+};
+
 const LANGUAGE_ALIASES: Record<string, string> = {
   'zh-cn': 'zh',
   'zh-tw': 'zh',
@@ -147,9 +198,11 @@ export function normalizeLanguageCode(code: string): string | null {
   return null;
 }
 
-export function getLanguageName(code: string): string {
+export function getLanguageName(code: string, locale?: string): string {
   const normalized = normalizeLanguageCode(code);
-  return normalized ? LANGUAGE_MAP[normalized] || code : code;
+  if (!normalized) return code;
+  const map = locale === 'en' ? LANGUAGE_MAP_EN : LANGUAGE_MAP;
+  return map[normalized] || code;
 }
 
 export function getSupportedLanguages(): Array<{ code: string; name: string }> {

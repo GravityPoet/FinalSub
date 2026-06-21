@@ -19,7 +19,8 @@ import {
   createPendingFileFromVideo,
   createPendingFileFromSubtitle,
 } from './proofreadUtils';
-import { detectLanguageFromFilename } from './languageDetector';
+import { detectLanguageFromFilename, getLanguageName } from './languageDetector';
+import { useI18n } from '../../lib/i18n';
 
 interface ProofreadFileListProps {
   files: PendingFile[];
@@ -48,6 +49,7 @@ export default function ProofreadFileList({
   onSaveTask,
   onReset,
 }: ProofreadFileListProps) {
+  const { locale, t } = useI18n();
   const [saving, setSaving] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [tempTaskName, setTempTaskName] = useState(taskName);
@@ -60,7 +62,7 @@ export default function ProofreadFileList({
         const selected = await open({
           multiple: false,
           directory: false,
-          filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
+          filters: [{ name: t('proofread.list.subtitleFilterName'), extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
         });
         if (!selected || Array.isArray(selected)) return;
         const filePath = selected;
@@ -103,7 +105,7 @@ export default function ProofreadFileList({
         const selected = await open({
           multiple: false,
           directory: false,
-          filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
+          filters: [{ name: t('proofread.list.subtitleFilterName'), extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
         });
         if (!selected || Array.isArray(selected)) return;
         const filePath = selected;
@@ -166,11 +168,11 @@ export default function ProofreadFileList({
     try {
       const success = await onSaveTask();
       if (success) {
-        showToast('success', '任务保存成功');
+        showToast('success', t('proofread.list.saveSuccess'));
       }
     } catch (error) {
       console.error(error);
-      showToast('error', '保存失败');
+      showToast('error', t('proofread.list.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -185,7 +187,7 @@ export default function ProofreadFileList({
           directory: false,
           filters: [
             {
-              name: '视频文件',
+              name: t('proofread.list.videoFilterName'),
               extensions: ['mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'webm', '3gp', 'ts', 'm4v'],
             },
           ],
@@ -205,7 +207,7 @@ export default function ProofreadFileList({
         const selected = await open({
           multiple: true,
           directory: false,
-          filters: [{ name: '字幕文件', extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
+          filters: [{ name: t('proofread.list.subtitleFilterName'), extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
         });
 
         if (!selected) return;
@@ -235,21 +237,21 @@ export default function ProofreadFileList({
         return (
           <div className="flex items-center gap-1.5 text-emerald-500 whitespace-nowrap">
             <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-            <span className="text-xs">已完成</span>
+            <span className="text-xs">{t('proofread.list.statusCompleted')}</span>
           </div>
         );
       case 'proofreading':
         return (
           <div className="flex items-center gap-1.5 text-blue-500 whitespace-nowrap">
             <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
-            <span className="text-xs">校对中</span>
+            <span className="text-xs">{t('proofread.list.statusProofreading')}</span>
           </div>
         );
       default:
         return (
           <div className="flex items-center gap-1.5 text-slate-400 whitespace-nowrap">
             <Circle className="w-4 h-4 flex-shrink-0" />
-            <span className="text-xs">待校对</span>
+            <span className="text-xs">{t('proofread.list.statusPending')}</span>
           </div>
         );
     }
@@ -276,7 +278,7 @@ export default function ProofreadFileList({
                 value={tempTaskName}
                 onChange={(e) => setTempTaskName(e.target.value)}
                 className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-                placeholder="请输入任务名称"
+                placeholder={t('proofread.list.inputPlaceholder')}
               />
               <button
                 onClick={handleSaveTaskName}
@@ -294,18 +296,20 @@ export default function ProofreadFileList({
               }}
             >
               <h3 className="font-semibold text-slate-100 max-w-[240px] truncate" title={taskName}>
-                {taskName || '未命名任务'}
+                {taskName || t('proofread.list.unnamedTask')}
               </h3>
               <Edit2 className="w-3.5 h-3.5 text-slate-400" />
             </div>
           )}
 
           <span className="text-xs bg-slate-700 text-slate-300 px-2.5 py-1 rounded-full font-medium">
-            已完成: {completedCount}/{files.length}
+            {t('proofread.list.completedCount')
+              .replace('{completed}', String(completedCount))
+              .replace('{total}', String(files.length))}
           </span>
           {savedTaskId && (
             <span className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800/50 px-2.5 py-1 rounded-full font-medium">
-              已保存
+              {t('proofread.list.saved')}
             </span>
           )}
         </div>
@@ -316,14 +320,14 @@ export default function ProofreadFileList({
             className="flex items-center text-xs bg-slate-700/80 hover:bg-slate-750 text-slate-200 border border-slate-650 px-4 py-2 rounded-lg transition-colors font-medium"
           >
             <Plus className="w-4 h-4 mr-1.5 text-slate-400" />
-            {importType === 'video' ? '追加视频' : '追加字幕'}
+            {importType === 'video' ? t('proofread.list.appendVideo') : t('proofread.list.appendSubtitle')}
           </button>
           <button
             onClick={onReset}
             className="flex items-center text-xs bg-slate-700/80 hover:bg-slate-750 text-slate-200 border border-slate-650 px-4 py-2 rounded-lg transition-colors font-medium"
           >
             <RotateCcw className="w-4 h-4 mr-1.5 text-slate-400" />
-            重新导入
+            {t('proofread.list.reset')}
           </button>
           <button
             onClick={handleSave}
@@ -335,7 +339,7 @@ export default function ProofreadFileList({
             ) : (
               <Save className="w-4 h-4 mr-1.5" />
             )}
-            {savedTaskId ? '更新任务' : '保存任务'}
+            {savedTaskId ? t('proofread.list.updateTask') : t('proofread.list.saveTask')}
           </button>
         </div>
       </div>
@@ -345,11 +349,11 @@ export default function ProofreadFileList({
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-800/60 border-b border-slate-700/50 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              <th className="py-4.5 px-6 w-32">状态</th>
-              <th className="py-4.5 px-6">文件名</th>
-              <th className="py-4.5 px-6">源字幕</th>
-              <th className="py-4.5 px-6">翻译字幕</th>
-              <th className="py-4.5 px-6 w-36 text-right">操作</th>
+              <th className="py-4.5 px-6 w-32">{t('proofread.list.thStatus')}</th>
+              <th className="py-4.5 px-6">{t('proofread.list.thFilename')}</th>
+              <th className="py-4.5 px-6">{t('proofread.list.thSourceSub')}</th>
+              <th className="py-4.5 px-6">{t('proofread.list.thTargetSub')}</th>
+              <th className="py-4.5 px-6 w-36 text-right">{t('proofread.list.thActions')}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/40">
@@ -373,7 +377,7 @@ export default function ProofreadFileList({
                     </div>
                     {file.videoPath && (
                       <span className="text-[10px] bg-blue-900/40 text-blue-400 border border-blue-800/30 px-1.5 py-0.5 rounded font-medium inline-block mt-1">
-                        关联视频
+                        {t('proofread.list.associatedVideo')}
                       </span>
                     )}
                   </td>
@@ -386,19 +390,19 @@ export default function ProofreadFileList({
                           </span>
                           {file.sourceLanguage && (
                             <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">
-                              {file.sourceLanguage}
+                              {getLanguageName(file.sourceLanguage, locale)}
                             </span>
                           )}
                         </div>
                       ) : effectiveSourceOptions.length > 0 ? (
                         <select
-                          value={file.selectedSource || ''}
-                          onChange={(e) => handleSelectFromDropdown(index, 'source', e.target.value)}
-                          className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 w-[180px]"
+                           value={file.selectedSource || ''}
+                           onChange={(e) => handleSelectFromDropdown(index, 'source', e.target.value)}
+                           className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 w-[180px]"
                         >
                           {effectiveSourceOptions.map((s, idx) => (
                             <option key={`source-${idx}-${s.filePath}`} value={s.filePath}>
-                              {formatFileName(s.filePath)} ({s.language || '未知'} - {s.confidence}%)
+                              {formatFileName(s.filePath)} ({s.language ? getLanguageName(s.language, locale) : t('proofread.list.unknownLang')} - {s.confidence}%)
                             </option>
                           ))}
                         </select>
@@ -407,14 +411,14 @@ export default function ProofreadFileList({
                           {formatFileName(file.selectedSource)}
                         </span>
                       ) : (
-                        <span className="text-slate-500 text-xs">无字幕</span>
+                        <span className="text-slate-500 text-xs">{t('proofread.list.noSubtitle')}</span>
                       )}
 
                       {!file.isSubtitleOnlyMode && (
                         <button
                           onClick={() => handleSelectSourceSubtitle(index)}
                           className="p-1.5 hover:bg-slate-700/50 rounded-lg transition-colors text-slate-400 hover:text-slate-200"
-                          title="选择本地字幕"
+                          title={t('proofread.list.selectLocalSub')}
                         >
                           <Upload className="w-3.5 h-3.5" />
                         </button>
@@ -428,17 +432,17 @@ export default function ProofreadFileList({
                         onChange={(e) => handleSelectFromDropdown(index, 'target', e.target.value)}
                         className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 w-[180px]"
                       >
-                        <option value="none">无翻译字幕</option>
+                        <option value="none">{t('proofread.list.noTargetSubOption')}</option>
                         {targetOptions.map((s, idx) => (
                           <option key={`target-${idx}-${s.filePath}`} value={s.filePath}>
-                            {formatFileName(s.filePath)} ({s.language || '未知'} - {s.confidence}%)
+                            {formatFileName(s.filePath)} ({s.language ? getLanguageName(s.language, locale) : t('proofread.list.unknownLang')} - {s.confidence}%)
                           </option>
                         ))}
                       </select>
                       <button
                         onClick={() => handleSelectTargetSubtitle(index)}
                         className="p-1.5 hover:bg-slate-700/50 rounded-lg transition-colors text-slate-400 hover:text-slate-200"
-                        title="选择本地字幕"
+                        title={t('proofread.list.selectLocalSub')}
                       >
                         <Upload className="w-3.5 h-3.5" />
                       </button>
@@ -452,12 +456,12 @@ export default function ProofreadFileList({
                         className="flex items-center text-xs bg-slate-700 hover:bg-slate-650 text-slate-200 px-3.5 py-1.5 rounded-lg transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Play className="w-3.5 h-3.5 mr-1 text-slate-400" />
-                        {file.status === 'completed' ? '查看' : '校对'}
+                        {file.status === 'completed' ? t('proofread.list.view') : t('proofread.list.proofread')}
                       </button>
                       <button
                         onClick={() => onRemoveFile(index)}
                         className="p-1.5 hover:bg-red-950/30 rounded-lg transition-colors text-slate-400 hover:text-red-400"
-                        title="移除文件"
+                        title={t('proofread.list.removeFile')}
                       >
                         <Trash2 className="w-4 h-4 text-red-500" />
                       </button>
@@ -469,7 +473,7 @@ export default function ProofreadFileList({
           </tbody>
         </table>
         {files.length === 0 && (
-          <div className="text-center py-16 text-slate-500 text-sm">暂无校对文件，请重新导入</div>
+          <div className="text-center py-16 text-slate-500 text-sm">{t('proofread.list.noFiles')}</div>
         )}
       </div>
     </div>

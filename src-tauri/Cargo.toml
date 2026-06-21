@@ -37,6 +37,7 @@ percent-encoding = "2.3"
 # 崩溃/错误遥测（分发版用，默认关闭，需用户在设置里 opt-in）。
 # rustls 传输，与项目其余 reqwest 配置一致，避免拖入 native-tls/openssl。
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
+sys-locale = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

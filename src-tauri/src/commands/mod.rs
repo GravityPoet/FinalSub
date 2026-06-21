@@ -42,7 +42,7 @@ pub fn get_app_info() -> AppInfo {
 fn validate_task_id(task_id: &str) -> Result<(), String> {
     uuid::Uuid::parse_str(task_id)
         .map(|_| ())
-        .map_err(|_| "任务 ID 格式异常".to_string())
+        .map_err(|_| "Invalid task ID format".to_string())
 }
 
 fn task_can_be_deleted(status: TaskStatus) -> bool {
@@ -54,12 +54,12 @@ fn task_can_be_deleted(status: TaskStatus) -> bool {
 
 fn task_status_label(status: TaskStatus) -> &'static str {
     match status {
-        TaskStatus::Pending => "等待中",
-        TaskStatus::Running => "运行中",
-        TaskStatus::Paused => "已暂停",
-        TaskStatus::Cancelled => "已取消",
-        TaskStatus::Done => "已完成",
-        TaskStatus::Error => "错误",
+        TaskStatus::Pending => "pending",
+        TaskStatus::Running => "running",
+        TaskStatus::Paused => "paused",
+        TaskStatus::Cancelled => "cancelled",
+        TaskStatus::Done => "done",
+        TaskStatus::Error => "error",
     }
 }
 
@@ -86,7 +86,7 @@ async fn delete_tasks_by_ids(
     task_ids: Vec<String>,
 ) -> Result<Vec<String>, String> {
     if task_ids.is_empty() {
-        return Err("请选择要删除的任务".into());
+        return Err("Please select tasks to delete".into());
     }
 
     let mut seen = HashSet::new();
@@ -105,7 +105,7 @@ async fn delete_tasks_by_ids(
             .ok_or_else(|| format!("task not found: {task_id}"))?;
         if !task_can_be_deleted(task.status) {
             return Err(format!(
-                "任务「{}」仍在{}，请先暂停或取消后再删除",
+                "Task \"{}\" is still {}, please pause or cancel it before deleting",
                 task.media_name,
                 task_status_label(task.status)
             ));
@@ -176,7 +176,7 @@ pub async fn download_model(
     {
         let controls = state.model_controls.read().await;
         if controls.contains_key(&normalized) {
-            return Err("该模型已在下载队列中".to_string());
+            return Err("This model is already in the download queue".to_string());
         }
     }
 
@@ -252,11 +252,11 @@ pub async fn create_task(
         "generate-and-translate" => TaskType::GenerateAndTranslate,
         "generate-only" => TaskType::GenerateOnly,
         "translate-only" => TaskType::TranslateOnly,
-        _ => return Err(format!("未知任务类型：{}", req.task_type)),
+        _ => return Err(format!("Unknown task type: {}", req.task_type)),
     };
 
     let media_path = if task_type == TaskType::TranslateOnly {
-        validate_existing_file_path(&req.media_path, "字幕文件")?
+        validate_existing_file_path(&req.media_path, "Subtitle file")?
     } else {
         validate_media_path(&req.media_path)?
     };
@@ -278,7 +278,7 @@ pub async fn create_task(
             .unwrap_or("")
             .to_lowercase();
         if ext != "srt" {
-            return Err("仅翻译模式只支持 .srt 字幕文件输入".into());
+            return Err("Translate-only mode only supports .srt subtitle file input".into());
         }
     }
 
@@ -301,7 +301,7 @@ pub async fn create_task(
     let media_name = media_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("未命名媒体")
+        .unwrap_or("Unnamed media")
         .to_string();
 
     let task = task_queue::create_task(CreateTaskParams {
@@ -355,7 +355,7 @@ pub async fn create_preview_task(
     let media_name = media_path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("未命名媒体")
+        .unwrap_or("Unnamed media")
         .to_string();
 
     let task = task_queue::create_task(CreateTaskParams {
@@ -419,7 +419,7 @@ pub async fn cancel_task(
     }
     task.status = task_queue::TaskStatus::Cancelled;
     task.progress = task.progress.clamp(0.0, 1.0);
-    task.status_message = "已取消".into();
+    task.status_message = "Cancelled".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
     let task_clone = task.clone();
     drop(tasks);
@@ -446,10 +446,10 @@ pub async fn pause_task(
         .get_mut(&task_id)
         .ok_or_else(|| format!("task not found: {task_id}"))?;
     if task.status != TaskStatus::Running && task.status != TaskStatus::Pending {
-        return Err("只有正在运行或等待中的任务可以暂停".to_string());
+        return Err("Only running or pending tasks can be paused".to_string());
     }
     task.status = TaskStatus::Paused;
-    task.status_message = "已暂停".into();
+    task.status_message = "Paused".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
     let task_clone = task.clone();
     drop(tasks);
@@ -470,7 +470,7 @@ pub async fn pause_task(
             &app_clone,
             &app_config_dir,
             &task_id_clone,
-            "用户暂停了任务",
+            "User paused the task",
         )
         .await;
     });
@@ -490,10 +490,10 @@ pub async fn resume_task(
         .get_mut(&task_id)
         .ok_or_else(|| format!("task not found: {task_id}"))?;
     if task.status != TaskStatus::Paused {
-        return Err("只有已暂停的任务可以恢复".to_string());
+        return Err("Only paused tasks can be resumed".to_string());
     }
     task.status = TaskStatus::Pending;
-    task.status_message = "准备恢复中...".into();
+    task.status_message = "Preparing to resume...".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
     let task_clone = task.clone();
     drop(tasks);
@@ -515,7 +515,7 @@ pub async fn resume_task(
             &app_clone,
             &app_config_dir,
             &task_id_clone,
-            "用户恢复了任务",
+            "User resumed the task",
         )
         .await;
     });
@@ -548,12 +548,12 @@ pub async fn retry_task(
         .get_mut(&task_id)
         .ok_or_else(|| format!("task not found: {task_id}"))?;
     if !matches!(task.status, TaskStatus::Error | TaskStatus::Cancelled) {
-        return Err("只有失败或已取消的任务可以重试".to_string());
+        return Err("Only failed or cancelled tasks can be retried".to_string());
     }
     task.status = TaskStatus::Pending;
     task.progress = 0.0;
     task.error = None;
-    task.status_message = "准备重新启动...".into();
+    task.status_message = "Preparing to restart...".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
     let task_clone = task.clone();
     drop(tasks);
@@ -587,7 +587,7 @@ pub async fn retry_task(
             &app_clone,
             &app_config_dir,
             &task_id_clone,
-            "用户重试了任务",
+            "User retried the task",
         )
         .await;
     });
@@ -622,7 +622,7 @@ pub async fn get_task_logs(
     }
     tokio::fs::read_to_string(&log_path)
         .await
-        .map_err(|e| format!("读取日志文件失败：{}", e))
+        .map_err(|e| format!("Failed to read log file: {}", e))
 }
 
 #[tauri::command]
@@ -643,7 +643,7 @@ pub async fn extract_audio(
     output_path: String,
 ) -> Result<String, String> {
     let video_path = validate_media_path(&video_path)?;
-    let output_path = validate_new_output_path(&output_path, "音频输出路径")?;
+    let output_path = validate_new_output_path(&output_path, "Audio output path")?;
     let args = audio::extract_audio_args(
         &video_path.to_string_lossy(),
         &output_path.to_string_lossy(),
@@ -654,11 +654,11 @@ pub async fn extract_audio(
         .args(&args)
         .output()
         .await
-        .map_err(|e| format!("运行 FFmpeg 失败：{e}"))?;
+        .map_err(|e| format!("Failed to run FFmpeg: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg 音频提取失败：{stderr}"));
+        return Err(format!("FFmpeg audio extraction failed: {stderr}"));
     }
 
     Ok(output_path.to_string_lossy().to_string())
@@ -682,8 +682,8 @@ pub async fn burn_subtitle(
     req: BurnSubtitleRequest,
 ) -> Result<String, String> {
     let video_path = validate_media_path(&req.video_path)?;
-    let subtitle_path = validate_existing_file_path(&req.subtitle_path, "字幕文件")?;
-    let output_path = validate_new_output_path(&req.output_path, "视频输出路径")?;
+    let subtitle_path = validate_existing_file_path(&req.subtitle_path, "Subtitle file")?;
+    let output_path = validate_new_output_path(&req.output_path, "Video output path")?;
     let burn_id = output_path.to_string_lossy().to_string();
     validate_burn_style(&req)?;
     let style = audio::BurnInStyleOptions {
@@ -705,12 +705,12 @@ pub async fn burn_subtitle(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 FFmpeg 失败：{e}"))?;
+        .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
 
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "无法获取 FFmpeg 错误流".to_string())?;
+        .ok_or_else(|| "Unable to get FFmpeg error stream".to_string())?;
     let reader = tokio::io::BufReader::new(stderr);
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -718,7 +718,7 @@ pub async fn burn_subtitle(
         let mut controls = state.burn_controls.write().await;
         if controls.contains_key(&burn_id) {
             let _ = child.kill().await;
-            return Err("该输出路径已有正在进行的烧录任务".to_string());
+            return Err("A burn task is already running for this output path".to_string());
         }
         controls.insert(burn_id.clone(), cancel_tx);
     }
@@ -733,7 +733,7 @@ pub async fn burn_subtitle(
     let result = tokio::select! {
         _ = &mut cancel_rx => {
             let _ = child.kill().await;
-            Err("字幕烧录已取消".to_string())
+            Err("Subtitle burning cancelled".to_string())
         }
         res = async {
             use tokio::io::AsyncBufReadExt;
@@ -765,7 +765,7 @@ pub async fn burn_subtitle(
                 }
             }
 
-            let status = child.wait().await.map_err(|e| format!("等待 FFmpeg 结束失败：{e}"))?;
+            let status = child.wait().await.map_err(|e| format!("Failed to wait for FFmpeg: {e}"))?;
             if status.success() {
                 #[derive(serde::Serialize, Clone)]
                 struct BurnProgress {
@@ -783,7 +783,7 @@ pub async fn burn_subtitle(
                 );
                 Ok(output_path_clone.to_string_lossy().to_string())
             } else {
-                Err("FFmpeg 执行失败，请检查文件格式或样式参数".to_string())
+                Err("FFmpeg execution failed, please check file format or style parameters".to_string())
             }
         } => res
     };
@@ -831,7 +831,7 @@ pub async fn get_video_metadata(
         .arg(&video_path)
         .output()
         .await
-        .map_err(|e| format!("运行 FFmpeg 获取元数据失败：{e}"))?;
+        .map_err(|e| format!("Failed to run FFmpeg for metadata: {e}"))?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -903,7 +903,7 @@ pub async fn generate_subtitle_preview(
     use tauri_plugin_opener::OpenerExt;
 
     let video_path = validate_media_path(&req.video_path)?;
-    let subtitle_path = validate_existing_file_path(&req.subtitle_path, "字幕文件")?;
+    let subtitle_path = validate_existing_file_path(&req.subtitle_path, "Subtitle file")?;
 
     // Generate preview output path in system temp directory
     let temp_dir = std::env::temp_dir();
@@ -937,18 +937,18 @@ pub async fn generate_subtitle_preview(
         .args(&args)
         .output()
         .await
-        .map_err(|e| format!("生成预览视频失败：{e}"))?;
+        .map_err(|e| format!("Failed to generate preview video: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("生成预览视频 FFmpeg 报错：{stderr}"));
+        return Err(format!("Failed to generate preview video, FFmpeg error: {stderr}"));
     }
 
     // Open preview video
     let preview_path_str = preview_path.to_string_lossy().to_string();
     app.opener()
         .open_path(preview_path_str.clone(), None::<String>)
-        .map_err(|e| format!("打开预览视频失败：{e}"))?;
+        .map_err(|e| format!("Failed to open preview video: {e}"))?;
 
     Ok(preview_path_str)
 }
@@ -969,8 +969,8 @@ pub async fn transcribe_audio(
 ) -> Result<String, String> {
     let whisper_bin = resolve_sidecar(&app, "whisper-cli")?;
     let models_dir = whisper_models_dir(&state.app_config_dir)?;
-    let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
-    let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
+    let audio_path = validate_existing_file_path(&req.audio_path, "Audio file")?;
+    let output_path = validate_new_output_path(&req.output_path, "Subtitle output path")?;
 
     let engine = WhisperCppEngine::new(whisper_bin, models_dir, Default::default());
     let model_ref = AsrModelRef {
@@ -1000,7 +1000,7 @@ pub async fn transcribe_audio(
     let srt = track.to_srt();
     tokio::fs::write(&output_path, &srt)
         .await
-        .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
+        .map_err(|e: std::io::Error| format!("Failed to write SRT: {e}"))?;
 
     Ok(output_path.to_string_lossy().to_string())
 }
@@ -1018,8 +1018,8 @@ pub async fn transcribe_parakeet(
     _state: State<'_, AppState>,
     req: TranscribeParakeetRequest,
 ) -> Result<String, String> {
-    let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
-    let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
+    let audio_path = validate_existing_file_path(&req.audio_path, "Audio file")?;
+    let output_path = validate_new_output_path(&req.output_path, "Subtitle output path")?;
     let uv_bin = crate::core::asr::parakeet::default_uv_bin();
 
     #[cfg(debug_assertions)]
@@ -1046,7 +1046,7 @@ pub async fn transcribe_parakeet(
             "resources/parakeet/parakeet_transcribe.py",
             tauri::path::BaseDirectory::Resource,
         )
-        .map_err(|e| format!("解析 Parakeet 脚本路径失败：{e}"))?;
+        .map_err(|e| format!("Failed to resolve Parakeet script path: {e}"))?;
 
     let cache_root = default_local_llm_dir();
     let ffmpeg_path = Some(resolve_sidecar(&app, "ffmpeg")?);
@@ -1079,7 +1079,7 @@ pub async fn transcribe_parakeet(
     let srt = track.to_srt();
     tokio::fs::write(&output_path, &srt)
         .await
-        .map_err(|e: std::io::Error| format!("写出 SRT 失败：{e}"))?;
+        .map_err(|e: std::io::Error| format!("Failed to write SRT: {e}"))?;
 
     Ok(output_path.to_string_lossy().to_string())
 }
@@ -1213,11 +1213,11 @@ pub async fn get_ffmpeg_version(app: AppHandle) -> Result<String, String> {
         .args(["-version"])
         .output()
         .await
-        .map_err(|e| format!("运行 FFmpeg sidecar 失败：{e}"))?;
+        .map_err(|e| format!("Failed to run FFmpeg sidecar: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg sidecar 返回错误：{stderr}"));
+        return Err(format!("FFmpeg sidecar returned error: {stderr}"));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1228,13 +1228,13 @@ pub async fn get_ffmpeg_version(app: AppHandle) -> Result<String, String> {
 fn validate_media_path(raw: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw.trim());
     if path.as_os_str().is_empty() {
-        return Err("请选择音视频文件".into());
+        return Err("Please select a media file".into());
     }
     if !path.is_absolute() {
-        return Err("音视频路径必须是绝对路径".into());
+        return Err("Media file path must be an absolute path".into());
     }
     if !path.is_file() {
-        return Err(format!("音视频文件不存在：{}", path.display()));
+        return Err(format!("Media file does not exist: {}", path.display()));
     }
     Ok(path)
 }
@@ -1242,7 +1242,7 @@ fn validate_media_path(raw: &str) -> Result<PathBuf, String> {
 fn validate_non_empty(name: &str, value: String) -> Result<String, String> {
     let value = value.trim().to_string();
     if value.is_empty() {
-        Err(format!("{name} 不能为空"))
+        Err(format!("{name} cannot be empty"))
     } else {
         Ok(value)
     }
@@ -1251,12 +1251,12 @@ fn validate_non_empty(name: &str, value: String) -> Result<String, String> {
 fn start_preview_worker(app: AppHandle, tasks: TaskMap, task_id: String) {
     tauri::async_runtime::spawn(async move {
         let steps = [
-            (0.12, "已加入任务队列"),
-            (0.28, "已检测 FFmpeg sidecar"),
-            (0.45, "已准备音频提取计划"),
-            (0.64, "已预留识别引擎"),
-            (0.82, "已准备字幕写入器"),
-            (1.0, "预览任务完成"),
+            (0.12, "Added to task queue"),
+            (0.28, "FFmpeg sidecar checked"),
+            (0.45, "Audio extraction plan prepared"),
+            (0.64, "Recognition engine reserved"),
+            (0.82, "Subtitle writer prepared"),
+            (1.0, "Preview task completed"),
         ];
 
         for (progress, message) in steps {
@@ -1364,8 +1364,8 @@ pub fn export_config_to_path(
     let path = validate_json_output_path(&output_path)?;
     let json = settings::export_config(&state.app_config_dir).map_err(|e| e.to_string())?;
     let tmp_path = path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, json).map_err(|e| format!("写出配置失败：{e}"))?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| format!("保存配置失败：{e}"))?;
+    std::fs::write(&tmp_path, json).map_err(|e| format!("Failed to write config: {e}"))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Failed to save config: {e}"))?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -1375,7 +1375,7 @@ pub fn import_config_from_path(
     input_path: String,
 ) -> Result<Settings, String> {
     let path = validate_json_input_path(&input_path)?;
-    let json = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
+    let json = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read config: {e}"))?;
     let new_settings = settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
@@ -1393,7 +1393,7 @@ pub(crate) fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, Strin
     let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
     let path = expand_home_path(&settings.models_path);
     if !path.is_absolute() {
-        return Err("模型路径必须是绝对路径".into());
+        return Err("Model path must be an absolute path".into());
     }
     Ok(path)
 }
@@ -1418,13 +1418,13 @@ fn expand_home_path(raw: &str) -> PathBuf {
 fn validate_existing_file_path(raw: &str, label: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw.trim());
     if path.as_os_str().is_empty() {
-        return Err(format!("{label}不能为空"));
+        return Err(format!("{label} cannot be empty"));
     }
     if !path.is_absolute() {
-        return Err(format!("{label}必须是绝对路径"));
+        return Err(format!("{label} must be an absolute path"));
     }
     if !path.is_file() {
-        return Err(format!("{label}不存在：{}", path.display()));
+        return Err(format!("{label} does not exist: {}", path.display()));
     }
     Ok(path)
 }
@@ -1432,18 +1432,18 @@ fn validate_existing_file_path(raw: &str, label: &str) -> Result<PathBuf, String
 fn validate_new_output_path(raw: &str, label: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw.trim());
     if path.as_os_str().is_empty() {
-        return Err(format!("{label}不能为空"));
+        return Err(format!("{label} cannot be empty"));
     }
     if !path.is_absolute() {
-        return Err(format!("{label}必须是绝对路径"));
+        return Err(format!("{label} must be an absolute path"));
     }
-    let parent = path.parent().ok_or_else(|| format!("{label}缺少父目录"))?;
+    let parent = path.parent().ok_or_else(|| format!("{label} lacks a parent directory"))?;
     if !parent.is_dir() {
-        return Err(format!("{label}父目录不存在：{}", parent.display()));
+        return Err(format!("{label} parent directory does not exist: {}", parent.display()));
     }
     if path.exists() {
         return Err(format!(
-            "{label}已存在，为避免覆盖请重新选择：{}",
+            "{label} already exists. To avoid overwriting, please choose another path: {}",
             path.display()
         ));
     }
@@ -1451,13 +1451,13 @@ fn validate_new_output_path(raw: &str, label: &str) -> Result<PathBuf, String> {
 }
 
 fn validate_json_output_path(raw: &str) -> Result<PathBuf, String> {
-    let path = validate_new_output_path(raw, "配置导出路径")?;
+    let path = validate_new_output_path(raw, "Config export path")?;
     validate_json_extension(&path)?;
     Ok(path)
 }
 
 fn validate_json_input_path(raw: &str) -> Result<PathBuf, String> {
-    let path = validate_existing_file_path(raw, "配置文件")?;
+    let path = validate_existing_file_path(raw, "Config file")?;
     validate_json_extension(&path)?;
     Ok(path)
 }
@@ -1469,7 +1469,7 @@ fn validate_json_extension(path: &Path) -> Result<(), String> {
         .unwrap_or("")
         .to_ascii_lowercase();
     if ext != "json" {
-        return Err("配置文件必须是 .json 文件".into());
+        return Err("Config file must be a .json file".into());
     }
     Ok(())
 }
@@ -1484,26 +1484,26 @@ fn validate_subtitle_output_format(raw: Option<String>) -> Result<Option<String>
     }
     match format.as_str() {
         "srt" | "vtt" | "txt" | "lrc" | "ass" => Ok(Some(format)),
-        _ => Err("输出格式仅支持 srt、vtt、txt、lrc、ass".into()),
+        _ => Err("Output format only supports srt, vtt, txt, lrc, ass".into()),
     }
 }
 
 fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
     if let Some(font_size) = req.font_size {
         if !(10..=120).contains(&font_size) {
-            return Err("字幕字号必须在 10-120 之间".into());
+            return Err("Subtitle font size must be between 10 and 120".into());
         }
     }
     if let Some(margin_v) = req.margin_v {
         if margin_v > 1_000 {
-            return Err("字幕垂直边距不能超过 1000".into());
+            return Err("Subtitle vertical margin cannot exceed 1000".into());
         }
     }
     if let Some(ref color) = req.font_color {
-        validate_ass_color("字体颜色", color)?;
+        validate_ass_color("Font color", color)?;
     }
     if let Some(ref color) = req.outline_color {
-        validate_ass_color("描边颜色", color)?;
+        validate_ass_color("Outline color", color)?;
     }
     Ok(())
 }
@@ -1515,7 +1515,7 @@ fn validate_ass_color(label: &str, value: &str) -> Result<(), String> {
     if valid {
         Ok(())
     } else {
-        Err(format!("{label}必须使用 ASS 颜色格式，例如 &H00FFFFFF"))
+        Err(format!("{label} must use ASS color format, e.g. &H00FFFFFF"))
     }
 }
 
@@ -1569,20 +1569,20 @@ pub(crate) fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<Pat
             }
         }
 
-        Err(format!("开发环境下找不到 sidecar 二进制：{}", name))
+        Err(format!("Could not find sidecar binary in development environment: {}", name))
     }
 
     #[cfg(not(debug_assertions))]
     {
         let exe_path =
-            std::env::current_exe().map_err(|e| format!("获取当前可执行文件路径失败：{e}"))?;
+            std::env::current_exe().map_err(|e| format!("Failed to get current executable path: {e}"))?;
         let exe_dir = exe_path
             .parent()
-            .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?;
+            .ok_or_else(|| "Unable to get directory containing executable".to_string())?;
 
         let base_name = PathBuf::from(name)
             .file_name()
-            .ok_or_else(|| format!("无效的 sidecar 名字：{name}"))?
+            .ok_or_else(|| format!("Invalid sidecar name: {name}"))?
             .to_os_string();
 
         let target_path = exe_dir.join(&base_name);
@@ -1590,7 +1590,7 @@ pub(crate) fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<Pat
             Ok(target_path)
         } else {
             Err(format!(
-                "生产环境下找不到 sidecar 二进制：{}",
+                "Could not find sidecar binary in production environment: {}",
                 target_path.display()
             ))
         }
@@ -1668,10 +1668,10 @@ pub fn authorize_subtitle_directory(
         canonical
             .parent()
             .map(|p| p.to_path_buf())
-            .ok_or_else(|| "无法解析所在目录".to_string())?
+            .ok_or_else(|| "Unable to resolve directory".to_string())?
     };
     if is_sensitive_dir(&dir) {
-        return Err("拒绝授权敏感目录".to_string());
+        return Err("Permission denied for sensitive directory".to_string());
     }
     app.fs_scope()
         .allow_directory(&dir, false)
@@ -1692,7 +1692,7 @@ pub async fn check_for_update(app: tauri::AppHandle) -> std::result::Result<Opti
     let client = reqwest::Client::builder()
         .user_agent("FinalSub-Updater")
         .build()
-        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
         
     let resp = client
         .get("https://api.github.com/repos/GravityPoet/FinalSub/releases/latest")
@@ -1702,7 +1702,7 @@ pub async fn check_for_update(app: tauri::AppHandle) -> std::result::Result<Opti
     let resp = match resp {
         Ok(r) => r,
         Err(e) => {
-            println!("更新检查网络请求失败: {e}");
+            println!("Update check network request failed: {e}");
             return Ok(None);
         }
     };
@@ -1712,7 +1712,7 @@ pub async fn check_for_update(app: tauri::AppHandle) -> std::result::Result<Opti
     }
     
     if !resp.status().is_success() {
-        println!("更新检查 API 返回状态错误: {}", resp.status());
+        println!("Update check API returned error status: {}", resp.status());
         return Ok(None);
     }
     
@@ -1726,7 +1726,7 @@ pub async fn check_for_update(app: tauri::AppHandle) -> std::result::Result<Opti
     let release: GithubRelease = match resp.json().await {
         Ok(r) => r,
         Err(e) => {
-            println!("解析更新 JSON 失败: {e}");
+            println!("Failed to parse update JSON: {e}");
             return Ok(None);
         }
     };
@@ -1795,7 +1795,7 @@ mod tests {
     fn validate_media_path_empty() {
         let result = validate_media_path("");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("请选择"));
+        assert!(result.unwrap_err().contains("Please select"));
     }
 
     #[test]
@@ -1808,21 +1808,21 @@ mod tests {
     fn validate_media_path_relative() {
         let result = validate_media_path("relative/path.mp4");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("绝对路径"));
+        assert!(result.unwrap_err().contains("absolute path"));
     }
 
     #[test]
     fn validate_media_path_nonexistent() {
         let result = validate_media_path("/nonexistent/file.mp4");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("不存在"));
+        assert!(result.unwrap_err().contains("does not exist"));
     }
 
     #[test]
     fn validate_media_path_directory() {
         let result = validate_media_path("/tmp");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("不存在"));
+        assert!(result.unwrap_err().contains("does not exist"));
     }
 
     #[test]
@@ -1875,9 +1875,9 @@ mod tests {
         let tmp = std::env::temp_dir().join("finalsub_existing_output.srt");
         std::fs::write(&tmp, b"exists").unwrap();
 
-        let result = validate_new_output_path(tmp.to_str().unwrap(), "输出路径");
+        let result = validate_new_output_path(tmp.to_str().unwrap(), "Output path");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("已存在"));
+        assert!(result.unwrap_err().contains("already exists"));
 
         std::fs::remove_file(&tmp).unwrap();
     }
@@ -1887,7 +1887,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("finalsub_new_output.srt");
         let _ = std::fs::remove_file(&tmp);
 
-        let result = validate_new_output_path(tmp.to_str().unwrap(), "输出路径");
+        let result = validate_new_output_path(tmp.to_str().unwrap(), "Output path");
         assert!(result.is_ok());
     }
 
@@ -1900,13 +1900,13 @@ mod tests {
 
     #[test]
     fn validate_ass_color_rejects_bad_value() {
-        let result = validate_ass_color("字体颜色", "white");
+        let result = validate_ass_color("Font color", "white");
         assert!(result.is_err());
     }
 
     #[test]
     fn validate_ass_color_accepts_ass_hex() {
-        assert!(validate_ass_color("字体颜色", "&H00FFFFFF").is_ok());
+        assert!(validate_ass_color("Font color", "&H00FFFFFF").is_ok());
     }
 
     #[test]
@@ -1918,7 +1918,7 @@ mod tests {
     fn validate_task_id_rejects_path_escape() {
         let result = validate_task_id("../../Library/Secrets");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("任务 ID"));
+        assert!(result.unwrap_err().contains("Invalid"));
     }
 
     #[test]

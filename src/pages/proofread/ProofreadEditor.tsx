@@ -9,6 +9,7 @@ import VideoInfo from './subtitle/VideoInfo';
 import SubtitleList from './subtitle/SubtitleList';
 import SubtitleEditToolbar from './subtitle/SubtitleEditToolbar';
 import { PendingFile } from './proofreadUtils';
+import { useI18n } from '../../lib/i18n';
 
 interface ProofreadEditorProps {
   file: PendingFile;
@@ -21,6 +22,7 @@ export default function ProofreadEditor({
   onMarkComplete,
   onBack,
 }: ProofreadEditorProps) {
+  const { t } = useI18n();
 
   // 构建配置
   const config = useMemo(
@@ -168,10 +170,10 @@ export default function ProofreadEditor({
         <div className="flex items-center gap-4">
           <button
             onClick={handleBackClick}
-            className="flex items-center text-xs text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-650 px-3.5 py-1.5 rounded-lg transition-colors font-medium border border-slate-600/30"
+            className="flex items-center text-xs text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-655 px-3.5 py-1.5 rounded-lg transition-colors font-medium border border-slate-600/30"
           >
             <ArrowLeft className="w-4 h-4 mr-1.5 text-slate-400" />
-            返回列表
+            {t('proofread.editor.backToList')}
           </button>
           <div className="text-sm font-medium text-slate-300 truncate max-w-[320px]" title={file.fileName}>
             {file.fileName}
@@ -180,17 +182,17 @@ export default function ProofreadEditor({
         <div className="flex items-center gap-2.5">
           <button
             onClick={handleSave}
-            className="flex items-center text-xs bg-slate-700 hover:bg-slate-650 text-slate-200 border border-slate-650 px-4 py-2 rounded-lg transition-colors font-medium"
+            className="flex items-center text-xs bg-slate-700 hover:bg-slate-655 text-slate-200 border border-slate-655 px-4 py-2 rounded-lg transition-colors font-medium"
           >
             <Save className="w-4 h-4 mr-1.5 text-slate-400" />
-            保存修改
+            {t('proofread.editor.saveChanges')}
           </button>
           <button
             onClick={onMarkComplete}
             className="flex items-center text-xs bg-blue-600 hover:bg-blue-700 text-white px-4.5 py-2 rounded-lg transition-colors font-medium shadow-md shadow-blue-500/10"
           >
             <Check className="w-4 h-4 mr-1.5" />
-            标记完成并返回
+            {t('proofread.editor.markComplete')}
           </button>
         </div>
       </div>
@@ -289,9 +291,9 @@ export default function ProofreadEditor({
                 <AlertTriangle size={24} />
               </div>
               <div className="space-y-1.5">
-                <h3 className="text-base font-bold text-slate-100">您有未保存的修改</h3>
+                <h3 className="text-base font-bold text-slate-100">{t('proofread.editor.unsavedTitle')}</h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  检测到您对字幕进行了修改。如果在没有保存的情况下退出，这些修改将会丢失。请选择您的操作：
+                  {t('proofread.editor.unsavedDesc')}
                 </p>
               </div>
             </div>
@@ -301,19 +303,19 @@ export default function ProofreadEditor({
                 onClick={handleSaveAndExit}
                 className="w-full text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg transition-colors shadow-lg shadow-blue-500/10"
               >
-                保存并退出
+                {t('proofread.editor.saveExit')}
               </button>
               <button
                 onClick={handleDiscardAndExit}
                 className="w-full text-xs font-semibold bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-800 py-2.5 rounded-lg transition-colors"
               >
-                放弃修改
+                {t('proofread.editor.discardExit')}
               </button>
               <button
                 onClick={() => setShowUnsavedDialog(false)}
                 className="w-full text-xs font-semibold bg-transparent hover:bg-slate-850 text-slate-400 py-2.5 rounded-lg transition-colors"
               >
-                取消
+                {t('proofread.editor.cancel')}
               </button>
             </div>
           </div>

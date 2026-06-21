@@ -1,5 +1,6 @@
 import React from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { useI18n } from '../../../lib/i18n';
 
 interface VideoPlayerProps {
   videoPath: string;
@@ -33,6 +34,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   handleLoadedMetadata,
   handleRateChange,
 }) => {
+  const { t } = useI18n();
   const videoUrl = videoPath ? convertFileSrc(videoPath) : '';
 
   return (
@@ -63,7 +65,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </video>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
-            <span className="text-sm">未载入视频文件</span>
+            <span className="text-sm">{t('proofread.player.noVideo')}</span>
           </div>
         )}
       </div>

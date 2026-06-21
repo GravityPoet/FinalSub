@@ -14,6 +14,7 @@ import { Subtitle } from '../useStandaloneSubtitles';
 import BatchAiOptimizeDialog from './BatchAiOptimizeDialog';
 import { listTranslationProviders, testTranslation } from '../../../lib/tauri';
 import { useToast } from '../Toast';
+import { useI18n } from '../../../lib/i18n';
 
 interface SubtitleEditToolbarProps {
   subtitles: Subtitle[];
@@ -52,6 +53,7 @@ export default function SubtitleEditToolbar({
   triggerSplit,
   onTriggerHandled,
 }: SubtitleEditToolbarProps) {
+  const { t } = useI18n();
   const { showToast } = useToast();
   // 搜索替换状态
   const [showSearchReplace, setShowSearchReplace] = useState(false);
@@ -152,7 +154,7 @@ Only respond with the translated/improved text, nothing else.`;
     });
 
     onSubtitlesChange(newSubtitles);
-    showToast('success', `已成功替换 ${matchCount} 处文本`);
+    showToast('success', t('proofread.toolbar.replaceDone', { count: matchCount }));
     setShowSearchReplace(false);
     setSearchText('');
     setReplaceText('');
@@ -196,7 +198,7 @@ Only respond with the translated/improved text, nothing else.`;
     });
 
     onSubtitlesChange(newSubtitles);
-    showToast('success', '时间轴调整完成');
+    showToast('success', t('proofread.toolbar.timeOffsetDone'));
     setShowTimeOffset(false);
   }, [timeOffset, offsetDirection, subtitles, onSubtitlesChange, showToast]);
 
@@ -207,7 +209,7 @@ Only respond with the translated/improved text, nothing else.`;
       mergeStart < 0 ||
       mergeEnd > subtitles.length
     ) {
-      showToast('error', '无效的合并范围');
+      showToast('error', t('proofread.toolbar.invalidMergeRange'));
       return;
     }
     // 我们的 index 都是 0-based，UI 传入的可能需要微调。
@@ -304,7 +306,7 @@ Only respond with the translated/improved text, nothing else.`;
     const targetText = subtitle.targetContent || '';
 
     if (aiProviders.length === 0) {
-      showToast('error', '请先配置并开启 AI 翻译服务');
+      showToast('error', t('proofread.toolbar.aiNotConfigured'));
       return;
     }
 
@@ -326,11 +328,11 @@ Only respond with the translated/improved text, nothing else.`;
       if (res.success && res.translated_text) {
         setOptimizedText(res.translated_text.trim());
       } else {
-        showToast('error', res.error || 'AI 优化未返回结果');
+        showToast('error', res.error || t('proofread.toolbar.aiNoResult'));
       }
     } catch (error: any) {
       console.error('AI optimize error:', error);
-      showToast('error', 'AI 优化请求错误: ' + error.toString());
+      showToast('error', `${t('proofread.toolbar.aiRequestError')}: ${error.toString()}`);
     } finally {
       setAiOptimizing(false);
     }
@@ -397,7 +399,7 @@ Only respond with the translated/improved text, nothing else.`;
         onClick={onUndo}
         disabled={!canUndo}
         className="p-1.5 hover:bg-slate-700/50 rounded-lg text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-40"
-        title="撤销"
+        title={t('proofread.toolbar.undo')}
       >
         <Undo2 className="h-4 w-4" />
       </button>
@@ -405,7 +407,7 @@ Only respond with the translated/improved text, nothing else.`;
         onClick={onRedo}
         disabled={!canRedo}
         className="p-1.5 hover:bg-slate-700/50 rounded-lg text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-40"
-        title="重做"
+        title={t('proofread.toolbar.redo')}
       >
         <Redo2 className="h-4 w-4" />
       </button>
@@ -427,57 +429,57 @@ Only respond with the translated/improved text, nothing else.`;
           }`}
         >
           <Search className="h-3.5 w-3.5 mr-1.5" />
-          搜索替换
+          {t('proofread.toolbar.searchReplace')}
         </button>
         {showSearchReplace && (
           <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-80 text-xs space-y-3">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">查找内容</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.findContent')}</label>
               <input
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
                 onKeyUp={handleSearch}
-                placeholder="输入要查找的字符"
+                placeholder={t('proofread.toolbar.findPlaceholder')}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">替换为</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.replaceWith')}</label>
               <input
                 type="text"
                 value={replaceText}
                 onChange={(e) => setReplaceText(e.target.value)}
-                placeholder="输入要替换的字符"
+                placeholder={t('proofread.toolbar.replacePlaceholder')}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">替换范围</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.replaceScope')}</label>
               <select
                 value={searchTarget}
                 onChange={(e) => setSearchTarget(e.target.value as any)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
               >
-                <option value="both">原文和翻译</option>
-                <option value="source">仅原文</option>
-                {shouldShowTranslation && <option value="target">仅翻译</option>}
+                <option value="both">{t('proofread.toolbar.scopeBoth')}</option>
+                <option value="source">{t('proofread.toolbar.scopeSource')}</option>
+                {shouldShowTranslation && <option value="target">{t('proofread.toolbar.scopeTarget')}</option>}
               </select>
             </div>
-            {matchCount > 0 && <p className="text-[10px] text-amber-500">找到 {matchCount} 处匹配</p>}
+            {matchCount > 0 && <p className="text-[10px] text-amber-500">{t('proofread.toolbar.matchCount').replace('{count}', String(matchCount))}</p>}
             <div className="flex justify-end gap-2 pt-1">
               <button
                 onClick={handleSearch}
                 className="bg-slate-800 hover:bg-slate-750 px-3 py-1.5 rounded-lg text-slate-200 font-medium transition-colors border border-slate-700/50"
               >
-                查找
+                {t('proofread.toolbar.find')}
               </button>
               <button
                 onClick={handleReplace}
                 disabled={matchCount === 0}
                 className="bg-blue-600 hover:bg-blue-750 px-3 py-1.5 rounded-lg text-white font-medium transition-colors disabled:opacity-40"
               >
-                替换全部
+                {t('proofread.toolbar.replaceAll')}
               </button>
             </div>
           </div>
@@ -499,12 +501,12 @@ Only respond with the translated/improved text, nothing else.`;
           }`}
         >
           <Clock className="h-3.5 w-3.5 mr-1.5" />
-          时间轴微调
+          {t('proofread.toolbar.timelineShift')}
         </button>
         {showTimeOffset && (
           <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-72 text-xs space-y-3.5">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">调整方向</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.direction')}</label>
               <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
                 <button
                   onClick={() => setOffsetDirection('forward')}
@@ -512,7 +514,7 @@ Only respond with the translated/improved text, nothing else.`;
                     offsetDirection === 'forward' ? 'bg-slate-800 text-white' : 'text-slate-400'
                   }`}
                 >
-                  向前延后 (延迟)
+                  {t('proofread.toolbar.delay')}
                 </button>
                 <button
                   onClick={() => setOffsetDirection('backward')}
@@ -520,12 +522,12 @@ Only respond with the translated/improved text, nothing else.`;
                     offsetDirection === 'backward' ? 'bg-slate-800 text-white' : 'text-slate-400'
                   }`}
                 >
-                  向后提前 (赶前)
+                  {t('proofread.toolbar.advance')}
                 </button>
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">偏移秒数</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.offsetSeconds')}</label>
               <input
                 type="number"
                 step="0.1"
@@ -539,7 +541,7 @@ Only respond with the translated/improved text, nothing else.`;
                 onClick={handleTimeOffset}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded-lg transition-colors font-medium"
               >
-                确认应用到全部
+                {t('proofread.toolbar.applyAll')}
               </button>
             </div>
           </div>
@@ -567,16 +569,16 @@ Only respond with the translated/improved text, nothing else.`;
           }`}
         >
           <Combine className="h-3.5 w-3.5 mr-1.5" />
-          合并字幕
+          {t('proofread.toolbar.merge')}
         </button>
         {showMerge && (
           <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-80 text-xs space-y-3.5">
             <div className="p-3 bg-slate-955 rounded-lg border border-slate-800 text-[10px] text-slate-400 leading-relaxed">
-              输入要合并的字幕序号范围。例如，输入 [1, 3] 将把序号为 1 和 2 的字幕合并为一条。
+              {t('proofread.toolbar.mergeDesc')}
             </div>
             <div className="grid grid-cols-2 gap-3.5">
               <div className="space-y-1.5">
-                <label className="text-slate-400 font-medium">开始序号 (包含)</label>
+                <label className="text-slate-400 font-medium">{t('proofread.toolbar.startIndex')}</label>
                 <input
                   type="number"
                   min={1}
@@ -587,7 +589,7 @@ Only respond with the translated/improved text, nothing else.`;
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-slate-400 font-medium">结束序号 (不含)</label>
+                <label className="text-slate-400 font-medium">{t('proofread.toolbar.endIndex')}</label>
                 <input
                   type="number"
                   min={2}
@@ -602,7 +604,7 @@ Only respond with the translated/improved text, nothing else.`;
               onClick={handleMerge}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded-lg transition-colors font-medium"
             >
-              合并字幕
+              {t('proofread.toolbar.merge')}
             </button>
           </div>
         )}
@@ -628,12 +630,12 @@ Only respond with the translated/improved text, nothing else.`;
           }`}
         >
           <Split className="h-3.5 w-3.5 mr-1.5" />
-          拆分字幕
+          {t('proofread.toolbar.split')}
         </button>
         {showSplit && (
           <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-80 text-xs space-y-3.5">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">文字拆分位置 (字符光标数)</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.splitPos')}</label>
               <input
                 type="number"
                 min={1}
@@ -645,7 +647,7 @@ Only respond with the translated/improved text, nothing else.`;
             </div>
             <div className="space-y-1.5">
               <label className="text-slate-400 font-medium flex justify-between">
-                <span>时间拆分比率</span>
+                <span>{t('proofread.toolbar.timeRatio')}</span>
                 <span className="text-blue-500">{splitTimePercent}% : {100 - splitTimePercent}%</span>
               </label>
               <input
@@ -661,7 +663,7 @@ Only respond with the translated/improved text, nothing else.`;
               onClick={executeSplit}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded-lg transition-colors font-medium"
             >
-              拆分字幕
+              {t('proofread.toolbar.split')}
             </button>
           </div>
         )}
@@ -689,15 +691,15 @@ Only respond with the translated/improved text, nothing else.`;
           }`}
         >
           <Wand2 className="h-3.5 w-3.5 mr-1.5" />
-          AI 优化单条
+          {t('proofread.toolbar.aiOptimize')}
         </button>
         {showAiOptimize && (
           <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-[360px] text-xs space-y-3.5">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">选择 AI 翻译服务</label>
+              <label className="text-slate-400 font-medium">{t('proofread.toolbar.selectAiService')}</label>
               {aiProviders.length === 0 ? (
                 <div className="p-2 border border-slate-800 text-[10px] text-slate-400 italic rounded bg-slate-950/50">
-                  未配置 AI 翻译服务，请先在设置中添加
+                  {t('proofread.toolbar.toastNoServiceInSettings')}
                 </div>
               ) : (
                 <select
@@ -716,12 +718,12 @@ Only respond with the translated/improved text, nothing else.`;
 
             <div className="space-y-1.5">
               <div className="flex justify-between items-center">
-                <label className="text-slate-400 font-medium">自定义优化提示词</label>
+                <label className="text-slate-400 font-medium">{t('proofread.toolbar.customPrompt')}</label>
                 <button
                   onClick={() => setShowCustomPrompt(!showCustomPrompt)}
                   className="text-[10px] text-blue-500 hover:underline"
                 >
-                  {showCustomPrompt ? '收起' : '展开自定义'}
+                  {showCustomPrompt ? t('proofread.toolbar.hideCustom') : t('proofread.toolbar.showCustom')}
                 </button>
               </div>
               {showCustomPrompt && (
@@ -742,12 +744,12 @@ Only respond with the translated/improved text, nothing else.`;
                 {aiOptimizing ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    正在优化...
+                    {t('proofread.toolbar.optimizing')}
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-3.5 w-3.5 text-blue-200" />
-                    开始生成 AI 优化
+                    {t('proofread.toolbar.startOptimize')}
                   </>
                 )}
               </button>
@@ -756,7 +758,7 @@ Only respond with the translated/improved text, nothing else.`;
             {optimizedText && (
               <div className="space-y-1.5 border-t border-slate-800 pt-3">
                 <label className="text-emerald-400 font-semibold flex items-center gap-1">
-                  <span>AI 优化建议:</span>
+                  <span>{t('proofread.toolbar.aiSuggestion')}</span>
                 </label>
                 <div className="p-2.5 bg-slate-950/70 border border-slate-850 rounded-lg text-slate-200 break-words leading-relaxed">
                   {optimizedText}
@@ -765,7 +767,7 @@ Only respond with the translated/improved text, nothing else.`;
                   onClick={handleAcceptOptimization}
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 rounded-lg transition-colors font-medium"
                 >
-                  采纳该优化译文
+                  {t('proofread.toolbar.applySuggestion')}
                 </button>
               </div>
             )}
@@ -779,7 +781,7 @@ Only respond with the translated/improved text, nothing else.`;
         className="flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent text-slate-300 hover:text-white hover:bg-slate-700/50"
       >
         <Sparkles className="h-3.5 w-3.5 mr-1.5 text-blue-500" />
-        全文 AI 优化
+        {t('proofread.toolbar.fullAiOptimize')}
       </button>
 
       {/* 批量 AI 优化对话框 */}

@@ -79,7 +79,7 @@ async function tryAuthorizeDir(path: string | undefined): Promise<void> {
   try {
     await authorizeSubtitleDirectory(path);
   } catch (e) {
-    console.warn('授权字幕目录失败，自动检测可能降级:', e);
+    console.warn('Failed to authorize subtitle directory, auto-detection may degrade:', e);
   }
 }
 
