@@ -37,6 +37,7 @@
       "licenses/ffmpeg-GPLv2.txt",
       "licenses/ffmpeg-NOTICE.md",
       "resources/parakeet/parakeet_transcribe.py",
+      "resources/vad/ggml-silero-v5.1.2.bin",
       "licenses/whisper.cpp-LICENSE.txt",
       "licenses/whisper-NOTICE.md"
     ],

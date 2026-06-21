@@ -15,6 +15,7 @@ pub struct AppState {
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
+    pub task_semaphore: Arc<std::sync::Mutex<Arc<tokio::sync::Semaphore>>>,
 }
 
 impl AppState {
@@ -34,6 +35,10 @@ impl AppState {
         if dirty {
             let _ = crate::core::task_queue::save_tasks(&app_config_dir, &loaded_tasks);
         }
+        let settings = crate::core::settings::load_settings(&app_config_dir).unwrap_or_default();
+        let initial_limit = settings.max_concurrent_tasks.max(1) as usize;
+        let task_semaphore = Arc::new(std::sync::Mutex::new(Arc::new(tokio::sync::Semaphore::new(initial_limit))));
+        
         Self {
             tasks: Arc::new(RwLock::new(loaded_tasks)),
             task_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -41,6 +46,7 @@ impl AppState {
             burn_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,
+            task_semaphore,
         }
     }
 }

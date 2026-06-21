@@ -1,5 +1,6 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings } from "lucide-react";
+import { useI18n } from "../lib/i18n";
 
 const navItems = [
   { to: "/", label: "任务", icon: FileVideo2 },
@@ -13,6 +14,20 @@ const navItems = [
 
 export default function Layout() {
   const location = useLocation();
+  const { t } = useI18n();
+
+  const getNavLabel = (key: string) => {
+    switch (key) {
+      case "任务": return t("nav.tasks");
+      case "任务队列": return t("nav.queue");
+      case "模型管理": return t("nav.models");
+      case "翻译管理": return t("nav.translation");
+      case "字幕校对": return t("nav.proofread");
+      case "视频合字幕": return t("nav.merge");
+      case "设置": return t("nav.settings");
+      default: return key;
+    }
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-gray-50 dark:bg-gray-900 sm:flex-row">
@@ -32,7 +47,7 @@ export default function Layout() {
               }`}
             >
               <Icon size={18} />
-              {label}
+              {getNavLabel(label)}
             </Link>
           ))}
         </nav>

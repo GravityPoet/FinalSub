@@ -51,6 +51,9 @@ pub struct Settings {
     pub whisper_command: String,
     #[serde(alias = "maxContext")]
     pub max_context: i32,
+    /// 是否上报崩溃/错误遥测到 Sentry（分发版隐私 opt-in，默认关闭）。
+    #[serde(alias = "enableTelemetry")]
+    pub enable_telemetry: bool,
 }
 
 impl Default for Settings {
@@ -79,6 +82,7 @@ impl Default for Settings {
             custom_temp_dir: String::new(),
             whisper_command: String::new(),
             max_context: -1,
+            enable_telemetry: false,
         }
     }
 }

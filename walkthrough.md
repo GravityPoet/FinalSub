@@ -181,3 +181,37 @@ grep -c '^name = "security-framework"' src-tauri/Cargo.lock
 - 未在 App UI 内用用户真实 `custom-openai` key 重存并跑真实翻译任务；该验收需要真实密钥和交互环境。
 - Linux keyring 后端未启用；是否增加 `sync-secret-service` 涉及 Linux 构建依赖和产品目标，待用户决策。
 - provider `implemented` 策略仍未拍板；当前代码是 18 个 provider 全 true，复杂商业 provider 缺真实服务端 E2E。
+
+---
+
+## 8. 任务队列删除能力（2026-06-21）
+
+### 8.1 变更
+
+- `src-tauri/src/commands/mod.rs`: 新增 `delete_task` / `delete_tasks`，批量删除采用 all-or-nothing；只允许删除 `done/error/cancelled/paused`，拒绝直接删除 `pending/running`。
+- `src-tauri/src/commands/mod.rs`: 删除任务时清理 `tasks/<task_id>/` 临时工作目录与 `tasks/<task_id>.log`，并保留用户原始媒体文件和已导出的输出文件。
+- `src-tauri/src/lib.rs`: 注册新增 Tauri commands。
+- `src/lib/tauri.ts`: 新增 `deleteTask` / `deleteTasks` / `TASK_DELETED_EVENT`。
+- `src/pages/TasksPage.tsx`: 新增单条删除、可删除任务复选框、全选可删除、删除选中和确认弹窗；运行中/等待中任务的选择框禁用并提示先暂停或取消。
+
+### 8.2 验证
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+# 84 passed; 0 failed; 1 ignored
+```
+
+```bash
+npm run build
+# tsc && vite build passed
+```
+
+```bash
+npm run tauri -- dev
+# Vite ready at http://localhost:5173/; target/debug/finalsubtauri started
+```
+
+### 8.3 风险
+
+- 删除队列记录会从 `tasks.json` 移除对应任务，并清理该任务日志；这是用户可见状态删除，但可通过重新创建任务恢复业务流程。
+- 目前不提供“删除所有历史任务”的无筛选入口，只提供可删除任务的全选与选中删除，避免误删运行中的队列状态。

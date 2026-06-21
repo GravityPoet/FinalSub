@@ -58,3 +58,13 @@
 - `[x]` D1: 按源码现状修正 `MIGRATION_MATRIX.md` 中 provider 数、Keychain 后端、任务持久化/暂停/恢复/重试/日志流状态
 - `[ ]` C1: provider `implemented` 策略仍需用户拍板：维持全 true、未 E2E 的复杂 provider 暂置 false，或补真实 E2E
 - `[ ]` BIZ1: App 内重存真实 `custom-openai` API Key 并跑真实翻译任务，需要用户真实密钥和交互环境
+
+---
+
+## 2026-06-21 任务队列删除能力
+
+- `[x]` 后端新增 `delete_task` / `delete_tasks`，删除队列记录并清理对应日志与临时工作目录
+- `[x]` 删除保护：仅允许删除 `done/error/cancelled/paused`，`pending/running` 需先暂停或取消
+- `[x]` 前端任务队列新增单条删除按钮、可删除任务复选框、全选可删除、删除选中和确认弹窗
+- `[x]` 明确删除范围：不删除原始媒体文件，也不删除已导出的输出文件
+- `[x]` 验收：`cargo test --manifest-path src-tauri/Cargo.toml` 84 passed / 1 ignored，`npm run build` 通过，开发版已重新启动

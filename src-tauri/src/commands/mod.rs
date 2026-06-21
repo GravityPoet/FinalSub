@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -17,11 +18,17 @@ use keyring::Entry;
 use tauri_plugin_fs::FsExt;
 
 const TASK_UPDATED_EVENT: &str = "task-updated";
+const TASK_DELETED_EVENT: &str = "task-deleted";
 
 #[derive(serde::Serialize)]
 pub struct AppInfo {
     pub version: String,
     pub name: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct TaskDeletedPayload {
+    task_id: String,
 }
 
 #[tauri::command]
@@ -38,9 +45,93 @@ fn validate_task_id(task_id: &str) -> Result<(), String> {
         .map_err(|_| "任务 ID 格式异常".to_string())
 }
 
+fn task_can_be_deleted(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Done | TaskStatus::Error | TaskStatus::Cancelled | TaskStatus::Paused
+    )
+}
+
+fn task_status_label(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Pending => "等待中",
+        TaskStatus::Running => "运行中",
+        TaskStatus::Paused => "已暂停",
+        TaskStatus::Cancelled => "已取消",
+        TaskStatus::Done => "已完成",
+        TaskStatus::Error => "错误",
+    }
+}
+
 async fn persist_tasks_snapshot(app_config_dir: &Path, tasks: &TaskMap) -> Result<(), String> {
     let task_map = tasks.read().await;
     task_queue::save_tasks(app_config_dir, &task_map)
+}
+
+async fn cleanup_task_artifacts(app_config_dir: &Path, task_id: &str) {
+    let work_dir = app_config_dir.join("tasks").join(task_id);
+    if work_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(&work_dir).await;
+    }
+
+    let log_path = app_config_dir.join("tasks").join(format!("{task_id}.log"));
+    if log_path.exists() {
+        let _ = tokio::fs::remove_file(log_path).await;
+    }
+}
+
+async fn delete_tasks_by_ids(
+    app: &AppHandle,
+    state: &AppState,
+    task_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if task_ids.is_empty() {
+        return Err("请选择要删除的任务".into());
+    }
+
+    let mut seen = HashSet::new();
+    let mut unique_task_ids = Vec::new();
+    for task_id in task_ids {
+        validate_task_id(&task_id)?;
+        if seen.insert(task_id.clone()) {
+            unique_task_ids.push(task_id);
+        }
+    }
+
+    let mut tasks = state.tasks.write().await;
+    for task_id in &unique_task_ids {
+        let task = tasks
+            .get(task_id)
+            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        if !task_can_be_deleted(task.status) {
+            return Err(format!(
+                "任务「{}」仍在{}，请先暂停或取消后再删除",
+                task.media_name,
+                task_status_label(task.status)
+            ));
+        }
+    }
+
+    for task_id in &unique_task_ids {
+        tasks.remove(task_id);
+    }
+    drop(tasks);
+
+    {
+        let mut controls = state.task_controls.write().await;
+        for task_id in &unique_task_ids {
+            controls.remove(task_id);
+        }
+    }
+
+    persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
+
+    for task_id in &unique_task_ids {
+        cleanup_task_artifacts(&state.app_config_dir, task_id).await;
+        emit_task_deleted(app, task_id);
+    }
+
+    Ok(unique_task_ids)
 }
 
 #[tauri::command]
@@ -291,6 +382,25 @@ pub async fn create_preview_task(
 #[tauri::command]
 pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
     Ok(state.tasks.read().await.values().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn delete_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<String, String> {
+    let mut deleted = delete_tasks_by_ids(&app, &state, vec![task_id]).await?;
+    Ok(deleted.remove(0))
+}
+
+#[tauri::command]
+pub async fn delete_tasks(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    delete_tasks_by_ids(&app, &state, task_ids).await
 }
 
 #[tauri::command]
@@ -862,7 +972,7 @@ pub async fn transcribe_audio(
     let audio_path = validate_existing_file_path(&req.audio_path, "音频文件")?;
     let output_path = validate_new_output_path(&req.output_path, "字幕输出路径")?;
 
-    let engine = WhisperCppEngine::new(whisper_bin, models_dir);
+    let engine = WhisperCppEngine::new(whisper_bin, models_dir, Default::default());
     let model_ref = AsrModelRef {
         engine_id: "whisper-cpp".into(),
         model_id: req.model_id.clone(),
@@ -1181,6 +1291,12 @@ fn start_preview_worker(app: AppHandle, tasks: TaskMap, task_id: String) {
     });
 }
 
+fn update_state_semaphore(state: &AppState, limit: u32) {
+    let new_limit = limit.max(1) as usize;
+    let mut lock = state.task_semaphore.lock().unwrap();
+    *lock = std::sync::Arc::new(tokio::sync::Semaphore::new(new_limit));
+}
+
 fn emit_task_update(app: &AppHandle, task: &Task) {
     let _ = app.emit(TASK_UPDATED_EVENT, task.clone());
     if let Some(state) = app.try_state::<AppState>() {
@@ -1191,6 +1307,15 @@ fn emit_task_update(app: &AppHandle, task: &Task) {
             let _ = crate::core::task_queue::save_tasks(&app_config_dir, &task_map);
         });
     }
+}
+
+fn emit_task_deleted(app: &AppHandle, task_id: &str) {
+    let _ = app.emit(
+        TASK_DELETED_EVENT,
+        TaskDeletedPayload {
+            task_id: task_id.to_string(),
+        },
+    );
 }
 
 #[tauri::command]
@@ -1204,12 +1329,18 @@ pub fn save_settings_cmd(
     new_settings: Settings,
 ) -> Result<Settings, String> {
     settings::save_settings(&state.app_config_dir, &new_settings).map_err(|e| e.to_string())?;
+    // 并发数变更对之后新建的任务生效：保存时重建信号量，在飞任务持旧 permit 不受影响
+    update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
 }
 
 #[tauri::command]
 pub fn reset_settings(state: State<'_, AppState>) -> Result<Settings, String> {
-    settings::reset_settings(&state.app_config_dir).map_err(|e| e.to_string())
+    let new_settings = settings::reset_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
+    update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    crate::set_telemetry_enabled(new_settings.enable_telemetry);
+    Ok(new_settings)
 }
 
 #[tauri::command]
@@ -1219,7 +1350,10 @@ pub fn export_config(state: State<'_, AppState>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> Result<Settings, String> {
-    settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())
+    let new_settings = settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
+    update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    crate::set_telemetry_enabled(new_settings.enable_telemetry);
+    Ok(new_settings)
 }
 
 #[tauri::command]
@@ -1242,7 +1376,10 @@ pub fn import_config_from_path(
 ) -> Result<Settings, String> {
     let path = validate_json_input_path(&input_path)?;
     let json = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败：{e}"))?;
-    settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())
+    let new_settings = settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
+    update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    crate::set_telemetry_enabled(new_settings.enable_telemetry);
+    Ok(new_settings)
 }
 
 fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> {
@@ -1542,6 +1679,94 @@ pub fn authorize_subtitle_directory(
     Ok(())
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UpdateInfo {
+    pub latest_version: String,
+    pub url: String,
+    pub body: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> std::result::Result<Option<UpdateInfo>, String> {
+    let current_version = app.package_info().version.to_string();
+    let client = reqwest::Client::builder()
+        .user_agent("FinalSub-Updater")
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+        
+    let resp = client
+        .get("https://api.github.com/repos/GravityPoet/FinalSub/releases/latest")
+        .send()
+        .await;
+        
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            println!("更新检查网络请求失败: {e}");
+            return Ok(None);
+        }
+    };
+    
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    
+    if !resp.status().is_success() {
+        println!("更新检查 API 返回状态错误: {}", resp.status());
+        return Ok(None);
+    }
+    
+    #[derive(serde::Deserialize)]
+    struct GithubRelease {
+        tag_name: String,
+        html_url: String,
+        body: Option<String>,
+    }
+    
+    let release: GithubRelease = match resp.json().await {
+        Ok(r) => r,
+        Err(e) => {
+            println!("解析更新 JSON 失败: {e}");
+            return Ok(None);
+        }
+    };
+    
+    let latest_tag = release.tag_name;
+    let latest_ver = latest_tag.trim_start_matches('v').to_string();
+    
+    if is_newer_version(&current_version, &latest_ver) {
+        Ok(Some(UpdateInfo {
+            latest_version: latest_ver,
+            url: release.html_url,
+            body: release.body,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn is_newer_version(current_ver: &str, new_ver: &str) -> bool {
+    let parse_parts = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .map(|s| s.parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+    
+    let curr_parts = parse_parts(current_ver);
+    let new_parts = parse_parts(new_ver);
+    
+    for i in 0..std::cmp::max(curr_parts.len(), new_parts.len()) {
+        let curr = curr_parts.get(i).cloned().unwrap_or(0);
+        let new = new_parts.get(i).cloned().unwrap_or(0);
+        if new > curr {
+            return true;
+        } else if curr > new {
+            return false;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1694,6 +1919,16 @@ mod tests {
         let result = validate_task_id("../../Library/Secrets");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("任务 ID"));
+    }
+
+    #[test]
+    fn task_can_be_deleted_rejects_active_tasks() {
+        assert!(!task_can_be_deleted(TaskStatus::Pending));
+        assert!(!task_can_be_deleted(TaskStatus::Running));
+        assert!(task_can_be_deleted(TaskStatus::Paused));
+        assert!(task_can_be_deleted(TaskStatus::Cancelled));
+        assert!(task_can_be_deleted(TaskStatus::Done));
+        assert!(task_can_be_deleted(TaskStatus::Error));
     }
 
     #[test]
