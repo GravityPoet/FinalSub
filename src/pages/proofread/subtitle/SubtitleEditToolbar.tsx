@@ -13,6 +13,7 @@ import {
 import { Subtitle } from '../useStandaloneSubtitles';
 import BatchAiOptimizeDialog from './BatchAiOptimizeDialog';
 import { listTranslationProviders, testTranslation } from '../../../lib/tauri';
+import { useToast } from '../Toast';
 
 interface SubtitleEditToolbarProps {
   subtitles: Subtitle[];
@@ -51,6 +52,7 @@ export default function SubtitleEditToolbar({
   triggerSplit,
   onTriggerHandled,
 }: SubtitleEditToolbarProps) {
+  const { showToast } = useToast();
   // 搜索替换状态
   const [showSearchReplace, setShowSearchReplace] = useState(false);
   const [searchText, setSearchText] = useState('');
@@ -150,12 +152,12 @@ Only respond with the translated/improved text, nothing else.`;
     });
 
     onSubtitlesChange(newSubtitles);
-    alert(`已成功替换 ${matchCount} 处文本`);
+    showToast('success', `已成功替换 ${matchCount} 处文本`);
     setShowSearchReplace(false);
     setSearchText('');
     setReplaceText('');
     setMatchCount(0);
-  }, [searchText, replaceText, searchTarget, subtitles, matchCount, onSubtitlesChange, shouldShowTranslation]);
+  }, [searchText, replaceText, searchTarget, subtitles, matchCount, onSubtitlesChange, shouldShowTranslation, showToast]);
 
   const timeToSeconds = (timeStr: string): number => {
     const parts = timeStr.replace(',', '.').split(':');
@@ -194,9 +196,9 @@ Only respond with the translated/improved text, nothing else.`;
     });
 
     onSubtitlesChange(newSubtitles);
-    alert('时间轴调整完成');
+    showToast('success', '时间轴调整完成');
     setShowTimeOffset(false);
-  }, [timeOffset, offsetDirection, subtitles, onSubtitlesChange]);
+  }, [timeOffset, offsetDirection, subtitles, onSubtitlesChange, showToast]);
 
   // 执行合并
   const handleMerge = useCallback(() => {
@@ -205,7 +207,7 @@ Only respond with the translated/improved text, nothing else.`;
       mergeStart < 0 ||
       mergeEnd > subtitles.length
     ) {
-      alert('无效的合并范围');
+      showToast('error', '无效的合并范围');
       return;
     }
     // 我们的 index 都是 0-based，UI 传入的可能需要微调。
@@ -302,7 +304,7 @@ Only respond with the translated/improved text, nothing else.`;
     const targetText = subtitle.targetContent || '';
 
     if (aiProviders.length === 0) {
-      alert('请先配置并开启 AI 翻译服务');
+      showToast('error', '请先配置并开启 AI 翻译服务');
       return;
     }
 
@@ -324,15 +326,15 @@ Only respond with the translated/improved text, nothing else.`;
       if (res.success && res.translated_text) {
         setOptimizedText(res.translated_text.trim());
       } else {
-        alert(res.error || 'AI 优化未返回结果');
+        showToast('error', res.error || 'AI 优化未返回结果');
       }
     } catch (error: any) {
       console.error('AI optimize error:', error);
-      alert('AI 优化请求错误: ' + error.toString());
+      showToast('error', 'AI 优化请求错误: ' + error.toString());
     } finally {
       setAiOptimizing(false);
     }
-  }, [currentSubtitleIndex, subtitles, aiProviders, selectedProviderId, customPrompt]);
+  }, [currentSubtitleIndex, subtitles, aiProviders, selectedProviderId, customPrompt, showToast]);
 
   const handleAcceptOptimization = useCallback(() => {
     if (!optimizedText || currentSubtitleIndex < 0) return;

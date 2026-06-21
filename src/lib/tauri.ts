@@ -91,6 +91,22 @@ export async function cancelTask(taskId: string): Promise<Task> {
   return invoke("cancel_task", { taskId });
 }
 
+export async function pauseTask(taskId: string): Promise<Task> {
+  return invoke("pause_task", { taskId });
+}
+
+export async function resumeTask(taskId: string): Promise<Task> {
+  return invoke("resume_task", { taskId });
+}
+
+export async function retryTask(taskId: string): Promise<Task> {
+  return invoke("retry_task", { taskId });
+}
+
+export async function getTaskLogs(taskId: string): Promise<string> {
+  return invoke("get_task_logs", { taskId });
+}
+
 export async function normalizeSrt(srtContent: string): Promise<string> {
   return invoke("normalize_srt", { srtContent });
 }
@@ -118,6 +134,27 @@ export interface BurnSubtitleRequest {
 
 export async function burnSubtitle(req: BurnSubtitleRequest): Promise<string> {
   return invoke("burn_subtitle", { req });
+}
+
+export async function cancelBurnSubtitle(burnId: string): Promise<void> {
+  return invoke("cancel_burn_subtitle", { burnId });
+}
+
+export interface VideoMetadata {
+  duration_seconds: number;
+  duration_string: string;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+}
+
+export async function getVideoMetadata(videoPath: string): Promise<VideoMetadata> {
+  return invoke("get_video_metadata", { videoPath });
+}
+
+export async function generateSubtitlePreview(req: BurnSubtitleRequest): Promise<string> {
+  return invoke("generate_subtitle_preview", { req });
 }
 
 export async function getFfmpegVersion(): Promise<string> {
@@ -150,6 +187,7 @@ export interface TranslationProvider {
   name: string;
   provider_type: string;
   is_ai: boolean;
+  implemented: boolean;
   requires_api_key: boolean;
   requires_endpoint: boolean;
   requires_model: boolean;
@@ -165,6 +203,7 @@ export interface TranslateRequest {
   api_key?: string;
   api_url?: string;
   model_name?: string;
+  secret_fields?: Record<string, string>;
 }
 
 export interface TranslateResponse {
@@ -244,6 +283,10 @@ export async function hasProviderSecret(providerId: string, field: string): Prom
   return invoke("has_provider_secret", { providerId, field });
 }
 
+export async function getProviderSecret(providerId: string, field: string): Promise<string | null> {
+  return invoke("get_provider_secret", { providerId, field });
+}
+
 export async function deleteProviderSecret(providerId: string, field: string): Promise<void> {
   return invoke("delete_provider_secret", { providerId, field });
 }
@@ -260,4 +303,21 @@ export async function saveProofreadTasks(data: string): Promise<void> {
 // 以便扫描同目录字幕。文件读写一律改用 @tauri-apps/plugin-fs（dialog 选中即授权）。
 export async function authorizeSubtitleDirectory(dirPath: string): Promise<void> {
   return invoke("authorize_subtitle_directory", { dirPath });
+}
+
+export interface ModelDownloadProgress {
+  model_id: string;
+  bytes_downloaded: number;
+  total_bytes: number;
+  progress: number;
+  status: "downloading" | "done" | "cancelled" | "error";
+  error: string | null;
+}
+
+export async function downloadModel(modelId: string): Promise<void> {
+  return invoke("download_model", { modelId });
+}
+
+export async function cancelModelDownload(modelId: string): Promise<void> {
+  return invoke("cancel_model_download", { modelId });
 }

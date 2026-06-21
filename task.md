@@ -44,3 +44,17 @@
 - `[x]` ffmpeg `otool -L` 零 Homebrew 依赖（arm64 + x86_64 均确认）
 - `[ ]` **x86_64 未实跑**：本机未装 Rosetta（`oahd` 未运行），仅静态验证（file/lipo/otool），运行闭环待 Intel Mac / CI
 - `[x]` Parakeet 在重建后的 `.app` 内实跑闭环
+
+---
+
+## 2026-06-21 审计修复：Keychain 后端与迁移矩阵
+
+- `[x]` A0: 改前基线 `cargo test --manifest-path src-tauri/Cargo.toml` 通过，83 passed
+- `[x]` A1: `keyring` 启用 `apple-native` / `windows-native` feature，避免无平台后端退化为 mock
+- `[x]` A2: `cargo build --manifest-path src-tauri/Cargo.toml` 通过，`Cargo.lock` 新增 `security-framework`
+- `[x]` A3: 新增 ignored 真实 Keychain 往返测试，并显式运行通过
+- `[x]` B1: 将 `implemented_providers_match_dispatch_table` 从假断言改为检查 `translate_text` dispatch arm
+- `[x]` B2: 反向实验临时移除 `qwen` dispatch arm，目标测试按预期失败；恢复后目标测试通过
+- `[x]` D1: 按源码现状修正 `MIGRATION_MATRIX.md` 中 provider 数、Keychain 后端、任务持久化/暂停/恢复/重试/日志流状态
+- `[ ]` C1: provider `implemented` 策略仍需用户拍板：维持全 true、未 E2E 的复杂 provider 暂置 false，或补真实 E2E
+- `[ ]` BIZ1: App 内重存真实 `custom-openai` API Key 并跑真实翻译任务，需要用户真实密钥和交互环境

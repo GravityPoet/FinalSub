@@ -57,7 +57,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             language: "zh".into(),
-            asr_engine: "whisper-cpp".into(),
+            asr_engine: "parakeet-mlx".into(),
             models_path: default_models_path(),
             max_concurrent_tasks: 1,
             subtitle_output_format: "srt".into(),
@@ -245,7 +245,7 @@ mod tests {
         save_settings(&dir, &settings).unwrap();
         let loaded = load_settings(&dir).unwrap();
         assert_eq!(loaded.language, "zh");
-        assert_eq!(loaded.asr_engine, "whisper-cpp");
+        assert_eq!(loaded.asr_engine, "parakeet-mlx");
         assert_eq!(loaded.max_concurrent_tasks, 1);
         assert_eq!(loaded.subtitle_output_format, "srt");
         assert!(loaded.use_vad);

@@ -6,9 +6,11 @@ import {
   CheckCircle2,
   Loader2,
   FileText,
+  AlertCircle,
 } from 'lucide-react';
 import { ProofreadTask } from './types';
 import { getProofreadTasks, persistProofreadTasks } from './ProofreadPage';
+import { useToast } from './Toast';
 
 interface ProofreadTaskListProps {
   onLoadTask: (task: ProofreadTask) => void;
@@ -19,6 +21,8 @@ export default function ProofreadTaskList({
 }: ProofreadTaskListProps) {
   const [tasks, setTasks] = useState<ProofreadTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingDelete, setPendingDelete] = useState<ProofreadTask | null>(null);
+  const { showToast } = useToast();
 
   // 加载任务列表
   const loadTasks = useCallback(async () => {
@@ -40,18 +44,18 @@ export default function ProofreadTaskList({
   // 删除任务
   const handleDeleteTask = useCallback(
     async (taskId: string) => {
-      const confirmDelete = window.confirm('确定要删除这个任务吗？此操作不可恢复。');
-      if (!confirmDelete) return;
-
       try {
         const updated = tasks.filter((t) => t.id !== taskId);
         await persistProofreadTasks(updated);
+        setPendingDelete(null);
+        showToast('success', '任务已删除');
         await loadTasks();
       } catch (error) {
         console.error('Failed to delete task:', error);
+        showToast('error', '删除任务失败，请稍后重试');
       }
     },
-    [tasks, loadTasks],
+    [tasks, loadTasks, showToast],
   );
 
   // 计算任务进度
@@ -147,7 +151,7 @@ export default function ProofreadTaskList({
                 {task.status === 'completed' ? '查看' : '继续'}
               </button>
               <button
-                onClick={() => handleDeleteTask(task.id)}
+                onClick={() => setPendingDelete(task)}
                 className="p-2 hover:bg-red-950/30 rounded-lg transition-colors text-slate-400 hover:text-red-400"
                 title="删除任务"
               >
@@ -157,6 +161,40 @@ export default function ProofreadTaskList({
           </div>
         );
       })}
+
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+            <div className="mb-5 flex items-start gap-3">
+              <div className="rounded-full bg-red-950/50 p-2 text-red-400">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-slate-100">删除校对任务</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-300">
+                  将删除「{pendingDelete.name}」的历史记录，已导出的字幕文件不会被删除。
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteTask(pendingDelete.id)}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod download;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelStatus {
@@ -150,7 +152,7 @@ pub fn normalize_whisper_model_id(model_id: &str) -> String {
         .to_string()
 }
 
-fn validate_whisper_model_id(model_id: &str) -> crate::error::Result<String> {
+pub(crate) fn validate_whisper_model_id(model_id: &str) -> crate::error::Result<String> {
     let normalized = normalize_whisper_model_id(model_id);
     let valid = !normalized.is_empty()
         && normalized

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Settings as SettingsIcon, Save, RotateCcw, Download, Upload, FolderOpen } from "lucide-react";
+import { Settings as SettingsIcon, Save, RotateCcw, Download, Upload, FolderOpen, AlertCircle } from "lucide-react";
 import {
   getSettings,
   saveSettingsCmd,
@@ -66,6 +66,7 @@ const SettingGroup = ({
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
@@ -95,10 +96,10 @@ export default function SettingsPage() {
   };
 
   const handleReset = async () => {
-    if (!confirm("确定恢复默认设置？当前配置将丢失。")) return;
     try {
       const defaults = await resetSettings();
       setSettings(defaults);
+      setConfirmReset(false);
       showMsg("ok", "已恢复默认设置");
     } catch (err) {
       showMsg("err", `重置失败：${err}`);
@@ -326,7 +327,7 @@ export default function SettingsPage() {
           <div className="px-4 py-3">
             <SettingRow label="恢复默认设置" description="清除所有自定义配置，恢复出厂默认值">
               <button
-                onClick={handleReset}
+                onClick={() => setConfirmReset(true)}
                 className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
               >
                 恢复默认
@@ -335,6 +336,40 @@ export default function SettingsPage() {
           </div>
         </SettingGroup>
       </div>
+
+      {confirmReset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="rounded-full bg-red-50 p-2 text-red-600 dark:bg-red-950/40 dark:text-red-300">
+                <AlertCircle size={20} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-gray-900 dark:text-white">恢复默认设置</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                  当前自定义配置会被默认值替换，已导出的配置文件和本地模型不会被删除。
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmReset(false)}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+              >
+                恢复默认
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
