@@ -11,6 +11,7 @@ import {
 import { ProofreadTask } from './types';
 import { getProofreadTasks, persistProofreadTasks } from './ProofreadPage';
 import { useToast } from './Toast';
+import { useI18n } from '../../lib/i18n';
 
 interface ProofreadTaskListProps {
   onLoadTask: (task: ProofreadTask) => void;
@@ -19,6 +20,7 @@ interface ProofreadTaskListProps {
 export default function ProofreadTaskList({
   onLoadTask,
 }: ProofreadTaskListProps) {
+  const { locale, t } = useI18n();
   const [tasks, setTasks] = useState<ProofreadTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<ProofreadTask | null>(null);
@@ -48,14 +50,14 @@ export default function ProofreadTaskList({
         const updated = tasks.filter((t) => t.id !== taskId);
         await persistProofreadTasks(updated);
         setPendingDelete(null);
-        showToast('success', '任务已删除');
+        showToast('success', t('proofread.tasks.deleteSuccess'));
         await loadTasks();
       } catch (error) {
         console.error('Failed to delete task:', error);
-        showToast('error', '删除任务失败，请稍后重试');
+        showToast('error', t('proofread.tasks.deleteFailed'));
       }
     },
-    [tasks, loadTasks, showToast],
+    [tasks, loadTasks, showToast, t],
   );
 
   // 计算任务进度
@@ -73,7 +75,7 @@ export default function ProofreadTaskList({
 
   // 格式化时间
   const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString('zh-CN', {
+    return new Date(timestamp).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', {
       hour12: false,
     });
   };
@@ -90,8 +92,8 @@ export default function ProofreadTaskList({
     return (
       <div className="text-center py-16 text-slate-500">
         <FileText className="w-16 h-16 mx-auto mb-4 opacity-30 text-slate-400" />
-        <p className="text-base font-medium">暂无历史任务</p>
-        <p className="text-xs text-slate-400 mt-2">保存任务后将在此处进行管理</p>
+        <p className="text-base font-medium">{t('proofread.tasks.noHistory')}</p>
+        <p className="text-xs text-slate-400 mt-2">{t('proofread.tasks.noHistoryDesc')}</p>
       </div>
     );
   }
@@ -113,20 +115,20 @@ export default function ProofreadTaskList({
                 {task.status === 'completed' ? (
                   <span className="flex items-center text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/30 px-2 py-0.5 rounded font-medium">
                     <CheckCircle2 className="w-3 h-3 mr-1" />
-                    已完成
+                    {t('proofread.tasks.completed')}
                   </span>
                 ) : (
                   <span className="flex items-center text-[10px] bg-blue-950 text-blue-400 border border-blue-800/30 px-2 py-0.5 rounded font-medium">
                     <Clock className="w-3 h-3 mr-1" />
-                    进行中
+                    {t('proofread.tasks.inProgress')}
                   </span>
                 )}
               </div>
 
               <div className="flex items-center gap-4 text-xs text-slate-400 mb-4">
-                <span>{task.items.length} 个文件</span>
+                <span>{t('proofread.tasks.filesCount').replace('{count}', String(task.items.length))}</span>
                 <span className="w-1 h-1 bg-slate-600 rounded-full" />
-                <span>最后更新: {formatDate(task.updatedAt)}</span>
+                <span>{t('proofread.tasks.lastUpdated')}{formatDate(task.updatedAt)}</span>
               </div>
 
               <div className="flex items-center gap-3">
@@ -148,12 +150,12 @@ export default function ProofreadTaskList({
                 className="flex items-center text-xs bg-blue-600 hover:bg-blue-700 text-white px-4.5 py-2 rounded-lg transition-colors font-medium shadow-md shadow-blue-500/5"
               >
                 <Play className="w-3.5 h-3.5 mr-1.5" />
-                {task.status === 'completed' ? '查看' : '继续'}
+                {task.status === 'completed' ? t('proofread.tasks.view') : t('proofread.tasks.continue')}
               </button>
               <button
                 onClick={() => setPendingDelete(task)}
                 className="p-2 hover:bg-red-950/30 rounded-lg transition-colors text-slate-400 hover:text-red-400"
-                title="删除任务"
+                title={t('proofread.tasks.delete')}
               >
                 <Trash2 className="w-4 h-4 text-red-500" />
               </button>
@@ -170,9 +172,9 @@ export default function ProofreadTaskList({
                 <AlertCircle className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-slate-100">删除校对任务</h3>
+                <h3 className="font-semibold text-slate-100">{t('proofread.tasks.deleteModalTitle')}</h3>
                 <p className="mt-1 text-sm leading-6 text-slate-300">
-                  将删除「{pendingDelete.name}」的历史记录，已导出的字幕文件不会被删除。
+                  {t('proofread.tasks.deleteModalDesc').replace('{name}', pendingDelete.name)}
                 </p>
               </div>
             </div>
@@ -182,14 +184,14 @@ export default function ProofreadTaskList({
                 onClick={() => setPendingDelete(null)}
                 className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
               >
-                取消
+                {t('proofread.tasks.cancel')}
               </button>
               <button
                 type="button"
                 onClick={() => handleDeleteTask(pendingDelete.id)}
                 className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
               >
-                删除
+                {t('proofread.tasks.deleteConfirm')}
               </button>
             </div>
           </div>

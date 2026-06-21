@@ -14,6 +14,7 @@ import {
 import { pathShim } from './subtitleDetector';
 
 import { useToast } from './Toast';
+import { useI18n } from '../../lib/i18n';
 
 export interface Subtitle {
   id: string;
@@ -75,6 +76,7 @@ export const useStandaloneSubtitles = (
   isOpen: boolean,
 ) => {
   const { showToast } = useToast();
+  const { t } = useI18n();
   const [isDirty, setIsDirty] = useState(false);
   const [mergedSubtitles, setMergedSubtitles] = useState<Subtitle[]>([]);
   const [videoPath, setVideoPath] = useState<string>('');
@@ -146,7 +148,7 @@ export const useStandaloneSubtitles = (
         default: isDefault,
       };
     } catch (error) {
-      console.error(`转换字幕到 VTT 失败:`, error);
+      console.error(`Failed to convert subtitle to VTT:`, error);
       return null;
     }
   };
@@ -222,7 +224,7 @@ export const useStandaloneSubtitles = (
       }
     } catch (error) {
       console.error('Error loading files:', error);
-      showToast('error', '加载文件失败');
+      showToast('error', t('proofread.standalone.loadFailed'));
     } finally {
       setIsLoading(false);
     }
@@ -334,11 +336,11 @@ export const useStandaloneSubtitles = (
       }
 
       setIsDirty(false);
-      showToast('success', '字幕保存成功');
+      showToast('success', t('proofread.standalone.saveSuccess'));
       return true;
     } catch (error) {
       console.error('Error saving subtitles:', error);
-      showToast('error', '保存失败');
+      showToast('error', t('proofread.standalone.saveFailed'));
       return false;
     }
   };

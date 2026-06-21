@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "../lib/i18n";
 import { Languages, AlertCircle, CheckCircle, Eye, EyeOff } from "lucide-react";
 import {
   listTranslationProviders,
@@ -85,6 +86,7 @@ function writeSecretDraft(providerId: string, field: string, value: string) {
 }
 
 export default function TranslationPage() {
+  const { t, locale } = useI18n();
   const [providers, setProviders] = useState<TranslationProvider[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [selectedProvider, setSelectedProvider] = useState("");
@@ -114,7 +116,7 @@ export default function TranslationPage() {
   const availableProviderNames = providers
     .filter((provider) => provider.implemented)
     .map((provider) => provider.name)
-    .join("、");
+    .join(locale === "en" ? ", " : "、");
 
   useEffect(() => {
     if (!selectedProvider || !settings) return;
@@ -143,7 +145,7 @@ export default function TranslationPage() {
               configured[field] = await hasProviderSecret(selectedProvider, field);
             }
           } catch (e) {
-            console.error(`检查密钥 ${field} 失败`, e);
+            console.error(`Failed to check key ${field}`, e);
             configured[field] = false;
           }
         }
@@ -178,7 +180,7 @@ export default function TranslationPage() {
   const handleSaveProvider = async () => {
     if (!settings || !selectedProvider) return;
     if (selectedProviderUnavailable) {
-      setError(`${selectedProviderInfo?.name ?? selectedProvider} 暂未接入，请选择已可用的翻译服务。`);
+      setError(t("translation.notImplementedSelectError").replace("{name}", selectedProviderInfo?.name ?? selectedProvider));
       return;
     }
     if (!validateSelectedProviderConfig()) return;
@@ -223,9 +225,9 @@ export default function TranslationPage() {
         setSecretConfigured(confirmedConfigured);
         setSecrets(confirmedSecrets);
         setError(
-          `${selectedProviderInfo?.name ?? selectedProvider} 没有保存成功：${missingSecrets
-            .map(secretFieldLabel)
-            .join("、")} 为空。`
+          t("translation.saveSecretsMissing")
+            .replace("{name}", selectedProviderInfo?.name ?? selectedProvider)
+            .replace("{secrets}", missingSecrets.map(secretFieldLabel).join(locale === "en" ? ", " : "、"))
         );
         return;
       }
@@ -238,7 +240,7 @@ export default function TranslationPage() {
       for (const field of selectedProviderInfo?.secret_fields || []) {
         writeSecretDraft(selectedProvider, field, "");
       }
-      setSuccessMsg("配置及密钥保存成功");
+      setSuccessMsg(t("translation.saveSuccess"));
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -247,11 +249,11 @@ export default function TranslationPage() {
 
   const handleTest = async () => {
     if (!selectedProvider) {
-      setError("请先选择翻译 provider");
+      setError(t("translation.providerPrereq"));
       return;
     }
     if (selectedProviderUnavailable) {
-      setError(`${selectedProviderInfo?.name ?? selectedProvider} 暂未接入，请选择已可用的翻译服务。`);
+      setError(t("translation.notImplementedSelectError").replace("{name}", selectedProviderInfo?.name ?? selectedProvider));
       return;
     }
     if (!validateSelectedProviderConfig()) return;
@@ -282,7 +284,7 @@ export default function TranslationPage() {
       if (resp.success) {
         setTestResult(resp.translated_text);
       } else {
-        setError(resp.error || "翻译失败");
+        setError(resp.error || t("translation.testFailed"));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -297,11 +299,11 @@ export default function TranslationPage() {
   const validateSelectedProviderConfig = () => {
     if (!selectedProviderInfo) return true;
     if (selectedProviderInfo.requires_endpoint && !apiUrl.trim()) {
-      setError(`${selectedProviderInfo.name} 需要填写端点 URL。`);
+      setError(t("translation.endpointMissing").replace("{name}", selectedProviderInfo.name));
       return false;
     }
     if (selectedProviderInfo.requires_model && !modelName.trim()) {
-      setError(`${selectedProviderInfo.name} 需要填写模型名称。`);
+      setError(t("translation.modelMissing").replace("{name}", selectedProviderInfo.name));
       return false;
     }
 
@@ -311,9 +313,9 @@ export default function TranslationPage() {
     });
     if (missingSecrets.length > 0) {
       setError(
-        `${selectedProviderInfo.name} 缺少必要凭据：${missingSecrets
-          .map(secretFieldLabel)
-          .join("、")}。`
+        t("translation.keyMissing")
+          .replace("{name}", selectedProviderInfo.name)
+          .replace("{secrets}", missingSecrets.map(secretFieldLabel).join(locale === "en" ? ", " : "、"))
       );
       return false;
     }
@@ -331,7 +333,7 @@ export default function TranslationPage() {
           setSecretDirty({});
           setSecrets({});
           setVisibleSecrets({});
-          setError(`${provider.name} 暂未接入，请选择已可用的翻译服务。`);
+          setError(t("translation.notImplementedSelectError").replace("{name}", provider.name));
           setTestResult("");
           return;
         }
@@ -351,13 +353,13 @@ export default function TranslationPage() {
             ? "border-gray-200 text-gray-600 hover:border-gray-300 dark:border-gray-600 dark:text-gray-400"
             : "border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-500"
       }`}
-      title={provider.implemented ? undefined : "暂未接入，后续版本开放"}
+      title={provider.implemented ? undefined : t("translation.notImplementedTitle")}
     >
       <span className="flex items-center justify-between gap-2">
         <span>{provider.name}</span>
         {!provider.implemented && (
           <span className="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-            暂未接入
+            {t("translation.notImplemented")}
           </span>
         )}
       </span>
@@ -366,15 +368,15 @@ export default function TranslationPage() {
 
   return (
     <div className="max-w-4xl pb-10">
-      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">翻译管理</h2>
+      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("translation.title")}</h2>
 
       {/* Provider 选择 */}
       <section className="mb-6 rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">翻译服务商</h3>
+        <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("translation.providers")}</h3>
 
         <div className="mb-4">
           <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-            API 服务商
+            {t("translation.apiProvider")}
           </label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {apiProviders.map(renderProviderButton)}
@@ -383,7 +385,7 @@ export default function TranslationPage() {
 
         <div className="mb-4">
           <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-            AI 服务商
+            {t("translation.aiProvider")}
           </label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {aiProviders.map(renderProviderButton)}
@@ -394,12 +396,12 @@ export default function TranslationPage() {
         {selectedProviderInfo && (selectedProviderInfo.requires_endpoint || selectedProviderInfo.requires_model || selectedProviderInfo.secret_fields?.length > 0) && (
           <div className="my-5 border-t border-gray-150 pt-5 dark:border-gray-700 space-y-4">
             <h4 className="font-semibold text-sm text-gray-900 dark:text-white">
-              配置 {selectedProviderInfo.name} 参数
+              {t("translation.configParams").replace("{name}", selectedProviderInfo.name)}
             </h4>
             
             {selectedProviderInfo.requires_endpoint && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">端点 URL</label>
+                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">{t("translation.endpointUrl")}</label>
                 <input
                   type="text"
                   value={apiUrl}
@@ -407,7 +409,7 @@ export default function TranslationPage() {
                   placeholder={
                     selectedProvider === CUSTOM_OPENAI_PROVIDER_ID
                       ? "https://your-gateway.example.com/v1"
-                      : selectedProviderInfo.default_endpoint || "请输入接口端点"
+                      : selectedProviderInfo.default_endpoint || t("translation.endpointPlaceholder")
                   }
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                 />
@@ -416,15 +418,15 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.requires_model && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">模型名称</label>
+                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">{t("translation.modelName")}</label>
                 <input
                   type="text"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
                   placeholder={
                     selectedProvider === CUSTOM_OPENAI_PROVIDER_ID
-                      ? "请输入你的网关模型名，例如 gpt-4o-mini"
-                      : "请输入模型名，例如 gpt-4o-mini"
+                      ? t("translation.modelPlaceholderOp")
+                      : t("translation.modelPlaceholder")
                   }
                   className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                 />
@@ -438,11 +440,11 @@ export default function TranslationPage() {
                 </label>
                 <div className="relative">
                   <input
-                    type={visibleSecrets[field] ? "text" : "password"}
-                    value={secrets[field] || ""}
-                    onChange={(e) => handleSecretChange(field, e.target.value)}
-                    placeholder="请输入密钥内容"
-                    className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 pr-10 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                     type={visibleSecrets[field] ? "text" : "password"}
+                     value={secrets[field] || ""}
+                     onChange={(e) => handleSecretChange(field, e.target.value)}
+                     placeholder={t("translation.keyPlaceholder")}
+                     className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 pr-10 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                   />
                   <button
                     type="button"
@@ -450,18 +452,18 @@ export default function TranslationPage() {
                       setVisibleSecrets((prev) => ({ ...prev, [field]: !prev[field] }));
                     }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-600 dark:hover:text-gray-100"
-                    title={visibleSecrets[field] ? "隐藏密钥" : "显示密钥"}
+                    title={visibleSecrets[field] ? t("translation.hideKey") : t("translation.showKey")}
                   >
                     {visibleSecrets[field] ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
                 {secretDirty[field] && secrets[field]?.trim() ? (
                   <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                    待点击“保存选择与配置”写入本机 Keychain
+                    {t("translation.toSaveKeychain")}
                   </p>
                 ) : secretConfigured[field] ? (
                   <p className="mt-1 text-[11px] text-green-600 dark:text-green-400">
-                    已保存到本机 Keychain
+                    {t("translation.savedKeychain")}
                   </p>
                 ) : null}
               </div>
@@ -472,7 +474,7 @@ export default function TranslationPage() {
         {selectedProviderUnavailable && (
           <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
             <AlertCircle className="mt-0.5 shrink-0" size={16} />
-            <span>{selectedProviderInfo?.name} 暂未接入，请选择 {availableProviderNames}。</span>
+            <span>{t("translation.notImplementedSelect").replace("{name}", selectedProviderInfo?.name ?? "").replace("{available}", availableProviderNames)}</span>
           </div>
         )}
 
@@ -481,9 +483,9 @@ export default function TranslationPage() {
             onClick={handleSaveProvider}
             disabled={!selectedProvider || selectedProviderUnavailable}
             className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-            title={selectedProviderUnavailable ? "该服务暂未接入" : undefined}
+            title={selectedProviderUnavailable ? t("translation.notImplementedBtnTooltip") : undefined}
           >
-            保存选择与配置
+            {t("translation.saveBtn")}
           </button>
           {successMsg && (
             <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
@@ -495,11 +497,11 @@ export default function TranslationPage() {
 
       {/* 测试翻译 */}
       <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">测试翻译</h3>
+        <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("translation.testTitle")}</h3>
 
         <div className="mb-4">
           <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-            测试文本
+            {t("translation.testLabel")}
           </label>
           <textarea
             value={testText}
@@ -519,7 +521,7 @@ export default function TranslationPage() {
         {testResult && (
           <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 dark:border-green-900/60 dark:bg-green-950/30">
             <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300 mb-1">
-              <CheckCircle size={14} /> 翻译结果
+              <CheckCircle size={14} /> {t("translation.testResult")}
             </div>
             <p className="text-sm text-gray-800 dark:text-gray-200">{testResult}</p>
           </div>
@@ -529,14 +531,14 @@ export default function TranslationPage() {
           onClick={handleTest}
           disabled={testing || !selectedProvider || selectedProviderUnavailable}
           className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          title={selectedProviderUnavailable ? "该服务暂未接入" : undefined}
+          title={selectedProviderUnavailable ? t("translation.notImplementedBtnTooltip") : undefined}
         >
           <Languages size={14} />
-          {testing ? "翻译中..." : "测试翻译"}
+          {testing ? t("translation.testingBtn") : t("translation.testBtn")}
         </button>
 
         <p className="mt-3 text-xs text-gray-400">
-          注意：API 服务商需要配置端点和 API Key 才能使用。Ollama 可直接使用本地服务；自定义 OpenAI 兼容可接入私有网关或第三方兼容接口。
+          {t("translation.testNotice")}
         </p>
       </section>
     </div>

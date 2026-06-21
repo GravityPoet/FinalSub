@@ -12,6 +12,7 @@ import {
 } from './proofreadUtils';
 import { loadProofreadTasks, saveProofreadTasks } from '../../lib/tauri';
 import { ToastProvider } from './Toast';
+import { useI18n } from '../../lib/i18n';
 
 type WorkflowStage = 'import' | 'list' | 'edit';
 
@@ -31,6 +32,7 @@ export async function persistProofreadTasks(tasks: ProofreadTask[]): Promise<voi
 }
 
 export default function ProofreadPage() {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<'new' | 'history'>('new');
   const [stage, setStage] = useState<WorkflowStage>('import');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -132,7 +134,7 @@ export default function ProofreadPage() {
       const newId = Math.random().toString(36).substring(2, 11);
       const newTask: ProofreadTask = {
         id: newId,
-        name: taskName || pendingFiles[0]?.fileName?.replace(/\.[^.]+$/, '') || '未命名任务',
+        name: taskName || pendingFiles[0]?.fileName?.replace(/\.[^.]+$/, '') || t('proofread.unnamedTask'),
         createdAt: Date.now(),
         updatedAt: Date.now(),
         items,
@@ -225,7 +227,7 @@ export default function ProofreadPage() {
             }`}
           >
             <Plus className="w-3.5 h-3.5 mr-1.5" />
-            新建任务
+            {t('proofread.newTask')}
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -236,7 +238,7 @@ export default function ProofreadPage() {
             }`}
           >
             <History className="w-3.5 h-3.5 mr-1.5" />
-            历史任务
+            {t('proofread.historyTasks')}
           </button>
         </div>
 

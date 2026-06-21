@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "../lib/i18n";
 import { listen } from "@tauri-apps/api/event";
 import {
   scanModels,
@@ -18,6 +19,7 @@ function StatusBadge({
   status: AsrModelInfo["status"];
   downloadInfo?: ModelDownloadProgress;
 }) {
+  const { t } = useI18n();
   const currentStatus = downloadInfo ? downloadInfo.status : status;
   const errorMsg =
     downloadInfo && downloadInfo.status === "error"
@@ -29,55 +31,46 @@ function StatusBadge({
   if (currentStatus === "available")
     return (
       <span className="flex items-center gap-1 text-blue-600">
-        <Download size={14} /> 未安装
+        <Download size={14} /> {t("models.notInstalled")}
       </span>
     );
   if (currentStatus === "downloaded" || currentStatus === "done")
     return (
       <span className="flex items-center gap-1 text-green-600">
-        <CheckCircle size={14} /> 已下载
+        <CheckCircle size={14} /> {t("models.downloaded")}
       </span>
     );
   if (currentStatus === "downloading") {
     const pct = downloadInfo ? Math.round(downloadInfo.progress * 100) : 0;
     return (
       <span className="flex items-center gap-1 text-yellow-600 font-medium">
-        <Clock size={14} className="animate-spin" /> 下载中 ({pct}%)
+        <Clock size={14} className="animate-spin" /> {t("models.downloading")} ({pct}%)
       </span>
     );
   }
   if (currentStatus === "cancelled")
     return (
       <span className="flex items-center gap-1 text-gray-400">
-        <XCircle size={14} /> 已取消
+        <XCircle size={14} /> {t("models.cancelled")}
       </span>
     );
   if (currentStatus === "not-ready")
     return (
       <span className="flex items-center gap-1 text-gray-400">
-        <Clock size={14} /> 使用时准备
+        <Clock size={14} /> {t("models.lazyLoad")}
       </span>
     );
   if (currentStatus === "error" || errorMsg)
     return (
-      <span className="flex items-center gap-1 text-red-600" title={errorMsg || "未知错误"}>
-        <AlertCircle size={14} /> 错误
+      <span className="flex items-center gap-1 text-red-600" title={errorMsg || t("common.error")}>
+        <AlertCircle size={14} /> {t("models.error")}
       </span>
     );
   return null;
 }
 
-function engineLabel(engineId: string): string {
-  const labels: Record<string, string> = {
-    "whisper-cpp": "Whisper.cpp",
-    "parakeet-mlx": "Parakeet MLX",
-    sensevoice: "SenseVoice",
-    "custom-command": "自定义命令",
-  };
-  return labels[engineId] ?? engineId;
-}
-
 export default function ModelsPage() {
+  const { t } = useI18n();
   const [models, setModels] = useState<AsrModelInfo[]>([]);
   const [downloads, setDownloads] = useState<Record<string, ModelDownloadProgress>>({});
   const [loading, setLoading] = useState(true);
@@ -86,6 +79,16 @@ export default function ModelsPage() {
   const [modelsPath, setModelsPath] = useState("~/Tools/Local-LLM/whisper-models");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
+  const engineLabel = (engineId: string): string => {
+    const labels: Record<string, string> = {
+      "whisper-cpp": "Whisper.cpp",
+      "parakeet-mlx": "Parakeet MLX",
+      sensevoice: "SenseVoice",
+      "custom-command": t("models.customCommand"),
+    };
+    return labels[engineId] ?? engineId;
+  };
+
   const refresh = () => {
     setLoading(true);
     Promise.all([scanModels(), getSettings()])
@@ -93,7 +96,7 @@ export default function ModelsPage() {
         setModels(nextModels);
         setModelsPath(settings.models_path);
       })
-      .catch((err) => setMessage({ type: "err", text: `扫描模型失败：${err}` }))
+      .catch((err) => setMessage({ type: "err", text: `${t("models.scanFailed")}${err}` }))
       .finally(() => setLoading(false));
   };
 
@@ -126,7 +129,7 @@ export default function ModelsPage() {
     setDeleting(modelId);
     try {
       await deleteModel(modelId);
-      setMessage({ type: "ok", text: "模型已删除" });
+      setMessage({ type: "ok", text: t("models.deleted") });
       setDownloads((prev) => {
         const next = { ...prev };
         delete next[modelId];
@@ -134,7 +137,7 @@ export default function ModelsPage() {
       });
       refresh();
     } catch (err) {
-      setMessage({ type: "err", text: `删除失败：${err}` });
+      setMessage({ type: "err", text: `${t("models.deleteFailed")}${err}` });
     } finally {
       setDeleting(null);
       setPendingDelete(null);
@@ -157,7 +160,7 @@ export default function ModelsPage() {
       }));
       await downloadModel(modelId);
     } catch (err) {
-      setMessage({ type: "err", text: `启动下载失败：${err}` });
+      setMessage({ type: "err", text: `${t("models.downloadStartFailed")}${err}` });
       setDownloads((prev) => {
         const next = { ...prev };
         delete next[modelId];
@@ -170,11 +173,11 @@ export default function ModelsPage() {
     try {
       await cancelModelDownload(modelId);
     } catch (err) {
-      setMessage({ type: "err", text: `取消下载失败：${err}` });
+      setMessage({ type: "err", text: `${t("models.downloadCancelFailed")}${err}` });
     }
   };
 
-  if (loading && models.length === 0) return <div className="text-gray-500">正在扫描模型...</div>;
+  if (loading && models.length === 0) return <div className="text-gray-500">{t("models.scanning")}</div>;
 
   const visibleModels = models.filter(
     (model) => model.engine_id !== "sensevoice" && model.engine_id !== "custom-command"
@@ -187,12 +190,12 @@ export default function ModelsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">ASR 语音识别模型</h2>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{t("models.title")}</h2>
         <button
           onClick={refresh}
           className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
         >
-          <RefreshCw size={16} /> 刷新
+          <RefreshCw size={16} /> {t("models.refresh")}
         </button>
       </div>
 
@@ -252,16 +255,16 @@ export default function ModelsPage() {
                             className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300"
                           >
                             <Download size={12} />
-                            应用内下载
+                            {t("models.downloadAction")}
                           </button>
                         )}
                         {isDownloading && (
                           <button
                             type="button"
                             onClick={() => handleCancelDownload(model.id)}
-                            className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300"
+                            className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-blue-300"
                           >
-                            取消
+                            {t("models.cancelAction")}
                           </button>
                         )}
                         {downloadInfo?.status === "error" && (
@@ -270,7 +273,7 @@ export default function ModelsPage() {
                             onClick={() => handleDownload(model.id)}
                             className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300"
                           >
-                            重试下载
+                            {t("models.retryAction")}
                           </button>
                         )}
                         {model.status === "downloaded" && model.engine_id === "whisper-cpp" && (
@@ -279,7 +282,7 @@ export default function ModelsPage() {
                             onClick={() => setPendingDelete(model)}
                             disabled={deleting === model.id}
                             className="text-red-500 hover:text-red-700 disabled:opacity-50"
-                            title="删除模型"
+                            title={t("models.deleteAction")}
                           >
                             <Trash2 size={14} />
                           </button>
@@ -322,9 +325,9 @@ export default function ModelsPage() {
                 <AlertCircle size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-gray-900 dark:text-white">删除模型</h3>
+                <h3 className="font-semibold text-gray-900 dark:text-white">{t("models.deleteModalTitle")}</h3>
                 <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  将从本机移除 {pendingDelete.name}，需要时可以重新下载。
+                  {t("models.deleteModalDesc").replace("{name}", pendingDelete.name)}
                 </p>
               </div>
             </div>
@@ -335,7 +338,7 @@ export default function ModelsPage() {
                 disabled={deleting === pendingDelete.id}
                 className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
               >
-                取消
+                {t("models.deleteModalCancel")}
               </button>
               <button
                 type="button"
@@ -343,7 +346,7 @@ export default function ModelsPage() {
                 disabled={deleting === pendingDelete.id}
                 className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
               >
-                {deleting === pendingDelete.id ? "删除中..." : "删除"}
+                {deleting === pendingDelete.id ? t("models.deleting") : t("models.deleteModalConfirm")}
               </button>
             </div>
           </div>
@@ -351,9 +354,9 @@ export default function ModelsPage() {
       )}
 
       <div className="mt-6 text-xs text-gray-400 space-y-1">
-        <p>Whisper 模型路径：{modelsPath}</p>
-        <p>模型会自动下载并安全放置到上述目录。下载过程可随时取消，失败后可一键重试。</p>
-        <p>Parakeet 模型：首次使用时自动缓存，无需手动下载；需要本机已安装 uv。</p>
+        <p>{t("models.pathInfo")}{modelsPath}</p>
+        <p>{t("models.pathDesc")}</p>
+        <p>{t("models.parakeetDesc")}</p>
       </div>
     </div>
   );

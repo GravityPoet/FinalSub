@@ -3,31 +3,18 @@ import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings } from "luc
 import { useI18n } from "../lib/i18n";
 
 const navItems = [
-  { to: "/", label: "任务", icon: FileVideo2 },
-  { to: "/tasks", label: "任务队列", icon: ListTodo },
-  { to: "/models", label: "模型管理", icon: Bot },
-  { to: "/translation", label: "翻译管理", icon: Languages },
-  { to: "/proofread", label: "字幕校对", icon: Edit3 },
-  { to: "/subtitle-merge", label: "视频合字幕", icon: Film },
-  { to: "/settings", label: "设置", icon: Settings },
-];
+  { to: "/", key: "nav.tasks", icon: FileVideo2 },
+  { to: "/tasks", key: "nav.queue", icon: ListTodo },
+  { to: "/models", key: "nav.models", icon: Bot },
+  { to: "/translation", key: "nav.translation", icon: Languages },
+  { to: "/proofread", key: "nav.proofread", icon: Edit3 },
+  { to: "/subtitle-merge", key: "nav.merge", icon: Film },
+  { to: "/settings", key: "nav.settings", icon: Settings },
+] as const;
 
 export default function Layout() {
   const location = useLocation();
   const { t } = useI18n();
-
-  const getNavLabel = (key: string) => {
-    switch (key) {
-      case "任务": return t("nav.tasks");
-      case "任务队列": return t("nav.queue");
-      case "模型管理": return t("nav.models");
-      case "翻译管理": return t("nav.translation");
-      case "字幕校对": return t("nav.proofread");
-      case "视频合字幕": return t("nav.merge");
-      case "设置": return t("nav.settings");
-      default: return key;
-    }
-  };
 
   return (
     <div className="flex min-h-screen flex-col bg-gray-50 dark:bg-gray-900 sm:flex-row">
@@ -36,7 +23,7 @@ export default function Layout() {
           <h1 className="text-lg font-bold text-gray-900 dark:text-white">FinalSub</h1>
         </div>
         <nav className="flex gap-2 overflow-x-auto p-2 sm:block sm:flex-1 sm:space-y-1">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {navItems.map(({ to, key, icon: Icon }) => (
             <Link
               key={to}
               to={to}
@@ -47,7 +34,7 @@ export default function Layout() {
               }`}
             >
               <Icon size={18} />
-              {getNavLabel(label)}
+              {t(key)}
             </Link>
           ))}
         </nav>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { formatTime } from '../useVideoPlayer';
 import { Subtitle } from '../useStandaloneSubtitles';
+import { useI18n } from '../../../lib/i18n';
 
 interface CurrentSubtitleProps {
   currentSubtitleIndex: number;
@@ -19,6 +20,8 @@ const CurrentSubtitle: React.FC<CurrentSubtitleProps> = ({
   shouldShowTranslation,
   hasTranslationFile,
 }) => {
+  const { t } = useI18n();
+
   const currentSubtitle =
     currentSubtitleIndex >= 0 && currentSubtitleIndex < mergedSubtitles.length
       ? mergedSubtitles[currentSubtitleIndex]
@@ -27,7 +30,7 @@ const CurrentSubtitle: React.FC<CurrentSubtitleProps> = ({
   return (
     <div className="p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl mb-4 shadow-lg">
       <div className="flex justify-between items-center mb-3">
-        <div className="text-xs font-semibold text-slate-400">当前字幕</div>
+        <div className="text-xs font-semibold text-slate-400">{t('proofread.current.title')}</div>
         <div className="text-xs font-medium text-slate-400">
           {formatTime(currentTime)} / {formatTime(duration)}
         </div>
@@ -53,7 +56,7 @@ const CurrentSubtitle: React.FC<CurrentSubtitleProps> = ({
         </div>
       ) : (
         <div className="text-sm text-slate-500 p-2 italic text-center">
-          当前时间点无字幕
+          {t('proofread.current.empty')}
         </div>
       )}
     </div>
