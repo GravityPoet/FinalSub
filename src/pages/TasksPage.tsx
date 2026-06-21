@@ -1,23 +1,30 @@
 import { useEffect, useState, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useI18n } from "../lib/i18n";
 import {
   cancelTask,
+  deleteTask,
+  deleteTasks,
   pauseTask,
   resumeTask,
   retryTask,
   getTaskLogs,
   listTasks,
+  TASK_DELETED_EVENT,
   TASK_UPDATED_EVENT,
   type Task,
+  type TaskDeletedPayload,
 } from "../lib/tauri";
 import {
+  AlertCircle,
   RefreshCw,
   XCircle,
   Play,
   Pause,
   RotateCcw,
   FileText,
+  Trash2,
   X,
   Copy,
   CheckCircle,
@@ -75,13 +82,38 @@ function upsertTask(tasks: Task[], task: Task): Task[] {
   return sortTasks(next);
 }
 
+function canDeleteTask(task: Task): boolean {
+  return ["done", "error", "cancelled", "paused"].includes(task.status);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function TasksPage() {
+  const { t, locale } = useI18n();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeLogTaskId, setActiveLogTaskId] = useState<string | null>(null);
   const [logsText, setLogsText] = useState("");
   const [copied, setCopied] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [pendingDeleteTaskIds, setPendingDeleteTaskIds] = useState<string[] | null>(null);
+  const [deletingTaskIds, setDeletingTaskIds] = useState<string[]>([]);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const logContainerRef = useRef<HTMLPreElement>(null);
+
+  const deletableTasks = tasks.filter(canDeleteTask);
+  const selectedDeletableIds = selectedTaskIds.filter((taskId) =>
+    deletableTasks.some((task) => task.id === taskId),
+  );
+  const allDeletableSelected =
+    deletableTasks.length > 0 && selectedDeletableIds.length === deletableTasks.length;
+  const pendingDeleteTasks = pendingDeleteTaskIds
+    ? pendingDeleteTaskIds
+        .map((taskId) => tasks.find((task) => task.id === taskId))
+        .filter((task): task is Task => Boolean(task))
+    : [];
 
   const handleOpenFolder = async (outputPath: string) => {
     try {
@@ -110,6 +142,7 @@ export default function TasksPage() {
   useEffect(() => {
     let mounted = true;
     let unlisten: (() => void) | undefined;
+    let unlistenDelete: (() => void) | undefined;
 
     refresh();
     listen<Task>(TASK_UPDATED_EVENT, (event) => {
@@ -122,12 +155,32 @@ export default function TasksPage() {
         cleanup();
       }
     }).catch(console.error);
+    listen<TaskDeletedPayload>(TASK_DELETED_EVENT, (event) => {
+      const deletedTaskId = event.payload.task_id;
+      setTasks((currentTasks) => currentTasks.filter((task) => task.id !== deletedTaskId));
+      setSelectedTaskIds((currentIds) => currentIds.filter((taskId) => taskId !== deletedTaskId));
+      setActiveLogTaskId((currentTaskId) =>
+        currentTaskId === deletedTaskId ? null : currentTaskId,
+      );
+    }).then((cleanup) => {
+      if (mounted) {
+        unlistenDelete = cleanup;
+      } else {
+        cleanup();
+      }
+    }).catch(console.error);
 
     return () => {
       mounted = false;
       unlisten?.();
+      unlistenDelete?.();
     };
   }, []);
+
+  useEffect(() => {
+    const deletableIds = new Set(tasks.filter(canDeleteTask).map((task) => task.id));
+    setSelectedTaskIds((currentIds) => currentIds.filter((taskId) => deletableIds.has(taskId)));
+  }, [tasks]);
 
   // Listen to logs when activeLogTaskId is set
   useEffect(() => {
@@ -197,6 +250,55 @@ export default function TasksPage() {
     }
   };
 
+  const removeDeletedTasksFromView = (deletedTaskIds: string[]) => {
+    const deletedSet = new Set(deletedTaskIds);
+    setTasks((currentTasks) => currentTasks.filter((task) => !deletedSet.has(task.id)));
+    setSelectedTaskIds((currentIds) => currentIds.filter((taskId) => !deletedSet.has(taskId)));
+    setActiveLogTaskId((currentTaskId) =>
+      currentTaskId && deletedSet.has(currentTaskId) ? null : currentTaskId,
+    );
+  };
+
+  const handleToggleSelectTask = (taskId: string) => {
+    setSelectedTaskIds((currentIds) =>
+      currentIds.includes(taskId)
+        ? currentIds.filter((selectedTaskId) => selectedTaskId !== taskId)
+        : [...currentIds, taskId],
+    );
+  };
+
+  const handleToggleSelectAll = () => {
+    setSelectedTaskIds(allDeletableSelected ? [] : deletableTasks.map((task) => task.id));
+  };
+
+  const openDeleteDialog = (taskIds: string[]) => {
+    setDeleteError(null);
+    setPendingDeleteTaskIds(taskIds);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteTaskIds || pendingDeleteTaskIds.length === 0) {
+      return;
+    }
+
+    setDeletingTaskIds(pendingDeleteTaskIds);
+    setDeleteError(null);
+    try {
+      const deletedTaskIds =
+        pendingDeleteTaskIds.length === 1
+          ? [await deleteTask(pendingDeleteTaskIds[0])]
+          : await deleteTasks(pendingDeleteTaskIds);
+      removeDeletedTasksFromView(deletedTaskIds);
+      setPendingDeleteTaskIds(null);
+    } catch (error) {
+      const message = errorMessage(error);
+      setDeleteError(message);
+      console.error("删除任务失败", error);
+    } finally {
+      setDeletingTaskIds([]);
+    }
+  };
+
   const handleCopyLogs = () => {
     navigator.clipboard.writeText(logsText).then(() => {
       setCopied(true);
@@ -206,31 +308,73 @@ export default function TasksPage() {
 
   return (
     <div className="max-w-5xl">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white font-sans tracking-tight">任务队列</h2>
-        <button
-          onClick={refresh}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition shadow-sm"
-        >
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> 刷新
-        </button>
+      <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white font-sans tracking-tight">{t("tasks.title")}</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {tasks.length > 0 && (
+            <>
+              <label className="inline-flex h-8 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={allDeletableSelected}
+                  disabled={deletableTasks.length === 0}
+                  onChange={handleToggleSelectAll}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 disabled:opacity-40"
+                />
+                {locale === "en" ? "Select all deletable" : "全选可删除"}
+              </label>
+              <button
+                type="button"
+                onClick={() => openDeleteDialog(selectedDeletableIds)}
+                disabled={selectedDeletableIds.length === 0}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+              >
+                <Trash2 size={14} />
+                {(locale === "en" ? "Delete selected" : "删除选中") + (selectedDeletableIds.length > 0 ? ` ${selectedDeletableIds.length}` : "")}
+              </button>
+            </>
+          )}
+          <button
+            onClick={refresh}
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-600 shadow-sm transition hover:border-gray-300 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-white"
+          >
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> {locale === "en" ? "Refresh" : "刷新"}
+          </button>
+        </div>
       </div>
 
       {loading && tasks.length === 0 ? (
-        <div className="text-gray-500 py-10 text-center dark:text-gray-400">正在加载任务...</div>
+        <div className="text-gray-500 py-10 text-center dark:text-gray-400">{locale === "en" ? "Loading tasks..." : "正在加载任务..."}</div>
       ) : tasks.length === 0 ? (
         <div className="text-gray-500 bg-white dark:bg-gray-800 rounded-xl py-12 px-6 text-center border border-gray-200 dark:border-gray-700 shadow-sm">
-          <p className="text-base font-medium">暂无任务</p>
-          <p className="text-xs text-gray-400 mt-1">提交音视频文件转录或字幕翻译后将在此处显示进度。</p>
+          <p className="text-base font-medium">{locale === "en" ? "No Tasks" : "暂无任务"}</p>
+          <p className="text-xs text-gray-400 mt-1">
+            {locale === "en" ? "Progress of media transcription or subtitle translation will be shown here." : "提交音视频文件转录或字幕翻译后将在此处显示进度。"}
+          </p>
         </div>
       ) : (
         <div className="space-y-4">
           {tasks.map((task) => (
             <div
               key={task.id}
-              className="bg-white dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700 shadow-sm transition hover:shadow-md"
+              className={`rounded-xl border p-5 shadow-sm transition hover:shadow-md ${
+                selectedTaskIds.includes(task.id)
+                  ? "border-blue-200 bg-blue-50/40 dark:border-blue-900/50 dark:bg-blue-950/20"
+                  : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
+              }`}
             >
-              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+                <div className="flex items-start pt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={selectedTaskIds.includes(task.id)}
+                    disabled={!canDeleteTask(task)}
+                    onChange={() => handleToggleSelectTask(task.id)}
+                    aria-label={`选择任务 ${task.media_name}`}
+                    title={canDeleteTask(task) ? "选择任务" : "运行中任务需先暂停或取消"}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 disabled:cursor-not-allowed disabled:opacity-35"
+                  />
+                </div>
                 <div className="min-w-0">
                   <h4 className="font-semibold text-gray-900 dark:text-white truncate text-base">{task.media_name}</h4>
                   <p className="mt-1.5 truncate text-xs text-gray-500 dark:text-gray-400" title={task.media_path}>
@@ -248,7 +392,7 @@ export default function TasksPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between sm:justify-end gap-3.5 border-t border-gray-100 dark:border-gray-700/60 pt-3 sm:pt-0 sm:border-0">
+                <div className="col-span-2 flex items-center justify-between gap-3.5 border-t border-gray-100 pt-3 dark:border-gray-700/60 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
                   <StatusPill status={task.status} />
 
                   <div className="flex items-center gap-1">
@@ -307,6 +451,17 @@ export default function TasksPage() {
                         className="p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-950/30 transition"
                       >
                         <XCircle size={16} />
+                      </button>
+                    )}
+                    {canDeleteTask(task) && (
+                      <button
+                        type="button"
+                        title="删除任务记录"
+                        onClick={() => openDeleteDialog([task.id])}
+                        disabled={deletingTaskIds.includes(task.id)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-700 hover:bg-red-50 disabled:opacity-45 dark:text-gray-500 dark:hover:text-red-300 dark:hover:bg-red-950/30 transition"
+                      >
+                        <Trash2 size={16} />
                       </button>
                     )}
                   </div>
@@ -375,6 +530,55 @@ export default function TasksPage() {
         </div>
       )}
 
+      {pendingDeleteTaskIds && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="rounded-full bg-red-50 p-2 text-red-600 dark:bg-red-950/40 dark:text-red-300">
+                <AlertCircle size={20} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-semibold text-gray-900 dark:text-white">
+                  删除{pendingDeleteTaskIds.length > 1 ? `${pendingDeleteTaskIds.length} 个` : ""}任务记录
+                </h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                  只会移除队列记录、日志和临时工作目录；原始媒体和已导出的文件不会被删除。
+                </p>
+                {pendingDeleteTasks.length > 0 && (
+                  <p className="mt-2 truncate text-xs text-gray-400" title={pendingDeleteTasks[0].media_name}>
+                    {pendingDeleteTasks[0].media_name}
+                    {pendingDeleteTaskIds.length > 1 && ` 等 ${pendingDeleteTaskIds.length} 个任务`}
+                  </p>
+                )}
+                {deleteError && (
+                  <p className="mt-2 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-600 dark:bg-red-950/30 dark:text-red-300">
+                    {deleteError}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteTaskIds(null)}
+                disabled={deletingTaskIds.length > 0}
+                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={deletingTaskIds.length > 0}
+                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deletingTaskIds.length > 0 ? "删除中..." : "删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Logs Modal */}
       {activeLogTaskId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
@@ -383,7 +587,7 @@ export default function TasksPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50">
               <div className="min-w-0">
                 <h3 className="text-base font-bold text-gray-900 dark:text-white truncate">
-                  任务日志
+                  {t("tasks.modal.title")}
                 </h3>
                 <p className="text-xs text-gray-400 font-mono truncate mt-0.5">
                   ID: {activeLogTaskId}
@@ -397,11 +601,11 @@ export default function TasksPage() {
                 >
                   {copied ? (
                     <>
-                      <CheckCircle size={12} className="text-green-500" /> 已复制
+                      <CheckCircle size={12} className="text-green-500" /> {t("tasks.modal.copied")}
                     </>
                   ) : (
                     <>
-                      <Copy size={12} /> 复制日志
+                      <Copy size={12} /> {t("tasks.modal.copy")}
                     </>
                   )}
                 </button>
@@ -420,13 +624,31 @@ export default function TasksPage() {
                 ref={logContainerRef}
                 className="w-full h-full overflow-y-auto text-xs text-green-400 font-mono whitespace-pre-wrap select-text leading-relaxed scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent"
               >
-                {logsText || "正在加载日志或暂无日志..."}
+                {logsText || (locale === "en" ? "Loading logs or no logs available..." : "正在加载日志或暂无日志...")}
               </pre>
             </div>
 
             {/* Modal Footer */}
             <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50 flex justify-end text-[10px] text-gray-400 dark:text-gray-500">
-              日志实时流式更新中
+              {(() => {
+                const activeLogTask = tasks.find((t) => t.id === activeLogTaskId);
+                switch (activeLogTask?.status) {
+                  case "running":
+                    return t("tasks.log.streaming");
+                  case "pending":
+                    return t("tasks.log.pending");
+                  case "paused":
+                    return t("tasks.log.paused");
+                  case "done":
+                    return t("tasks.log.done");
+                  case "error":
+                    return t("tasks.log.error");
+                  case "cancelled":
+                    return t("tasks.log.cancelled");
+                  default:
+                    return t("tasks.log.streaming");
+                }
+              })()}
             </div>
           </div>
         </div>

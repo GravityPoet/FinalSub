@@ -5,16 +5,49 @@ use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdat
 use crate::core::subtitle::SubtitleTrack;
 use crate::error::{FinalSubError, Result};
 
+#[derive(Debug, Clone)]
+pub struct WhisperOptions {
+    pub use_vad: bool,
+    pub vad_threshold: f64,
+    pub vad_min_speech_duration_ms: u32,
+    pub vad_min_silence_duration_ms: u32,
+    pub vad_max_speech_duration_s: u32,
+    pub vad_speech_pad_ms: u32,
+    pub vad_samples_overlap: f64,
+    pub whisper_command: String,
+    pub max_context: i32,
+    pub vad_model_path: Option<PathBuf>,
+}
+
+impl Default for WhisperOptions {
+    fn default() -> Self {
+        Self {
+            use_vad: false,
+            vad_threshold: 0.5,
+            vad_min_speech_duration_ms: 250,
+            vad_min_silence_duration_ms: 100,
+            vad_max_speech_duration_s: 0,
+            vad_speech_pad_ms: 0,
+            vad_samples_overlap: 0.1,
+            whisper_command: String::new(),
+            max_context: -1,
+            vad_model_path: None,
+        }
+    }
+}
+
 pub struct WhisperCppEngine {
     whisper_bin: PathBuf,
     models_dir: PathBuf,
+    options: WhisperOptions,
 }
 
 impl WhisperCppEngine {
-    pub fn new(whisper_bin: PathBuf, models_dir: PathBuf) -> Self {
+    pub fn new(whisper_bin: PathBuf, models_dir: PathBuf, options: WhisperOptions) -> Self {
         Self {
             whisper_bin,
             models_dir,
+            options,
         }
     }
 
@@ -122,15 +155,74 @@ impl AsrEngine for WhisperCppEngine {
             }
         }
 
-        progress
-            .send(ProgressUpdate {
-                progress: 0.2,
-                message: "正在转录...".into(),
-            })
-            .await
-            .ok();
+        if self.options.use_vad {
+            if let Some(ref vad_model) = self.options.vad_model_path {
+                args.push("--vad".to_string());
+                args.push("-vm".to_string());
+                args.push(vad_model.to_string_lossy().to_string());
+                
+                args.push("-vt".to_string());
+                args.push(self.options.vad_threshold.to_string());
+                
+                args.push("-vspd".to_string());
+                args.push(self.options.vad_min_speech_duration_ms.to_string());
+                
+                args.push("-vsd".to_string());
+                args.push(self.options.vad_min_silence_duration_ms.to_string());
+                
+                if self.options.vad_max_speech_duration_s > 0 {
+                    args.push("-vmsd".to_string());
+                    args.push(self.options.vad_max_speech_duration_s.to_string());
+                }
+                
+                args.push("-vp".to_string());
+                args.push(self.options.vad_speech_pad_ms.to_string());
+                
+                args.push("-vo".to_string());
+                args.push(self.options.vad_samples_overlap.to_string());
+            }
+        }
 
-        let mut cmd = tokio::process::Command::new(&self.whisper_bin);
+        if self.options.max_context != -1 {
+            args.push("-mc".to_string());
+            args.push(self.options.max_context.to_string());
+        }
+
+        let mut bin_path = self.whisper_bin.clone();
+        if !self.options.whisper_command.trim().is_empty() {
+            let custom_path = PathBuf::from(&self.options.whisper_command);
+            if custom_path.exists() {
+                bin_path = custom_path;
+                progress
+                    .send(ProgressUpdate {
+                        progress: 0.2,
+                        message: format!("正在启动自定义 whisper-cli：{}...", bin_path.display()),
+                    })
+                    .await
+                    .ok();
+            } else {
+                progress
+                    .send(ProgressUpdate {
+                        progress: 0.2,
+                        message: format!(
+                            "自定义 whisper-cli 路径不存在：{}，回退到默认路径",
+                            self.options.whisper_command
+                        ),
+                    })
+                    .await
+                    .ok();
+            }
+        } else {
+            progress
+                .send(ProgressUpdate {
+                    progress: 0.2,
+                    message: "正在转录...".into(),
+                })
+                .await
+                .ok();
+        }
+
+        let mut cmd = tokio::process::Command::new(&bin_path);
         cmd.args(&args);
         cmd.kill_on_drop(true);
 
@@ -228,6 +320,7 @@ mod tests {
         let engine = WhisperCppEngine::new(
             PathBuf::from("/usr/bin/whisper-cli"),
             PathBuf::from("/models"),
+            WhisperOptions::default(),
         );
         assert_eq!(
             engine.model_path("large-v3-turbo"),
@@ -258,6 +351,7 @@ mod tests {
         let engine = WhisperCppEngine::new(
             PathBuf::from("/usr/bin/whisper-cli"),
             PathBuf::from("/models"),
+            WhisperOptions::default(),
         );
         assert!(!engine.capabilities().supports_streaming);
         assert!(engine.capabilities().requires_model_download);

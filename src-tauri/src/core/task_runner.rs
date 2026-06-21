@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::AppHandle;
-#[cfg(not(debug_assertions))]
 use tauri::Manager;
 use tokio::sync::{watch, RwLock};
 
@@ -106,6 +105,51 @@ async fn run_task_impl(
         update_task_cancelled(app, tasks, task_id).await;
         return Ok(());
     }
+
+    // 2. 并发限流队列等待
+    update_task_progress(app, tasks.clone(), task_id, 0.0, "排队中，等待空闲并发槽...").await;
+    write_task_log(app, &app_config_dir, task_id, "任务进入队列，等待并发通道...").await;
+
+    let state = app.state::<crate::state::AppState>();
+    let sem = {
+        let lock = state.task_semaphore.lock().unwrap();
+        lock.clone()
+    };
+
+    let _permit = tokio::select! {
+        res = sem.acquire_owned() => {
+            match res {
+                Ok(p) => p,
+                Err(e) => return Err(format!("获取并发通道失败：{}", e)),
+            }
+        }
+        _ = cancel_rx.changed() => {
+            let current_status = {
+                let task_map = tasks.read().await;
+                task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
+            };
+            if current_status == TaskStatus::Paused {
+                write_task_log(app, &app_config_dir, task_id, "排队已暂停").await;
+                return Ok(());
+            }
+            update_task_cancelled(app, tasks, task_id).await;
+            return Ok(());
+        }
+    };
+
+    // 任务正式转入 Running 状态并启动
+    {
+        let mut task_map = tasks.write().await;
+        if let Some(t) = task_map.get_mut(task_id) {
+            t.status = TaskStatus::Running;
+            t.status_message = "正在运行...".into();
+            t.updated_at = chrono::Utc::now().to_rfc3339();
+            let t_clone = t.clone();
+            drop(task_map);
+            emit_task_update_internal(app, &t_clone);
+        }
+    }
+    write_task_log(app, &app_config_dir, task_id, "已获得并发通道，任务开始运行").await;
 
     let mut current_track: Option<SubtitleTrack> = None;
 
@@ -257,7 +301,50 @@ async fn run_task_impl(
                 "whisper-cpp" => {
                     let whisper_bin = resolve_sidecar(app, "whisper-cli")?;
                     let models_dir = whisper_models_dir(&app_config_dir)?;
-                    Box::new(WhisperCppEngine::new(whisper_bin, models_dir))
+                    let settings = crate::core::settings::load_settings(&app_config_dir)
+                        .map_err(|e| format!("加载设置失败：{}", e))?;
+                    
+                    #[cfg(debug_assertions)]
+                    let vad_model_path = {
+                        let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+                        let p1 = current_dir
+                            .join("src-tauri")
+                            .join("resources")
+                            .join("vad")
+                            .join("ggml-silero-v5.1.2.bin");
+                        if p1.exists() {
+                            Some(p1)
+                        } else {
+                            let p2 = current_dir
+                                .join("resources")
+                                .join("vad")
+                                .join("ggml-silero-v5.1.2.bin");
+                            if p2.exists() { Some(p2) } else { None }
+                        }
+                    };
+                    #[cfg(not(debug_assertions))]
+                    let vad_model_path = app
+                        .path()
+                        .resolve(
+                            "resources/vad/ggml-silero-v5.1.2.bin",
+                            tauri::path::BaseDirectory::Resource,
+                        )
+                        .ok();
+
+                    let options = crate::core::asr::whisper::WhisperOptions {
+                        use_vad: settings.use_vad,
+                        vad_threshold: settings.vad_threshold,
+                        vad_min_speech_duration_ms: settings.vad_min_speech_duration_ms,
+                        vad_min_silence_duration_ms: settings.vad_min_silence_duration_ms,
+                        vad_max_speech_duration_s: settings.vad_max_speech_duration_s,
+                        vad_speech_pad_ms: settings.vad_speech_pad_ms,
+                        vad_samples_overlap: settings.vad_samples_overlap,
+                        whisper_command: settings.whisper_command.clone(),
+                        max_context: settings.max_context,
+                        vad_model_path,
+                    };
+                    
+                    Box::new(WhisperCppEngine::new(whisper_bin, models_dir, options))
                 }
                 "parakeet-mlx" => {
                     let uv_bin = default_uv_bin_fallback();

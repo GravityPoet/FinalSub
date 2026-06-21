@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export const TASK_UPDATED_EVENT = "task-updated";
+export const TASK_DELETED_EVENT = "task-deleted";
 
 export interface AppInfo {
   version: string;
@@ -36,6 +37,10 @@ export interface Task {
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface TaskDeletedPayload {
+  task_id: string;
 }
 
 export interface AudioExtractPlan {
@@ -85,6 +90,14 @@ export async function createPreviewTask(mediaPath: string): Promise<Task> {
 
 export async function listTasks(): Promise<Task[]> {
   return invoke("list_tasks");
+}
+
+export async function deleteTask(taskId: string): Promise<string> {
+  return invoke("delete_task", { taskId });
+}
+
+export async function deleteTasks(taskIds: string[]): Promise<string[]> {
+  return invoke("delete_tasks", { taskIds });
 }
 
 export async function cancelTask(taskId: string): Promise<Task> {
@@ -245,6 +258,7 @@ export interface Settings {
   custom_temp_dir: string;
   whisper_command: string;
   max_context: number;
+  enable_telemetry: boolean;
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -320,4 +334,14 @@ export async function downloadModel(modelId: string): Promise<void> {
 
 export async function cancelModelDownload(modelId: string): Promise<void> {
   return invoke("cancel_model_download", { modelId });
+}
+
+export interface UpdateInfo {
+  latest_version: string;
+  url: string;
+  body: string | null;
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  return invoke("check_for_update");
 }
