@@ -1,5 +1,5 @@
 import { useMemo, useState, useCallback } from 'react';
-import { ArrowLeft, Check, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Check, Save, Loader2, AlertTriangle } from 'lucide-react';
 
 import { useStandaloneSubtitles } from './useStandaloneSubtitles';
 import { useVideoPlayer } from './useVideoPlayer';
@@ -65,6 +65,8 @@ export default function ProofreadEditor({
     // 光标位置
     handleCursorPositionChange,
     getCursorPosition,
+    isDirty,
+    setIsDirty,
   } = useStandaloneSubtitles(config, true);
 
   // 使用视频播放器 hook
@@ -96,6 +98,32 @@ export default function ProofreadEditor({
   // 外部触发器状态
   const [triggerAiOptimize, setTriggerAiOptimize] = useState(false);
   const [triggerSplit, setTriggerSplit] = useState(false);
+
+  // 冲突挽救确认框状态
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+
+  // 返回处理
+  const handleBackClick = useCallback(() => {
+    if (isDirty) {
+      setShowUnsavedDialog(true);
+    } else {
+      onBack();
+    }
+  }, [isDirty, onBack]);
+
+  const handleSaveAndExit = useCallback(async () => {
+    setShowUnsavedDialog(false);
+    const success = await handleSave();
+    if (success) {
+      onBack();
+    }
+  }, [handleSave, onBack]);
+
+  const handleDiscardAndExit = useCallback(() => {
+    setShowUnsavedDialog(false);
+    setIsDirty(false);
+    onBack();
+  }, [onBack, setIsDirty]);
 
   // 处理从字幕列表点击 AI 优化按钮
   const handleAiOptimizeClick = useCallback(
@@ -134,12 +162,12 @@ export default function ProofreadEditor({
   }
 
   return (
-    <div className="h-full flex flex-col bg-slate-900 text-slate-100 overflow-hidden">
+    <div className="h-full flex flex-col bg-slate-900 text-slate-100 overflow-hidden relative">
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between px-6 py-4 bg-slate-800/60 border-b border-slate-700/50 flex-shrink-0">
         <div className="flex items-center gap-4">
           <button
-            onClick={onBack}
+            onClick={handleBackClick}
             className="flex items-center text-xs text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-650 px-3.5 py-1.5 rounded-lg transition-colors font-medium border border-slate-600/30"
           >
             <ArrowLeft className="w-4 h-4 mr-1.5 text-slate-400" />
@@ -251,6 +279,46 @@ export default function ProofreadEditor({
           />
         </div>
       </div>
+
+      {/* 冲突挽救 Dialog */}
+      {showUnsavedDialog && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden text-slate-100 font-sans p-6 space-y-6">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-500 shrink-0">
+                <AlertTriangle size={24} />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-base font-bold text-slate-100">您有未保存的修改</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  检测到您对字幕进行了修改。如果在没有保存的情况下退出，这些修改将会丢失。请选择您的操作：
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              <button
+                onClick={handleSaveAndExit}
+                className="w-full text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg transition-colors shadow-lg shadow-blue-500/10"
+              >
+                保存并退出
+              </button>
+              <button
+                onClick={handleDiscardAndExit}
+                className="w-full text-xs font-semibold bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-800 py-2.5 rounded-lg transition-colors"
+              >
+                放弃修改
+              </button>
+              <button
+                onClick={() => setShowUnsavedDialog(false)}
+                className="w-full text-xs font-semibold bg-transparent hover:bg-slate-850 text-slate-400 py-2.5 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

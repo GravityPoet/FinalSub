@@ -13,11 +13,7 @@ import {
 } from './subtitleFormats';
 import { pathShim } from './subtitleDetector';
 
-// 定义 alert 弹窗兜底 toast
-const toast = {
-  success: (msg: string) => alert(msg),
-  error: (msg: string) => alert(msg),
-};
+import { useToast } from './Toast';
 
 export interface Subtitle {
   id: string;
@@ -78,6 +74,8 @@ export const useStandaloneSubtitles = (
   config: StandaloneSubtitlesConfig,
   isOpen: boolean,
 ) => {
+  const { showToast } = useToast();
+  const [isDirty, setIsDirty] = useState(false);
   const [mergedSubtitles, setMergedSubtitles] = useState<Subtitle[]>([]);
   const [videoPath, setVideoPath] = useState<string>('');
   const [currentSubtitleIndex, setCurrentSubtitleIndex] = useState(-1);
@@ -224,7 +222,7 @@ export const useStandaloneSubtitles = (
       }
     } catch (error) {
       console.error('Error loading files:', error);
-      toast.error('加载文件失败');
+      showToast('error', '加载文件失败');
     } finally {
       setIsLoading(false);
     }
@@ -280,7 +278,7 @@ export const useStandaloneSubtitles = (
   };
 
   // 保存字幕文件
-  const handleSave = async () => {
+  const handleSave = async (): Promise<boolean> => {
     try {
       const buildText = (sub: Subtitle, contentType: string): string => {
         if (contentType === 'source') {
@@ -335,10 +333,13 @@ export const useStandaloneSubtitles = (
         await writeTextFile(config.finalTargetSubtitlePath, content);
       }
 
-      toast.success('字幕保存成功');
+      setIsDirty(false);
+      showToast('success', '字幕保存成功');
+      return true;
     } catch (error) {
       console.error('Error saving subtitles:', error);
-      toast.error('保存失败');
+      showToast('error', '保存失败');
+      return false;
     }
   };
 
@@ -422,6 +423,7 @@ export const useStandaloneSubtitles = (
         if (prev === -1) return 1;
         return Math.min(prev + 1, maxHistoryLength - 1);
       });
+      setIsDirty(true);
     },
     [historyIndex],
   );
@@ -442,6 +444,7 @@ export const useStandaloneSubtitles = (
       setHistoryIndex(newIndex);
       setMergedSubtitles(JSON.parse(JSON.stringify(history[newIndex])));
       setEditSnapshot(null);
+      setIsDirty(true);
     }
   }, [historyIndex, history]);
 
@@ -452,6 +455,7 @@ export const useStandaloneSubtitles = (
       setHistoryIndex(newIndex);
       setMergedSubtitles(JSON.parse(JSON.stringify(history[newIndex])));
       setEditSnapshot(null);
+      setIsDirty(true);
     }
   }, [historyIndex, history]);
 
@@ -633,5 +637,7 @@ export const useStandaloneSubtitles = (
     handleSplitSubtitle,
     handleCursorPositionChange,
     getCursorPosition,
+    isDirty,
+    setIsDirty,
   };
 };

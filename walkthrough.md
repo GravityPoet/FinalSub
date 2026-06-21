@@ -138,3 +138,46 @@ works perfectly.
 > ⚠️ **诚实更正**：本报告早期版本曾声称 whisper-cli x86_64「经 Rosetta 实跑成功」，**该结论不成立**——本机未装 Rosetta，x86_64 二进制无法执行，SRT 从未生成。已更正为「仅静态验证」。
 
 **复核结论**：Phase 2 经修复 + 重建后，分发型路径零写死、双架构 sidecar **静态自包含**（`otool` 零 Homebrew，arm64 + x86_64 均确认）。**arm64 三引擎业务转录全实跑通过**；**x86_64 因本机未装 Rosetta 仅静态验证，运行闭环待 Intel Mac / CI**。产物与源码一致。
+
+---
+
+## 7. 审计修复：Keychain 后端、dispatch 测试、矩阵纠偏（2026-06-21）
+
+### 7.1 变更
+
+- `src-tauri/Cargo.toml`: `keyring = "3"` 改为 `keyring = { version = "3", features = ["apple-native", "windows-native"] }`。
+- `src-tauri/Cargo.lock`: 重新解析后新增 `security-framework` / `security-framework-sys` / `core-foundation` 相关依赖。
+- `src-tauri/src/commands/mod.rs`: 新增 ignored 手动单测 `keyring_native_backend_roundtrips_provider_secret`，用临时 `codex-keyring-roundtrip-*` account 验证真实 OS keyring 往返并清理。
+- `src-tauri/src/core/translation/mod.rs`: 重写 `implemented_providers_match_dispatch_table`，逐一检查每个 `implemented: true` provider 在 `translate_text` 的 `match req.provider.as_str()` 中存在 dispatch arm。
+- `MIGRATION_MATRIX.md`: 修正 provider 数量为 18、全 provider 当前均 `implemented: true`、Keychain 原生后端已启用、任务持久化/暂停/恢复/重试/日志流已有实现但仍需 E2E 验收。
+
+### 7.2 验证
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+# 83 passed; 0 failed; 1 ignored
+```
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml keyring_native_backend_roundtrips_provider_secret -- --ignored
+# commands::tests::keyring_native_backend_roundtrips_provider_secret ... ok
+```
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml core::translation::tests::implemented_providers_match_dispatch_table
+# 正常态：1 passed
+# 反向实验：临时移除 qwen dispatch arm 后失败，报 implemented provider `qwen` is missing a translate_text dispatch arm
+```
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml
+# Finished `dev` profile
+grep -c '^name = "security-framework"' src-tauri/Cargo.lock
+# 2
+```
+
+### 7.3 残余风险
+
+- 未在 App UI 内用用户真实 `custom-openai` key 重存并跑真实翻译任务；该验收需要真实密钥和交互环境。
+- Linux keyring 后端未启用；是否增加 `sync-secret-service` 涉及 Linux 构建依赖和产品目标，待用户决策。
+- provider `implemented` 策略仍未拍板；当前代码是 18 个 provider 全 true，复杂商业 provider 缺真实服务端 E2E。

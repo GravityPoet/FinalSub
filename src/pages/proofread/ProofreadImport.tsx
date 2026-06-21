@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { Video, FileText, FolderOpen } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { useToast } from './Toast';
 import {
   PendingFile,
   createPendingFileFromVideo,
@@ -20,6 +21,7 @@ interface ProofreadImportProps {
 export default function ProofreadImport({
   onImportComplete,
 }: ProofreadImportProps) {
+  const { showToast } = useToast();
 
   // 导入视频文件
   const handleImportVideos = useCallback(async () => {
@@ -98,7 +100,7 @@ export default function ProofreadImport({
       const { videos, subtitles } = scanResult;
 
       if (videos.length === 0 && subtitles.length === 0) {
-        alert('未找到视频或字幕文件');
+        showToast('error', '未找到视频或字幕文件');
         return;
       }
 

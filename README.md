@@ -19,17 +19,23 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/
 - 真实任务流水线（核心可用）：音频提取、ASR、翻译、字幕格式化写出（支持 srt, vtt, txt, lrc, ass）、取消强杀外部进程、任务状态更新
 - 预览任务创建、进度事件、取消和任务列表刷新
 - ASR 模型目录扫描和受管 Whisper 模型删除
+- Whisper 模型外部下载引导：打开模型下载页、显示真实模型目录、刷新后识别本地 `ggml-*.bin`
+- 翻译管理：Provider 配置、Keychain 密钥保存/检测、测试翻译；已接入 DeepLX、Ollama、豆包、DeepSeek、DeerAPI、Gemini、硅基流动、通义千问
 - 设置读写、重置、JSON 导入导出
+- 字幕校对基础流程：导入视频/字幕、检测同目录字幕、编辑、保存任务历史
 - 视频合字幕基础烧录命令
 - SRT/VTT/LRC/TXT/ASS 解析与格式化写出核心测试
 
-## 待迁移
+## 发布前缺口
 
-- SenseVoice 运行时验证
-- 商业翻译 provider 的真实 API Key/模型配置验收、字幕批量翻译
-- GUI 点击流端到端人工验收
-- 字幕校对编辑器
-- 视频合字幕进度解析、预览、取消
+- 内置模型下载、导入、checksum 校验和下载取消尚未实现；当前需要用户手动下载 Whisper `ggml-*.bin` 到模型目录
+- SenseVoice 运行时、自定义 ASR 命令尚未接入
+- 百度、谷歌、阿里云、火山、小牛、腾讯、讯飞、微软、Azure OpenAI 等 provider 仍为未接入状态
+- 商业翻译 provider 仍需真实 API Key/模型配置验收，字幕批量翻译和 AI 优化翻译未完整接入主流水线
+- 任务队列尚未持久化，暂停/恢复/重试和任务日志流未实现
+- 字幕校对仍需 GUI 点击流、复杂编辑能力和失败恢复验收
+- 视频合字幕进度解析、预览、取消尚未接入 UI
+- GUI 点击流端到端人工验收、Intel/x86_64 实机验收仍未完成
 - 正式发布签名与 notarization
 
 ## 验收命令

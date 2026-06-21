@@ -11,6 +11,7 @@ import {
   pendingFileToSaveFormat,
 } from './proofreadUtils';
 import { loadProofreadTasks, saveProofreadTasks } from '../../lib/tauri';
+import { ToastProvider } from './Toast';
 
 type WorkflowStage = 'import' | 'list' | 'edit';
 
@@ -212,41 +213,43 @@ export default function ProofreadPage() {
   };
 
   return (
-    <div className="h-full p-6 overflow-hidden flex flex-col bg-slate-900 text-slate-100">
-      <div className="flex-shrink-0 flex space-x-2 bg-slate-800/80 p-1.5 rounded-lg w-fit border border-slate-700/50 mb-4">
-        <button
-          onClick={() => setActiveTab('new')}
-          className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all ${
-            activeTab === 'new'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-          }`}
-        >
-          <Plus className="w-3.5 h-3.5 mr-1.5" />
-          新建任务
-        </button>
-        <button
-          onClick={() => setActiveTab('history')}
-          className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all ${
-            activeTab === 'history'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-          }`}
-        >
-          <History className="w-3.5 h-3.5 mr-1.5" />
-          历史任务
-        </button>
-      </div>
+    <ToastProvider>
+      <div className="h-full p-6 overflow-hidden flex flex-col bg-slate-900 text-slate-100">
+        <div className="flex-shrink-0 flex space-x-2 bg-slate-800/80 p-1.5 rounded-lg w-fit border border-slate-700/50 mb-4">
+          <button
+            onClick={() => setActiveTab('new')}
+            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all ${
+              activeTab === 'new'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            新建任务
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all ${
+              activeTab === 'history'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+            }`}
+          >
+            <History className="w-3.5 h-3.5 mr-1.5" />
+            历史任务
+          </button>
+        </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-        {activeTab === 'new' ? (
-          <div className="flex-1 overflow-auto">{renderStage()}</div>
-        ) : (
-          <div className="flex-1 overflow-auto">
-            <ProofreadTaskList onLoadTask={handleLoadTask} />
-          </div>
-        )}
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          {activeTab === 'new' ? (
+            <div className="flex-1 overflow-auto">{renderStage()}</div>
+          ) : (
+            <div className="flex-1 overflow-auto">
+              <ProofreadTaskList onLoadTask={handleLoadTask} />
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </ToastProvider>
   );
 }

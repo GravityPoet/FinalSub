@@ -44,8 +44,8 @@ export default function HomePage() {
   const [error, setError] = useState<string>("");
 
   const [taskType, setTaskType] = useState("generate-only");
-  const [engineId, setEngineId] = useState("whisper-cpp");
-  const [modelId, setModelId] = useState("large-v3-turbo");
+  const [engineId, setEngineId] = useState("parakeet-mlx");
+  const [modelId, setModelId] = useState("parakeet-tdt-0.6b-v2");
   const [sourceLanguage, setSourceLanguage] = useState("auto");
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [outputFormat, setOutputFormat] = useState("srt");
@@ -56,6 +56,11 @@ export default function HomePage() {
     listAsrModels().then(setModels).catch(console.error);
     getSettings()
       .then((s) => {
+        const nextEngineId = s.asr_engine || "parakeet-mlx";
+        setEngineId(nextEngineId);
+        if (nextEngineId === "parakeet-mlx") {
+          setModelId("parakeet-tdt-0.6b-v2");
+        }
         setTargetLanguage(s.target_language);
         setOutputFormat(s.subtitle_output_format);
       })
@@ -70,6 +75,14 @@ export default function HomePage() {
   const taskNeedsAsr = taskType !== "translate-only";
   const activeModel = models.find((m) => m.id === modelId && m.engine_id === engineId);
   const canStartTask = !taskNeedsAsr || Boolean(activeModel && (engineId !== "whisper-cpp" || activeModel.status === "downloaded"));
+  const selectedFileKind = taskType === "translate-only" ? "字幕文件" : "音视频文件";
+  const missingFileMessage = `请先选择${selectedFileKind}。`;
+  const modelUnavailableMessage = "请先在模型管理页下载 Whisper 模型，或切换到已安装模型。";
+  const prerequisiteHint = !selectedPath
+    ? `请选择${selectedFileKind}后再开始任务。`
+    : !canStartTask
+      ? modelUnavailableMessage
+      : "";
 
   const handleSelectMedia = async () => {
     setError("");
@@ -87,7 +100,11 @@ export default function HomePage() {
 
   const handleCreate = async () => {
     if (!selectedPath) {
-      setError(taskType === "translate-only" ? "请先选择字幕文件。" : "请先选择音视频文件。");
+      setError(missingFileMessage);
+      return;
+    }
+    if (!canStartTask) {
+      setError(modelUnavailableMessage);
       return;
     }
     setCreating(true);
@@ -146,7 +163,7 @@ export default function HomePage() {
               <div className="min-w-0">
                 <h3 className="font-semibold text-gray-900 dark:text-white">新建任务</h3>
                 <p className="truncate text-sm text-gray-500">
-                  {selectedPath ? fileNameFromPath(selectedPath) : "未选择文件"}
+                  {selectedPath ? fileNameFromPath(selectedPath) : `未选择${selectedFileKind}`}
                 </p>
               </div>
             </div>
@@ -299,22 +316,50 @@ export default function HomePage() {
               </div>
             )}
 
+            {prerequisiteHint && (
+              <div
+                id="task-prerequisite-hint"
+                className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+              >
+                <AlertCircle size={14} className="shrink-0" />
+                <span>{prerequisiteHint}</span>
+                {!selectedPath ? (
+                  <button
+                    type="button"
+                    onClick={handleSelectMedia}
+                    className="font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
+                  >
+                    现在选择
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => navigate("/models")}
+                    className="font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
+                  >
+                    打开模型管理
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* 操作按钮 */}
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
                 onClick={handleCreate}
-                disabled={!selectedPath || creating || !canStartTask}
+                disabled={creating}
+                aria-describedby={prerequisiteHint ? "task-prerequisite-hint" : undefined}
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-gray-700"
-                title={!canStartTask ? "请先在模型管理页下载对应的 Whisper 模型" : undefined}
+                title={prerequisiteHint || undefined}
               >
                 <Play size={16} />
-                {creating ? "正在创建..." : !canStartTask ? "模型未下载" : "开始任务"}
+                {creating ? "正在创建..." : "开始任务"}
               </button>
               <button
                 type="button"
                 onClick={handlePreview}
-                disabled={!selectedPath || creating || taskType === "translate-only"}
+                disabled={creating}
                 className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
                 title={taskType === "translate-only" ? "快速预览仅支持音视频任务" : undefined}
               >
@@ -342,16 +387,21 @@ export default function HomePage() {
             </div>
             <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
               <dt className="text-sm text-gray-500">FFmpeg</dt>
-              <dd className="min-w-0 break-words text-right font-mono text-sm text-gray-900 dark:text-gray-100">
-                {ffmpegVersion === "未找到" ? (
+              <dd className="min-w-0 text-right text-sm text-gray-900 dark:text-gray-100">
+                {ffmpegVersion === "检测中..." ? (
+                  <span className="text-gray-500">检测中</span>
+                ) : ffmpegVersion === "未找到" ? (
                   <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
                     <AlertCircle size={14} />
-                    未找到
+                    不可用
                   </span>
                 ) : (
-                  <span className="inline-flex items-start gap-1">
-                    <CheckCircle className="mt-0.5 shrink-0 text-green-600" size={14} />
-                    <span>{ffmpegVersion}</span>
+                  <span
+                    className="inline-flex items-center gap-1 text-green-700 dark:text-green-300"
+                    title={ffmpegVersion}
+                  >
+                    <CheckCircle className="shrink-0" size={14} />
+                    可用
                   </span>
                 )}
               </dd>

@@ -78,3 +78,36 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         updated_at: now,
     }
 }
+
+use std::path::{Path, PathBuf};
+
+pub fn tasks_path(app_config_dir: &Path) -> PathBuf {
+    app_config_dir.join("tasks").join("tasks.json")
+}
+
+pub fn load_tasks(app_config_dir: &Path) -> Result<HashMap<String, Task>, String> {
+    let path = tasks_path(app_config_dir);
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let tasks: Vec<Task> = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let mut map = HashMap::new();
+    for task in tasks {
+        map.insert(task.id.clone(), task);
+    }
+    Ok(map)
+}
+
+pub fn save_tasks(app_config_dir: &Path, tasks: &HashMap<String, Task>) -> Result<(), String> {
+    let path = tasks_path(app_config_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tasks_vec: Vec<&Task> = tasks.values().collect();
+    let content = serde_json::to_string_pretty(&tasks_vec).map_err(|e| e.to_string())?;
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, content).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}

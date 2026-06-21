@@ -32,6 +32,17 @@ pub fn get_app_info() -> AppInfo {
     }
 }
 
+fn validate_task_id(task_id: &str) -> Result<(), String> {
+    uuid::Uuid::parse_str(task_id)
+        .map(|_| ())
+        .map_err(|_| "任务 ID 格式异常".to_string())
+}
+
+async fn persist_tasks_snapshot(app_config_dir: &Path, tasks: &TaskMap) -> Result<(), String> {
+    let task_map = tasks.read().await;
+    task_queue::save_tasks(app_config_dir, &task_map)
+}
+
 #[tauri::command]
 pub fn list_asr_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, String> {
     scan_models_for_state(&state)
@@ -56,6 +67,77 @@ pub fn scan_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, Stri
 pub fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
     let models_dir = whisper_models_dir(&state.app_config_dir)?;
     models::delete_whisper_model(&models_dir, &model_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn download_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let normalized = match models::validate_whisper_model_id(&model_id) {
+        Ok(id) => id,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    // 检查是否已经在下载中
+    {
+        let controls = state.model_controls.read().await;
+        if controls.contains_key(&normalized) {
+            return Err("该模型已在下载队列中".to_string());
+        }
+    }
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    {
+        let mut controls = state.model_controls.write().await;
+        controls.insert(normalized.clone(), tx);
+    }
+
+    let model_controls = state.model_controls.clone();
+    let cleanup_controls = model_controls.clone();
+    let cleanup_model_id = normalized.clone();
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = models::download::download_model_impl(
+            app_clone,
+            model_controls,
+            models_dir,
+            normalized.clone(),
+            rx,
+        )
+        .await;
+        cleanup_controls.write().await.remove(&cleanup_model_id);
+        if let Err(error) = result {
+            let _ = app.emit(
+                "model-download-updated",
+                models::download::ModelDownloadProgress {
+                    model_id: normalized,
+                    bytes_downloaded: 0,
+                    total_bytes: 0,
+                    progress: 0.0,
+                    status: "error".into(),
+                    error: Some(error.to_string()),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_model_download(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let normalized = models::normalize_whisper_model_id(&model_id);
+    let mut controls = state.model_controls.write().await;
+    if let Some(sender) = controls.remove(&normalized) {
+        let _ = sender.send(true);
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -149,6 +231,10 @@ pub async fn create_task(
     let app_config_dir = state.app_config_dir.clone();
 
     tasks.write().await.insert(task.id.clone(), task);
+    if let Err(error) = persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await {
+        tasks.write().await.remove(&task_clone.id);
+        return Err(error);
+    }
     task_controls
         .write()
         .await
@@ -193,6 +279,10 @@ pub async fn create_preview_task(
     });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
+    if let Err(error) = persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await {
+        state.tasks.write().await.remove(&task_clone.id);
+        return Err(error);
+    }
     emit_task_update(&app, &task_clone);
     start_preview_worker(app, state.tasks.clone(), task_clone.id.clone());
     Ok(task_clone)
@@ -209,6 +299,7 @@ pub async fn cancel_task(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<Task, String> {
+    validate_task_id(&task_id)?;
     let mut tasks = state.tasks.write().await;
     let task = tasks
         .get_mut(&task_id)
@@ -228,8 +319,200 @@ pub async fn cancel_task(
         sender.send(true).ok();
     }
 
+    persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
     emit_task_update(&app, &task_clone);
     Ok(task_clone)
+}
+
+#[tauri::command]
+pub async fn pause_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> std::result::Result<Task, String> {
+    validate_task_id(&task_id)?;
+    let mut tasks = state.tasks.write().await;
+    let task = tasks
+        .get_mut(&task_id)
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.status != TaskStatus::Running && task.status != TaskStatus::Pending {
+        return Err("只有正在运行或等待中的任务可以暂停".to_string());
+    }
+    task.status = TaskStatus::Paused;
+    task.status_message = "已暂停".into();
+    task.updated_at = chrono::Utc::now().to_rfc3339();
+    let task_clone = task.clone();
+    drop(tasks);
+
+    // Send signal to runner watch channel and remove control handle
+    if let Some(sender) = state.task_controls.write().await.remove(&task_id) {
+        let _ = sender.send(true);
+    }
+
+    persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
+    emit_task_update(&app, &task_clone);
+
+    let app_config_dir = state.app_config_dir.clone();
+    let app_clone = app.clone();
+    let task_id_clone = task_id.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::core::task_runner::write_task_log(
+            &app_clone,
+            &app_config_dir,
+            &task_id_clone,
+            "用户暂停了任务",
+        )
+        .await;
+    });
+
+    Ok(task_clone)
+}
+
+#[tauri::command]
+pub async fn resume_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> std::result::Result<Task, String> {
+    validate_task_id(&task_id)?;
+    let mut tasks = state.tasks.write().await;
+    let task = tasks
+        .get_mut(&task_id)
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.status != TaskStatus::Paused {
+        return Err("只有已暂停的任务可以恢复".to_string());
+    }
+    task.status = TaskStatus::Pending;
+    task.status_message = "准备恢复中...".into();
+    task.updated_at = chrono::Utc::now().to_rfc3339();
+    let task_clone = task.clone();
+    drop(tasks);
+
+    persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    state
+        .task_controls
+        .write()
+        .await
+        .insert(task_id.clone(), cancel_tx);
+    emit_task_update(&app, &task_clone);
+
+    let app_config_dir = state.app_config_dir.clone();
+    let app_clone = app.clone();
+    let task_id_clone = task_id.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::core::task_runner::write_task_log(
+            &app_clone,
+            &app_config_dir,
+            &task_id_clone,
+            "用户恢复了任务",
+        )
+        .await;
+    });
+
+    let tasks_clone = state.tasks.clone();
+    let task_controls_clone = state.task_controls.clone();
+    let app_config_dir_clone = state.app_config_dir.clone();
+    crate::core::task_runner::start_task(
+        app,
+        tasks_clone,
+        task_controls_clone,
+        app_config_dir_clone,
+        task_clone.id.clone(),
+        cancel_rx,
+    );
+
+    Ok(task_clone)
+}
+
+#[tauri::command]
+pub async fn retry_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> std::result::Result<Task, String> {
+    validate_task_id(&task_id)?;
+
+    let mut tasks = state.tasks.write().await;
+    let task = tasks
+        .get_mut(&task_id)
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if !matches!(task.status, TaskStatus::Error | TaskStatus::Cancelled) {
+        return Err("只有失败或已取消的任务可以重试".to_string());
+    }
+    task.status = TaskStatus::Pending;
+    task.progress = 0.0;
+    task.error = None;
+    task.status_message = "准备重新启动...".into();
+    task.updated_at = chrono::Utc::now().to_rfc3339();
+    let task_clone = task.clone();
+    drop(tasks);
+
+    let work_dir = state.app_config_dir.join("tasks").join(&task_id);
+    if work_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(&work_dir).await;
+    }
+    let log_path = state
+        .app_config_dir
+        .join("tasks")
+        .join(format!("{}.log", task_id));
+    if log_path.exists() {
+        let _ = tokio::fs::remove_file(&log_path).await;
+    }
+
+    persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    state
+        .task_controls
+        .write()
+        .await
+        .insert(task_id.clone(), cancel_tx);
+    emit_task_update(&app, &task_clone);
+
+    let app_config_dir = state.app_config_dir.clone();
+    let app_clone = app.clone();
+    let task_id_clone = task_id.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::core::task_runner::write_task_log(
+            &app_clone,
+            &app_config_dir,
+            &task_id_clone,
+            "用户重试了任务",
+        )
+        .await;
+    });
+
+    let tasks_clone = state.tasks.clone();
+    let task_controls_clone = state.task_controls.clone();
+    let app_config_dir_clone = state.app_config_dir.clone();
+    crate::core::task_runner::start_task(
+        app,
+        tasks_clone,
+        task_controls_clone,
+        app_config_dir_clone,
+        task_clone.id.clone(),
+        cancel_rx,
+    );
+
+    Ok(task_clone)
+}
+
+#[tauri::command]
+pub async fn get_task_logs(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> std::result::Result<String, String> {
+    validate_task_id(&task_id)?;
+    let log_path = state
+        .app_config_dir
+        .join("tasks")
+        .join(format!("{}.log", task_id));
+    if !log_path.exists() {
+        return Ok(String::new());
+    }
+    tokio::fs::read_to_string(&log_path)
+        .await
+        .map_err(|e| format!("读取日志文件失败：{}", e))
 }
 
 #[tauri::command]
@@ -283,10 +566,15 @@ pub struct BurnSubtitleRequest {
 }
 
 #[tauri::command]
-pub async fn burn_subtitle(app: AppHandle, req: BurnSubtitleRequest) -> Result<String, String> {
+pub async fn burn_subtitle(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: BurnSubtitleRequest,
+) -> Result<String, String> {
     let video_path = validate_media_path(&req.video_path)?;
     let subtitle_path = validate_existing_file_path(&req.subtitle_path, "字幕文件")?;
     let output_path = validate_new_output_path(&req.output_path, "视频输出路径")?;
+    let burn_id = output_path.to_string_lossy().to_string();
     validate_burn_style(&req)?;
     let style = audio::BurnInStyleOptions {
         font_size: req.font_size,
@@ -302,18 +590,257 @@ pub async fn burn_subtitle(app: AppHandle, req: BurnSubtitleRequest) -> Result<S
     );
 
     let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let mut child = tokio::process::Command::new(ffmpeg_path)
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 FFmpeg 失败：{e}"))?;
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法获取 FFmpeg 错误流".to_string())?;
+    let reader = tokio::io::BufReader::new(stderr);
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut controls = state.burn_controls.write().await;
+        if controls.contains_key(&burn_id) {
+            let _ = child.kill().await;
+            return Err("该输出路径已有正在进行的烧录任务".to_string());
+        }
+        controls.insert(burn_id.clone(), cancel_tx);
+    }
+
+    let app_handle_clone = app.clone();
+    let video_path_clone = req.video_path.clone();
+    let burn_id_clone = burn_id.clone();
+    let output_path_clone = output_path.clone();
+
+    let mut total_duration_ms: Option<u64> = None;
+
+    let result = tokio::select! {
+        _ = &mut cancel_rx => {
+            let _ = child.kill().await;
+            Err("字幕烧录已取消".to_string())
+        }
+        res = async {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines_stream = reader.lines();
+            while let Ok(Some(line)) = lines_stream.next_line().await {
+                if let Some(duration_ms) = audio::parse_duration_ms(&line) {
+                    total_duration_ms = Some(duration_ms);
+                }
+
+                if let Some(time_ms) = audio::parse_current_time_ms(&line) {
+                    if let Some(total_ms) = total_duration_ms {
+                        let progress =
+                            (time_ms as f64 / total_ms as f64 * 100.0).clamp(0.0, 100.0);
+                        #[derive(serde::Serialize, Clone)]
+                        struct BurnProgress {
+                            burn_id: String,
+                            video_path: String,
+                            progress: f64,
+                        }
+                        let _ = app_handle_clone.emit(
+                            "subtitle-burn-updated",
+                            BurnProgress {
+                                burn_id: burn_id_clone.clone(),
+                                video_path: video_path_clone.clone(),
+                                progress,
+                            }
+                        );
+                    }
+                }
+            }
+
+            let status = child.wait().await.map_err(|e| format!("等待 FFmpeg 结束失败：{e}"))?;
+            if status.success() {
+                #[derive(serde::Serialize, Clone)]
+                struct BurnProgress {
+                    burn_id: String,
+                    video_path: String,
+                    progress: f64,
+                }
+                let _ = app_handle_clone.emit(
+                    "subtitle-burn-updated",
+                    BurnProgress {
+                        burn_id: burn_id_clone.clone(),
+                        video_path: video_path_clone.clone(),
+                        progress: 100.0,
+                    }
+                );
+                Ok(output_path_clone.to_string_lossy().to_string())
+            } else {
+                Err("FFmpeg 执行失败，请检查文件格式或样式参数".to_string())
+            }
+        } => res
+    };
+
+    state.burn_controls.write().await.remove(&burn_id);
+
+    if result.is_err() && output_path.exists() {
+        let _ = std::fs::remove_file(&output_path);
+    }
+
+    result
+}
+
+#[tauri::command]
+pub async fn cancel_burn_subtitle(
+    state: State<'_, AppState>,
+    burn_id: String,
+) -> Result<(), String> {
+    if let Some(cancel_tx) = state.burn_controls.write().await.remove(&burn_id) {
+        let _ = cancel_tx.send(());
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct VideoMetadata {
+    pub duration_seconds: f64,
+    pub duration_string: String,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub codec: String,
+}
+
+#[tauri::command]
+pub async fn get_video_metadata(
+    app: AppHandle,
+    video_path: String,
+) -> Result<VideoMetadata, String> {
+    let video_path = validate_media_path(&video_path)?;
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+
+    let output = tokio::process::Command::new(ffmpeg_path)
+        .arg("-i")
+        .arg(&video_path)
+        .output()
+        .await
+        .map_err(|e| format!("运行 FFmpeg 获取元数据失败：{e}"))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut duration_seconds = 0.0;
+    let mut duration_string = "00:00".to_string();
+    let mut width = 0;
+    let mut height = 0;
+    let mut fps = 0.0;
+    let mut codec = "unknown".to_string();
+
+    for line in stderr.lines() {
+        if let Some(pos) = line.find("Duration: ") {
+            let dur_part = &line[pos + 10..];
+            if let Some(comma_pos) = dur_part.find(',') {
+                let dur_str = dur_part[..comma_pos].trim();
+                duration_string = dur_str.split('.').next().unwrap_or("00:00").to_string();
+                if let Some(duration_ms) = audio::parse_duration_ms(line) {
+                    duration_seconds = duration_ms as f64 / 1000.0;
+                }
+            }
+        }
+
+        if line.contains("Stream #") && line.contains("Video:") {
+            if let Some(video_pos) = line.find("Video: ") {
+                let codec_part = &line[video_pos + 7..];
+                if let Some(space_pos) = codec_part.find(' ') {
+                    codec = codec_part[..space_pos].trim_end_matches(',').to_string();
+                }
+            }
+
+            for token in line.split(',') {
+                let token = token.trim();
+                if let Some(x_pos) = token.find('x') {
+                    let left = &token[..x_pos];
+                    let right = &token[x_pos + 1..];
+                    let right_clean = right.split_whitespace().next().unwrap_or("");
+                    if let (Ok(w), Ok(h)) = (left.parse::<u32>(), right_clean.parse::<u32>()) {
+                        if w > 0 && h > 0 {
+                            width = w;
+                            height = h;
+                        }
+                    }
+                }
+                if token.ends_with("fps") || token.contains(" fps") {
+                    let fps_part = token.split_whitespace().next().unwrap_or("");
+                    if let Ok(f) = fps_part.parse::<f64>() {
+                        fps = f;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(VideoMetadata {
+        duration_seconds,
+        duration_string,
+        width,
+        height,
+        fps,
+        codec,
+    })
+}
+
+#[tauri::command]
+pub async fn generate_subtitle_preview(
+    app: AppHandle,
+    req: BurnSubtitleRequest,
+) -> Result<String, String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let video_path = validate_media_path(&req.video_path)?;
+    let subtitle_path = validate_existing_file_path(&req.subtitle_path, "字幕文件")?;
+
+    // Generate preview output path in system temp directory
+    let temp_dir = std::env::temp_dir();
+    let preview_filename = format!("finalsub-preview-{}.mp4", uuid::Uuid::new_v4());
+    let preview_path = temp_dir.join(preview_filename);
+
+    validate_burn_style(&req)?;
+    let style = audio::BurnInStyleOptions {
+        font_size: req.font_size,
+        font_color: req.font_color,
+        outline_color: req.outline_color,
+        margin_v: req.margin_v,
+    };
+
+    let mut args = audio::burn_in_args(
+        &video_path.to_string_lossy(),
+        &subtitle_path.to_string_lossy(),
+        &preview_path.to_string_lossy(),
+        &style,
+    );
+
+    // Insert "-t" "10" before the last argument to limit to 10 seconds
+    let len = args.len();
+    if len >= 1 {
+        args.insert(len - 1, "-t".to_string());
+        args.insert(len - 1, "10".to_string());
+    }
+
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
     let output = tokio::process::Command::new(ffmpeg_path)
         .args(&args)
         .output()
         .await
-        .map_err(|e| format!("运行 FFmpeg 失败：{e}"))?;
+        .map_err(|e| format!("生成预览视频失败：{e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("FFmpeg 字幕烧录失败：{stderr}"));
+        return Err(format!("生成预览视频 FFmpeg 报错：{stderr}"));
     }
 
-    Ok(output_path.to_string_lossy().to_string())
+    // Open preview video
+    let preview_path_str = preview_path.to_string_lossy().to_string();
+    app.opener()
+        .open_path(preview_path_str.clone(), None::<String>)
+        .map_err(|e| format!("打开预览视频失败：{e}"))?;
+
+    Ok(preview_path_str)
 }
 
 #[derive(serde::Deserialize)]
@@ -477,6 +1004,33 @@ pub async fn test_translation(
         }
     }
 
+    let provider_info = translation::builtin_providers()
+        .into_iter()
+        .find(|p| p.id == req.provider);
+    if let Some(p) = provider_info {
+        if (req.api_url.is_none() || req.api_url.as_deref().unwrap_or("").trim().is_empty())
+            && !p.default_endpoint.trim().is_empty()
+        {
+            req.api_url = Some(p.default_endpoint.clone());
+        }
+
+        let mut secret_map = req.secret_fields.take().unwrap_or_default();
+        for field in &p.secret_fields {
+            if !secret_map.contains_key(field) {
+                let service = "com.gravitypoet.finalsub";
+                let account = format!("translate:{}:{}", req.provider, field);
+                if let Ok(entry) = Entry::new(service, &account) {
+                    if let Ok(pwd) = entry.get_password() {
+                        secret_map.insert(field.clone(), pwd);
+                    }
+                }
+            }
+        }
+        if !secret_map.is_empty() {
+            req.secret_fields = Some(secret_map);
+        }
+    }
+
     translation::translate_text(&req)
         .await
         .map_err(|e| e.to_string())
@@ -508,6 +1062,21 @@ pub fn has_provider_secret(
     match entry.get_password() {
         Ok(password) => Ok(!password.is_empty()),
         Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn get_provider_secret(
+    provider_id: String,
+    field: String,
+) -> std::result::Result<Option<String>, String> {
+    let service = "com.gravitypoet.finalsub";
+    let account = format!("translate:{provider_id}:{field}");
+    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -614,6 +1183,14 @@ fn start_preview_worker(app: AppHandle, tasks: TaskMap, task_id: String) {
 
 fn emit_task_update(app: &AppHandle, task: &Task) {
     let _ = app.emit(TASK_UPDATED_EVENT, task.clone());
+    if let Some(state) = app.try_state::<AppState>() {
+        let app_config_dir = state.app_config_dir.clone();
+        let tasks = state.tasks.clone();
+        tauri::async_runtime::spawn(async move {
+            let task_map = tasks.read().await;
+            let _ = crate::core::task_queue::save_tasks(&app_config_dir, &task_map);
+        });
+    }
 }
 
 #[tauri::command]
@@ -970,6 +1547,26 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "writes to the user's OS keyring; run manually to validate native keyring backend"]
+    fn keyring_native_backend_roundtrips_provider_secret() {
+        let provider_id = format!("codex-keyring-roundtrip-{}", uuid::Uuid::new_v4());
+        let field = "apiKey".to_string();
+        let value = format!("secret-{}", uuid::Uuid::new_v4());
+
+        let _ = delete_provider_secret(provider_id.clone(), field.clone());
+        set_provider_secret(provider_id.clone(), field.clone(), value.clone()).unwrap();
+
+        assert!(has_provider_secret(provider_id.clone(), field.clone()).unwrap());
+        assert_eq!(
+            get_provider_secret(provider_id.clone(), field.clone()).unwrap(),
+            Some(value)
+        );
+
+        delete_provider_secret(provider_id.clone(), field.clone()).unwrap();
+        assert!(!has_provider_secret(provider_id, field).unwrap());
+    }
+
+    #[test]
     fn validate_media_path_empty() {
         let result = validate_media_path("");
         assert!(result.is_err());
@@ -1085,6 +1682,18 @@ mod tests {
     #[test]
     fn validate_ass_color_accepts_ass_hex() {
         assert!(validate_ass_color("字体颜色", "&H00FFFFFF").is_ok());
+    }
+
+    #[test]
+    fn validate_task_id_accepts_uuid() {
+        assert!(validate_task_id("019ecae8-d5eb-7720-9c25-37bfa115fa48").is_ok());
+    }
+
+    #[test]
+    fn validate_task_id_rejects_path_escape() {
+        let result = validate_task_id("../../Library/Secrets");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("任务 ID"));
     }
 
     #[test]

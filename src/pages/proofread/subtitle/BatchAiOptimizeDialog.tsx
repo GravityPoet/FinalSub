@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Subtitle } from '../useStandaloneSubtitles';
 import { listTranslationProviders, testTranslation } from '../../../lib/tauri';
+import { useToast } from '../Toast';
 
 interface OptimizationResult {
   id: string;
@@ -41,6 +42,7 @@ export default function BatchAiOptimizeDialog({
   onApplyOptimizations,
   shouldShowTranslation: _shouldShowTranslation,
 }: BatchAiOptimizeDialogProps) {
+  const { showToast } = useToast();
   const [step, setStep] = useState<'config' | 'running' | 'review'>('config');
   const [aiProviders, setAiProviders] = useState<any[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState('');
@@ -140,23 +142,32 @@ IMPORTANT: Return ONLY a valid JSON object. Do not include any markdown format t
   }, [open, loadAiProviders, loadCachedPrompt]);
 
   // 执行批量优化的主线程 (前端分批控制逻辑)
-  const handleStartOptimization = useCallback(async () => {
+  const handleStartOptimization = useCallback(async (retryOnly = false) => {
     if (aiProviders.length === 0) {
-      alert('请先在设置中配置并开启至少一个 AI 翻译服务');
+      showToast('error', '请先在设置中配置并开启至少一个 AI 翻译服务');
       return;
     }
 
-    const subs = subtitles
-      .map((sub, index) => ({
-        id: sub.id || String(index + 1),
-        index,
-        sourceContent: sub.sourceContent || '',
-        targetContent: sub.targetContent || '',
-      }))
-      .filter((sub) => sub.sourceContent.trim());
+    const subs = retryOnly
+      ? results
+          .filter((r) => r.status === 'error')
+          .map((r) => ({
+            id: r.id,
+            index: r.index,
+            sourceContent: r.sourceContent,
+            targetContent: r.originalTarget,
+          }))
+      : subtitles
+          .map((sub, index) => ({
+            id: sub.id || String(index + 1),
+            index,
+            sourceContent: sub.sourceContent || '',
+            targetContent: sub.targetContent || '',
+          }))
+          .filter((sub) => sub.sourceContent.trim());
 
     if (subs.length === 0) {
-      alert('没有可优化的字幕');
+      showToast('error', retryOnly ? '没有失败的字幕可以重试' : '没有可优化的字幕');
       return;
     }
 
@@ -304,15 +315,31 @@ Only output the optimized translation, nothing else.`;
       }
     }
 
-    setResults(optimizationResults);
-    setSummary({
-      total,
-      success: successCount,
-      error: errorCount,
-      skipped: skippedCount,
-    });
+    if (retryOnly) {
+      const mergedResults = results.map((r) => {
+        const newRes = optimizationResults.find((nr) => nr.id === r.id);
+        return newRes ? newRes : r;
+      });
+      setResults(mergedResults);
+      const sCount = mergedResults.filter((r) => r.status === 'success').length;
+      const eCount = mergedResults.filter((r) => r.status === 'error').length;
+      setSummary({
+        total: mergedResults.length,
+        success: sCount,
+        error: eCount,
+        skipped: 0,
+      });
+    } else {
+      setResults(optimizationResults);
+      setSummary({
+        total,
+        success: successCount,
+        error: errorCount,
+        skipped: skippedCount,
+      });
+    }
     setStep('review');
-  }, [subtitles, selectedProviderId, customPrompt, batchSize, aiProviders, savePromptToCache]);
+  }, [subtitles, results, selectedProviderId, customPrompt, batchSize, aiProviders, savePromptToCache, showToast]);
 
   const toggleResultSelection = (id: string) => {
     setResults((prev) =>
@@ -333,7 +360,7 @@ Only output the optimized translation, nothing else.`;
   const handleApply = () => {
     const selectedResults = results.filter((r) => r.selected);
     if (selectedResults.length === 0) {
-      alert('请先选择要采纳的优化结果');
+      showToast('error', '请先选择要采纳的优化结果');
       return;
     }
 
@@ -344,7 +371,7 @@ Only output the optimized translation, nothing else.`;
 
     onApplyOptimizations(optimizations);
     onOpenChange(false);
-    alert(`成功应用了 ${optimizations.length} 条字幕优化`);
+    showToast('success', `成功应用了 ${optimizations.length} 条字幕优化`);
   };
 
   const selectedCount = results.filter((r) => r.selected).length;
@@ -521,7 +548,7 @@ Only output the optimized translation, nothing else.`;
                     key={result.id}
                     className={`p-4 transition-colors ${
                       result.status === 'error'
-                        ? 'bg-red-950/5'
+                        ? 'bg-red-950/20 border-l-2 border-l-red-500/80'
                         : ''
                     }`}
                   >
@@ -602,7 +629,7 @@ Only output the optimized translation, nothing else.`;
                 取消
               </button>
               <button
-                onClick={handleStartOptimization}
+                onClick={() => handleStartOptimization(false)}
                 disabled={
                   aiProviders.length === 0 ||
                   subtitles.filter((s) => s.sourceContent?.trim()).length === 0
@@ -627,6 +654,15 @@ Only output the optimized translation, nothing else.`;
 
           {step === 'review' && (
             <>
+              {summary && summary.error > 0 && (
+                <button
+                  onClick={() => handleStartOptimization(true)}
+                  className="flex items-center text-xs text-red-200 hover:text-white bg-red-950/40 hover:bg-red-900/50 px-4 py-2 rounded-lg font-medium transition-colors border border-red-900/30 mr-auto"
+                >
+                  <RotateCcw className="h-4 w-4 mr-1.5 text-red-300" />
+                  仅重试失败条目 ({summary.error})
+                </button>
+              )}
               <button
                 onClick={() => setStep('config')}
                 className="flex items-center text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg font-medium transition-colors border border-slate-700/50"

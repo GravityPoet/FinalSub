@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { useToast } from './Toast';
 import {
   Play,
   Trash2,
@@ -50,6 +51,7 @@ export default function ProofreadFileList({
   const [saving, setSaving] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [tempTaskName, setTempTaskName] = useState(taskName);
+  const { showToast } = useToast();
 
   // 手动选择源字幕
   const handleSelectSourceSubtitle = useCallback(
@@ -164,15 +166,15 @@ export default function ProofreadFileList({
     try {
       const success = await onSaveTask();
       if (success) {
-        alert('任务保存成功');
+        showToast('success', '任务保存成功');
       }
     } catch (error) {
       console.error(error);
-      alert('保存失败');
+      showToast('error', '保存失败');
     } finally {
       setSaving(false);
     }
-  }, [onSaveTask]);
+  }, [onSaveTask, showToast]);
 
   // 追加文件
   const handleAppendFiles = useCallback(async () => {
