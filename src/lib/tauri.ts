@@ -20,6 +20,11 @@ export interface AsrModelInfo {
   status: "available" | "downloading" | "downloaded" | "not-ready" | { error: string };
 }
 
+export type TranslationContentMode =
+  | "target-only"
+  | "source-and-target"
+  | "target-and-source";
+
 export interface Task {
   id: string;
   task_type: string;
@@ -30,6 +35,7 @@ export interface Task {
   model_id: string;
   source_language: string | null;
   target_language: string | null;
+  translation_content_mode: TranslationContentMode;
   output_format: string;
   progress: number;
   status_message: string;
@@ -77,6 +83,7 @@ export interface CreateTaskRequest {
   model_id: string;
   source_language?: string;
   target_language?: string;
+  translation_content_mode?: TranslationContentMode;
   output_format?: string;
 }
 

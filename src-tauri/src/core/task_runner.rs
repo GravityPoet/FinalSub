@@ -11,7 +11,7 @@ use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, ProgressUpdate, TranscribeJob};
 use crate::core::subtitle::SubtitleTrack;
-use crate::core::task_queue::{Task, TaskStatus, TaskType};
+use crate::core::task_queue::{Task, TaskStatus, TaskType, TranslationContentMode};
 use crate::core::translation::{builtin_providers, translate_text, TranslateRequest};
 
 const MAX_OUTPUT_FILE_NAME_BYTES: usize = 240;
@@ -483,6 +483,7 @@ async fn run_task_impl(
     if track.is_empty() {
         return Err("未生成或解析到有效字幕轨道".into());
     }
+    let source_track = track.clone();
 
     if check_cancelled(cancel_rx) {
         let current_status = {
@@ -762,13 +763,24 @@ async fn run_task_impl(
     update_task_progress(app, tasks.clone(), task_id, 0.95, "正在写出字幕文件...").await;
 
     let format_str = task.output_format.clone();
-    let srt_output = track.to_format(&format_str).map_err(|e| e.to_string())?;
+    let output_track = if should_translate {
+        build_translation_output_track(&source_track, &track, task.translation_content_mode)
+    } else {
+        track
+    };
+    let srt_output = output_track
+        .to_format(&format_str)
+        .map_err(|e| e.to_string())?;
 
     let suffix = match task.task_type {
         TaskType::GenerateOnly => ".finalsub".to_string(),
         TaskType::GenerateAndTranslate | TaskType::TranslateOnly => {
             let target_lang = task.target_language.clone().unwrap_or_else(|| "zh".into());
-            format!(".finalsub.{}", target_lang)
+            if task.translation_content_mode.is_bilingual() {
+                format!(".finalsub.{}.bilingual", target_lang)
+            } else {
+                format!(".finalsub.{}", target_lang)
+            }
         }
     };
 
@@ -885,6 +897,51 @@ fn configured_value(value: Option<&String>) -> Option<String> {
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn build_translation_output_track(
+    source_track: &SubtitleTrack,
+    translated_track: &SubtitleTrack,
+    mode: TranslationContentMode,
+) -> SubtitleTrack {
+    if mode == TranslationContentMode::TargetOnly {
+        return translated_track.clone();
+    }
+
+    let cues = translated_track
+        .cues
+        .iter()
+        .enumerate()
+        .map(|(index, translated_cue)| {
+            let source_text = source_track
+                .cues
+                .get(index)
+                .map(|cue| cue.text.as_str())
+                .unwrap_or("");
+            let translated_text = translated_cue.text.as_str();
+            let (top, bottom) = match mode {
+                TranslationContentMode::SourceAndTarget => (source_text, translated_text),
+                TranslationContentMode::TargetAndSource => (translated_text, source_text),
+                TranslationContentMode::TargetOnly => (translated_text, ""),
+            };
+            let mut cue = translated_cue.clone();
+            cue.text = merge_bilingual_text(top, bottom);
+            cue
+        })
+        .collect();
+
+    SubtitleTrack { cues }
+}
+
+fn merge_bilingual_text(top: &str, bottom: &str) -> String {
+    let has_top = !top.trim().is_empty();
+    let has_bottom = !bottom.trim().is_empty();
+    match (has_top, has_bottom) {
+        (true, true) => format!("{}\n{}", top.trim_end(), bottom.trim_start()),
+        (true, false) => top.to_string(),
+        (false, true) => bottom.to_string(),
+        (false, false) => String::new(),
+    }
 }
 
 fn reserve_unique_output_path(
@@ -1041,6 +1098,44 @@ mod tests {
             configured_value(Some(&"  value  ".to_string())),
             Some("value".into())
         );
+    }
+
+    #[test]
+    fn translation_output_track_keeps_target_only_default() {
+        let source =
+            SubtitleTrack::from_srt("1\n00:00:01,000 --> 00:00:03,000\nHello world\n\n").unwrap();
+        let translated =
+            SubtitleTrack::from_srt("1\n00:00:01,000 --> 00:00:03,000\n你好世界\n\n").unwrap();
+
+        let output = build_translation_output_track(
+            &source,
+            &translated,
+            TranslationContentMode::TargetOnly,
+        );
+
+        assert_eq!(output.cues[0].text, "你好世界");
+    }
+
+    #[test]
+    fn translation_output_track_respects_bilingual_order() {
+        let source =
+            SubtitleTrack::from_srt("1\n00:00:01,000 --> 00:00:03,000\nHello world\n\n").unwrap();
+        let translated =
+            SubtitleTrack::from_srt("1\n00:00:01,000 --> 00:00:03,000\n你好世界\n\n").unwrap();
+
+        let source_first = build_translation_output_track(
+            &source,
+            &translated,
+            TranslationContentMode::SourceAndTarget,
+        );
+        let target_first = build_translation_output_track(
+            &source,
+            &translated,
+            TranslationContentMode::TargetAndSource,
+        );
+
+        assert_eq!(source_first.cues[0].text, "Hello world\n你好世界");
+        assert_eq!(target_first.cues[0].text, "你好世界\nHello world");
     }
 
     #[test]
