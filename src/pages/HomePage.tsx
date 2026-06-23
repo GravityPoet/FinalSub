@@ -56,6 +56,10 @@ const translationContentModes: Array<{
   },
 ];
 
+function isMediaTaskType(value: string): boolean {
+  return value !== "translate-only";
+}
+
 function fileNameFromPath(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -283,8 +287,11 @@ export default function HomePage() {
                     <button
                       key={t.value}
                       onClick={() => {
-                        setTaskType(t.value);
-                        setSelectedPath("");
+                        const nextTaskType = t.value;
+                        if (isMediaTaskType(taskType) !== isMediaTaskType(nextTaskType)) {
+                          setSelectedPath("");
+                        }
+                        setTaskType(nextTaskType);
                         setError("");
                       }}
                       className={`flex flex-col items-center gap-1 rounded-lg border p-3 text-xs transition ${
