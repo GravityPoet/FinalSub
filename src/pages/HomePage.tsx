@@ -14,6 +14,7 @@ import {
   checkForUpdate,
   type AppInfo,
   type AsrModelInfo,
+  type TranslationContentMode,
   type UpdateInfo,
 } from "../lib/tauri";
 
@@ -31,6 +32,28 @@ const outputFormats = [
   { value: "ass", label: "ASS" },
   { value: "lrc", label: "LRC" },
   { value: "txt", label: "TXT" },
+];
+
+const translationContentModes: Array<{
+  value: TranslationContentMode;
+  labelKey: "home.subtitleContentTargetOnly" | "home.subtitleContentSourceFirst" | "home.subtitleContentTargetFirst";
+  descKey: "home.subtitleContentTargetOnlyDesc" | "home.subtitleContentSourceFirstDesc" | "home.subtitleContentTargetFirstDesc";
+}> = [
+  {
+    value: "target-only",
+    labelKey: "home.subtitleContentTargetOnly",
+    descKey: "home.subtitleContentTargetOnlyDesc",
+  },
+  {
+    value: "source-and-target",
+    labelKey: "home.subtitleContentSourceFirst",
+    descKey: "home.subtitleContentSourceFirstDesc",
+  },
+  {
+    value: "target-and-source",
+    labelKey: "home.subtitleContentTargetFirst",
+    descKey: "home.subtitleContentTargetFirstDesc",
+  },
 ];
 
 function fileNameFromPath(path: string): string {
@@ -53,6 +76,8 @@ export default function HomePage() {
   const [modelId, setModelId] = useState("parakeet-tdt-0.6b-v2");
   const [sourceLanguage, setSourceLanguage] = useState("auto");
   const [targetLanguage, setTargetLanguage] = useState("zh");
+  const [translationContentMode, setTranslationContentMode] =
+    useState<TranslationContentMode>("target-only");
   const [outputFormat, setOutputFormat] = useState("srt");
 
   const { t } = useI18n();
@@ -146,6 +171,8 @@ export default function HomePage() {
         model_id: modelId,
         source_language: sourceLanguage,
         target_language: taskType === "generate-only" ? undefined : targetLanguage,
+        translation_content_mode:
+          taskType === "generate-only" ? undefined : translationContentMode,
         output_format: outputFormat,
       });
       navigate("/tasks");
@@ -344,6 +371,32 @@ export default function HomePage() {
                 </select>
               </div>
             </div>
+
+            {taskType !== "generate-only" && (
+              <div className="mb-4">
+                <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.subtitleContent")}</label>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {translationContentModes.map((mode) => (
+                    <button
+                      key={mode.value}
+                      type="button"
+                      aria-pressed={translationContentMode === mode.value}
+                      onClick={() => setTranslationContentMode(mode.value)}
+                      className={`min-h-[4.75rem] rounded-lg border px-3 py-2 text-left text-xs transition ${
+                        translationContentMode === mode.value
+                          ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300"
+                          : "border-gray-200 text-gray-600 hover:border-gray-300 dark:border-gray-600 dark:text-gray-400"
+                      }`}
+                    >
+                      <span className="block font-medium">{t(mode.labelKey)}</span>
+                      <span className="mt-1 block leading-5 text-gray-500 dark:text-gray-400">
+                        {t(mode.descKey)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 输出格式 */}
             <div className="mb-4">

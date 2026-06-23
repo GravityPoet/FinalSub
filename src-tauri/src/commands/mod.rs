@@ -11,7 +11,9 @@ use crate::core::audio;
 use crate::core::models::{self, AsrModelInfo};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
-use crate::core::task_queue::{self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType};
+use crate::core::task_queue::{
+    self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType, TranslationContentMode,
+};
 use crate::core::translation::{self, TranslationProvider};
 use crate::state::AppState;
 use keyring::Entry;
@@ -239,6 +241,7 @@ pub struct CreateTaskRequest {
     pub model_id: String,
     pub source_language: Option<String>,
     pub target_language: Option<String>,
+    pub translation_content_mode: Option<String>,
     pub output_format: Option<String>,
 }
 
@@ -283,6 +286,7 @@ pub async fn create_task(
     }
 
     let output_format = validate_subtitle_output_format(req.output_format)?;
+    let translation_content_mode = validate_translation_content_mode(req.translation_content_mode)?;
     let source_language = req
         .source_language
         .map(|lang| lang.trim().to_string())
@@ -312,6 +316,7 @@ pub async fn create_task(
         model_id,
         source_language,
         target_language,
+        translation_content_mode,
         output_format,
     });
 
@@ -366,6 +371,7 @@ pub async fn create_preview_task(
         model_id: "ffmpeg-sidecar-probe".into(),
         source_language: None,
         target_language: None,
+        translation_content_mode: TranslationContentMode::TargetOnly,
         output_format: None,
     });
     let task_clone = task.clone();
@@ -1488,6 +1494,31 @@ fn validate_subtitle_output_format(raw: Option<String>) -> Result<Option<String>
     }
 }
 
+fn validate_translation_content_mode(
+    raw: Option<String>,
+) -> Result<TranslationContentMode, String> {
+    let Some(raw) = raw else {
+        return Ok(TranslationContentMode::TargetOnly);
+    };
+    let mode = raw.trim();
+    if mode.is_empty() {
+        return Ok(TranslationContentMode::TargetOnly);
+    }
+    match mode {
+        "target-only" | "onlyTranslate" => Ok(TranslationContentMode::TargetOnly),
+        "source-and-target" | "sourceAndTranslate" => {
+            Ok(TranslationContentMode::SourceAndTarget)
+        }
+        "target-and-source" | "translateAndSource" => {
+            Ok(TranslationContentMode::TargetAndSource)
+        }
+        _ => Err(
+            "Translation content mode only supports target-only, source-and-target, target-and-source"
+                .into(),
+        ),
+    }
+}
+
 fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
     if let Some(font_size) = req.font_size {
         if !(10..=120).contains(&font_size) {
@@ -1868,6 +1899,23 @@ mod tests {
             Some("vtt".into())
         );
         assert!(validate_subtitle_output_format(Some("srt/evil".into())).is_err());
+    }
+
+    #[test]
+    fn validate_translation_content_mode_accepts_supported_values() {
+        assert_eq!(
+            validate_translation_content_mode(None).unwrap(),
+            TranslationContentMode::TargetOnly
+        );
+        assert_eq!(
+            validate_translation_content_mode(Some("source-and-target".into())).unwrap(),
+            TranslationContentMode::SourceAndTarget
+        );
+        assert_eq!(
+            validate_translation_content_mode(Some("translateAndSource".into())).unwrap(),
+            TranslationContentMode::TargetAndSource
+        );
+        assert!(validate_translation_content_mode(Some("source/evil".into())).is_err());
     }
 
     #[test]

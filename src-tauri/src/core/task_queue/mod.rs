@@ -23,6 +23,26 @@ pub enum TaskType {
     TranslateOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TranslationContentMode {
+    TargetOnly,
+    SourceAndTarget,
+    TargetAndSource,
+}
+
+impl TranslationContentMode {
+    pub fn is_bilingual(self) -> bool {
+        !matches!(self, TranslationContentMode::TargetOnly)
+    }
+}
+
+impl Default for TranslationContentMode {
+    fn default() -> Self {
+        Self::TargetOnly
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -34,6 +54,8 @@ pub struct Task {
     pub model_id: String,
     pub source_language: Option<String>,
     pub target_language: Option<String>,
+    #[serde(default)]
+    pub translation_content_mode: TranslationContentMode,
     pub output_format: String,
     pub progress: f32,
     pub status_message: String,
@@ -54,6 +76,7 @@ pub struct CreateTaskParams {
     pub model_id: String,
     pub source_language: Option<String>,
     pub target_language: Option<String>,
+    pub translation_content_mode: TranslationContentMode,
     pub output_format: Option<String>,
 }
 
@@ -69,6 +92,7 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         model_id: params.model_id,
         source_language: params.source_language,
         target_language: params.target_language,
+        translation_content_mode: params.translation_content_mode,
         output_format: params.output_format.unwrap_or_else(|| "srt".into()),
         progress: 0.0,
         status_message: "待处理".into(),

@@ -36,6 +36,8 @@ cd .. && npm run build:local
 
 `npm run build:local` 会执行 Tauri 打包、本地 ad-hoc 签名和 `codesign --verify --deep --strict` 校验。
 
+macOS 正式发布、覆盖安装包、DMG/PKG 验证和踩坑记录统一维护在 [macOS 发布打包 SOP](macos-release-packaging-sop.md)。
+
 ## FFmpeg 与 ASR Sidecar 说明
 
 本项目内置了已完成签名的、可直接分发的静态多架构 (Universal) `ffmpeg` 与 `whisper-cli` Sidecar 二进制文件（支持 x86_64 与 arm64），无外部 Homebrew 或系统运行时依赖，符合全自包含打包与沙箱安全合规要求。
