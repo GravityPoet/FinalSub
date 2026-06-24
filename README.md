@@ -115,12 +115,12 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 
 **FinalSub** is built on a simple promise: complete privacy, total tool control, and zero recurring fees. Keeping this project 100% local, free, and open-source requires continuous dedication, and your support directly fuels our journey:
 *   **Save on Subscription Fees**: Instead of paying SaaS platforms per minute of transcription or subscribing to expensive monthly plans, FinalSub utilizes your local GPU/CPU. We help content creators and developers save hundreds of dollars annually.
-*   **Developer Certification Costs**: To prevent Gatekeeper warnings and provide a seamless "just unzip and run" experience, we dynamically package pre-signed FFmpeg/Whisper binaries. This requires paying ongoing Apple Developer Program fees and maintenance overheads out of pocket.
+*   **Ongoing Maintenance & Testing Effort**: To provide a seamless "just unzip and run" experience, we spend significant time and effort compiling multi-architecture sidecars, adapting to different OS updates, and conducting real-device compatibility testing.
 *   **Backing the Future of Offline AI**: Your donations directly support the research and implementation of next-gen offline local LLM integrations, enhanced VAD algorithms, and keeping this app free of trackers and ads.
 
 If FinalSub has saved your time, protected your data, or simplified your workflow, please consider:
 *   🌟 Giving us a **Star** (It really helps boost our visibility!).
-*   ☕ **Buying us a coffee** to help offset server, certificate, and device testing costs (please mention your GitHub account).
+*   ☕ **Buying us a coffee** to support our continuous time and effort spent on maintenance and testing (please mention your GitHub account).
 
 | WeChat Sponsor | PayPal |
 | :---: | :---: |
