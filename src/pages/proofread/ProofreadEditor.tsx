@@ -1,5 +1,7 @@
 import { useMemo, useState, useCallback } from 'react';
-import { ArrowLeft, Check, Save, Loader2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Check, Save, Loader2, AlertTriangle, Download, Languages } from 'lucide-react';
+import { save } from "@tauri-apps/plugin-dialog";
+import { useToast } from './Toast';
 
 import { useStandaloneSubtitles } from './useStandaloneSubtitles';
 import { useVideoPlayer } from './useVideoPlayer';
@@ -10,6 +12,7 @@ import SubtitleList from './subtitle/SubtitleList';
 import SubtitleEditToolbar from './subtitle/SubtitleEditToolbar';
 import { PendingFile } from './proofreadUtils';
 import { useI18n } from '../../lib/i18n';
+import { convertStringsOpencc } from '../../lib/tauri';
 
 interface ProofreadEditorProps {
   file: PendingFile;
@@ -52,6 +55,7 @@ export default function ProofreadEditor({
     isLoading,
     handleSubtitleChange,
     handleSave,
+    handleExport,
     getSubtitleStats,
     isTranslationFailed,
     getFailedTranslationIndices,
@@ -103,6 +107,83 @@ export default function ProofreadEditor({
 
   // 冲突挽救确认框状态
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+
+  const { showToast } = useToast();
+
+  const handleExportClick = async (format: 'srt' | 'vtt' | 'ass' | 'lrc' | 'txt') => {
+    try {
+      const selected = await save({
+        filters: [{ name: format.toUpperCase(), extensions: [format] }],
+        defaultPath: `subtitle.${format}`,
+      });
+      if (!selected) return;
+
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      const contentType = shouldShowTranslation ? 'sourceAndTranslate' : 'source';
+      const success = await handleExport(path, format, contentType);
+      if (success) {
+        showToast('success', '字幕导出成功');
+      } else {
+        showToast('error', '字幕导出失败');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('error', `导出失败: ${err}`);
+    }
+  };
+
+  const handleOpenccConvert = async (configKey: string) => {
+    try {
+      const stringsToConvert: string[] = [];
+      
+      mergedSubtitles.forEach(sub => {
+        sub.content.forEach(line => stringsToConvert.push(line));
+        if (sub.sourceContent) stringsToConvert.push(sub.sourceContent);
+        if (sub.targetContent) stringsToConvert.push(sub.targetContent);
+      });
+      
+      if (stringsToConvert.length === 0) {
+        showToast('info', '没有可转换的字幕内容');
+        return;
+      }
+      
+      const convertedStrings = await convertStringsOpencc(stringsToConvert, configKey);
+      
+      let ptr = 0;
+      const newSubtitles = mergedSubtitles.map(sub => {
+        const newContent = sub.content.map(() => {
+          const val = convertedStrings[ptr];
+          ptr += 1;
+          return val;
+        });
+        
+        let newSourceContent = sub.sourceContent;
+        if (sub.sourceContent) {
+          newSourceContent = convertedStrings[ptr];
+          ptr += 1;
+        }
+        
+        let newTargetContent = sub.targetContent;
+        if (sub.targetContent) {
+          newTargetContent = convertedStrings[ptr];
+          ptr += 1;
+        }
+        
+        return {
+          ...sub,
+          content: newContent,
+          sourceContent: newSourceContent,
+          targetContent: newTargetContent,
+        };
+      });
+      
+      updateSubtitles(newSubtitles);
+      showToast('success', '简繁/地域词汇转换成功');
+    } catch (err) {
+      console.error(err);
+      showToast('error', `转换失败: ${err}`);
+    }
+  };
 
   // 返回处理
   const handleBackClick = useCallback(() => {
@@ -187,6 +268,78 @@ export default function ProofreadEditor({
             <Save className="w-4 h-4 mr-1.5 text-slate-400" />
             {t('proofread.editor.saveChanges')}
           </button>
+          
+          <div className="relative group">
+            <button
+              className="flex items-center text-xs bg-slate-700 hover:bg-slate-655 text-slate-200 border border-slate-655 px-4 py-2 rounded-lg transition-colors font-medium"
+            >
+              <Download className="w-4 h-4 mr-1.5 text-slate-400" />
+              导出字幕
+            </button>
+            <div className="absolute right-0 mt-1 hidden group-hover:block bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 w-32 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => handleExportClick('srt')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                SRT 格式
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportClick('vtt')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                VTT 格式
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportClick('ass')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                ASS 格式
+              </button>
+            </div>
+          </div>
+
+          <div className="relative group">
+            <button
+              className="flex items-center text-xs bg-slate-700 hover:bg-slate-655 text-slate-200 border border-slate-655 px-4 py-2 rounded-lg transition-colors font-medium"
+            >
+              <Languages className="w-4 h-4 mr-1.5 text-slate-400" />
+              简繁转换
+            </button>
+            <div className="absolute right-0 mt-1 hidden group-hover:block bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 w-36 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => handleOpenccConvert('s2t')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                简体 → 繁体 (S2T)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenccConvert('t2s')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                繁体 → 简体 (T2S)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenccConvert('s2twp')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                简体 → 台湾繁体 (S2TWP)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenccConvert('s2hk')}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+              >
+                简体 → 香港繁体 (S2HK)
+              </button>
+            </div>
+          </div>
+
           <button
             onClick={onMarkComplete}
             className="flex items-center text-xs bg-blue-600 hover:bg-blue-700 text-white px-4.5 py-2 rounded-lg transition-colors font-medium shadow-md shadow-blue-500/10"

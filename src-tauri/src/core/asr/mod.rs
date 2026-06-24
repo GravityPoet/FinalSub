@@ -5,6 +5,8 @@ use crate::core::subtitle::SubtitleTrack;
 
 pub mod parakeet;
 pub mod whisper;
+pub mod sensevoice;
+pub mod custom;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsrCapabilities {

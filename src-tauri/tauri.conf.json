@@ -29,6 +29,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "signingIdentity": null,
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist"
+    },
     "externalBin": [
       "binaries/ffmpeg",
       "binaries/whisper-cli"

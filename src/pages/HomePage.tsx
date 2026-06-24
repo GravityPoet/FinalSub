@@ -12,10 +12,12 @@ import {
   listAsrModels,
   getSettings,
   checkForUpdate,
+  getVideoMetadata,
   type AppInfo,
   type AsrModelInfo,
   type TranslationContentMode,
   type UpdateInfo,
+  type VideoMetadata,
 } from "../lib/tauri";
 
 const mediaExtensions = ["mp4", "mov", "mkv", "webm", "mp3", "wav", "m4a", "aac", "flac"];
@@ -74,6 +76,7 @@ export default function HomePage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string>("");
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [mediaMetadata, setMediaMetadata] = useState<VideoMetadata | null>(null);
 
   const [taskType, setTaskType] = useState("generate-only");
   const [engineId, setEngineId] = useState("parakeet-mlx");
@@ -114,14 +117,34 @@ export default function HomePage() {
       .catch(console.error);
   }, []);
 
+  useEffect(() => {
+    if (selectedPath) {
+      if (taskType !== "translate-only") {
+        getVideoMetadata(selectedPath)
+          .then(setMediaMetadata)
+          .catch((err) => {
+            console.error("加载媒体元数据失败:", err);
+            setMediaMetadata(null);
+          });
+      } else {
+        setMediaMetadata(null);
+      }
+    } else {
+      setMediaMetadata(null);
+    }
+  }, [selectedPath, taskType]);
+
   const engineModels = models.filter((m) => m.engine_id === engineId);
-  const engines = [...new Set(models.map((m) => m.engine_id))].filter(
-    (id) => id !== "sensevoice" && id !== "custom-command"
-  );
+  const engines = [...new Set(models.map((m) => m.engine_id))];
 
   const taskNeedsAsr = taskType !== "translate-only";
   const activeModel = models.find((m) => m.id === modelId && m.engine_id === engineId);
-  const canStartTask = !taskNeedsAsr || Boolean(activeModel && (engineId !== "whisper-cpp" || activeModel.status === "downloaded"));
+  const canStartTask = !taskNeedsAsr || Boolean(
+    activeModel && (
+      (engineId !== "whisper-cpp" && engineId !== "sensevoice") ||
+      activeModel.status === "downloaded"
+    )
+  );
 
   const selectedFileKind = taskType === "translate-only"
     ? t("home.subFile")
@@ -148,7 +171,7 @@ export default function HomePage() {
     const selected = await open({
       multiple: false,
       filters: isTranslateOnly
-        ? [{ name: t("home.subFile"), extensions: ["srt"] }]
+        ? [{ name: t("home.subFile"), extensions: ["srt", "vtt", "ass", "lrc"] }]
         : [{ name: t("home.mediaFile"), extensions: mediaExtensions }],
     });
     if (typeof selected === "string") {
@@ -253,6 +276,25 @@ export default function HomePage() {
                 <p className="truncate font-mono text-xs text-gray-600 dark:text-gray-300" title={selectedPath}>
                   {selectedPath}
                 </p>
+                {mediaMetadata && (
+                  <div className="mt-2.5 border-t border-gray-200 pt-2 dark:border-gray-800 text-[11px] text-gray-500 dark:text-gray-400 space-y-1">
+                    <div className="font-semibold text-gray-700 dark:text-gray-300">媒体属性信息 (Media Info):</div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                      <div>时长: {mediaMetadata.duration_string} ({mediaMetadata.duration_seconds.toFixed(1)}s)</div>
+                      {mediaMetadata.width > 0 && <div>分辨率: {mediaMetadata.width}x{mediaMetadata.height}</div>}
+                      {mediaMetadata.fps > 0 && <div>帧率: {mediaMetadata.fps.toFixed(2)} fps</div>}
+                      {mediaMetadata.codec !== "unknown" && <div>视频编码: {mediaMetadata.codec}</div>}
+                      {mediaMetadata.audio_codec && <div>音频编码: {mediaMetadata.audio_codec}</div>}
+                      {mediaMetadata.audio_sample_rate && (
+                        <div className={mediaMetadata.audio_sample_rate !== 16000 ? "text-amber-600 dark:text-amber-500 font-semibold" : ""}>
+                          音频采样率: {mediaMetadata.audio_sample_rate} Hz {mediaMetadata.audio_sample_rate !== 16000 && " (非 16kHz)"}
+                        </div>
+                      )}
+                      {mediaMetadata.audio_channels && <div>音频声道数: {mediaMetadata.audio_channels} ch</div>}
+                      <div>音轨数: {mediaMetadata.audio_tracks}</div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -449,6 +491,15 @@ export default function HomePage() {
                     {t("home.openModelManage")}
                   </button>
                 )}
+              </div>
+            )}
+
+            {taskNeedsAsr && mediaMetadata && mediaMetadata.audio_sample_rate && mediaMetadata.audio_sample_rate !== 16000 && (
+              <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+                <AlertCircle className="mt-0.5 shrink-0" size={14} />
+                <span>
+                  提示：当前音频采样率为 {mediaMetadata.audio_sample_rate} Hz。引擎需要 16000 Hz 音频输入，后台将在提取时自动进行重采样。
+                </span>
               </div>
             )}
 

@@ -260,8 +260,8 @@ export default function SettingsPage() {
           </div>
         </SettingGroup>
 
-        {/* VAD 设置（仅 whisper-cpp 引擎支持，parakeet-mlx 无 VAD，故按引擎隐藏） */}
-        {settings.asr_engine === "whisper-cpp" && (
+        {/* VAD 设置（whisper-cpp 与自定义命令支持） */}
+        {(settings.asr_engine === "whisper-cpp" || settings.asr_engine === "custom-command") && (
         <SettingGroup icon={SettingsIcon} title={t("settings.vadGroup")}>
           <div className="px-4 py-3">
             <div className="mb-3 rounded-lg bg-blue-50/50 p-3 text-xs text-blue-700 dark:bg-blue-950/20 dark:text-blue-300">

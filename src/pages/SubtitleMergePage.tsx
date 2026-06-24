@@ -62,6 +62,7 @@ export default function SubtitleMergePage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState("");
+  const [softSubtitle, setSoftSubtitle] = useState(false);
 
   // Progress state
   const [progress, setProgress] = useState<number | null>(null);
@@ -172,6 +173,7 @@ export default function SubtitleMergePage() {
         font_color: fontColor,
         outline_color: outlineColor,
         margin_v: marginV,
+        soft_subtitle: softSubtitle,
       });
       setResult(out);
     } catch (err) {
@@ -277,12 +279,53 @@ export default function SubtitleMergePage() {
                 <span className="text-gray-500 block mb-1">{t("merge.codec")}</span>
                 <span className="font-semibold text-gray-800 dark:text-gray-200 font-mono">{metadata.codec}</span>
               </div>
+              {metadata.audio_codec && (
+                <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
+                  <span className="text-gray-500 block mb-1">音频编码</span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-200 font-mono">{metadata.audio_codec}</span>
+                </div>
+              )}
+              {metadata.audio_sample_rate && (
+                <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
+                  <span className="text-gray-500 block mb-1">音频采样率</span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-200">{metadata.audio_sample_rate} Hz</span>
+                </div>
+              )}
+              {metadata.audio_channels && (
+                <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
+                  <span className="text-gray-500 block mb-1">音频声道数</span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-200">{metadata.audio_channels} ch</span>
+                </div>
+              )}
+              <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg">
+                <span className="text-gray-500 block mb-1">音频轨数量</span>
+                <span className="font-semibold text-gray-800 dark:text-gray-200">{metadata.audio_tracks} tracks</span>
+              </div>
             </div>
           </section>
         )}
 
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("merge.subtitleStyle")}</h3>
+
+          <div className="mb-6 flex items-center gap-2 rounded-lg bg-blue-50/50 p-3.5 dark:bg-blue-950/10 border border-blue-100/50 dark:border-blue-900/20">
+            <input
+              type="checkbox"
+              id="softSubtitle"
+              checked={softSubtitle}
+              disabled={processing}
+              onChange={(e) => setSoftSubtitle(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <div className="flex flex-col">
+              <label htmlFor="softSubtitle" className="text-sm font-semibold text-gray-800 dark:text-gray-200 cursor-pointer">
+                封装为软字幕轨道 (Mux Soft Subtitle)
+              </label>
+              <span className="text-[11px] text-gray-400 mt-0.5">
+                不改变视频和音频画面，仅把字幕流写入视频轨道。支持极速完成且零画质无损。
+              </span>
+            </div>
+          </div>
 
           <div className="mb-4">
             <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("merge.preset")}</label>
@@ -291,7 +334,7 @@ export default function SubtitleMergePage() {
                 <button
                   key={p.key}
                   onClick={() => applyPreset(i)}
-                  disabled={processing}
+                  disabled={processing || softSubtitle}
                   className={`rounded-md border px-3 py-1 text-sm ${
                     preset === i
                       ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30"
@@ -307,19 +350,19 @@ export default function SubtitleMergePage() {
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div>
               <label className="mb-1 block text-xs text-gray-500">{t("merge.fontSize")}</label>
-              <input type="number" min={10} max={72} value={fontSize} disabled={processing} onChange={(e) => setFontSize(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
+              <input type="number" min={10} max={72} value={fontSize} disabled={processing || softSubtitle} onChange={(e) => setFontSize(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
             <div>
               <label className="mb-1 block text-xs text-gray-500">{t("merge.fontColor")}</label>
-              <input type="text" value={fontColor} disabled={processing} onChange={(e) => setFontColor(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
+              <input type="text" value={fontColor} disabled={processing || softSubtitle} onChange={(e) => setFontColor(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
             <div>
               <label className="mb-1 block text-xs text-gray-500">{t("merge.outlineColor")}</label>
-              <input type="text" value={outlineColor} disabled={processing} onChange={(e) => setOutlineColor(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
+              <input type="text" value={outlineColor} disabled={processing || softSubtitle} onChange={(e) => setOutlineColor(e.target.value)} className="w-full rounded border border-gray-300 px-2 py-1 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
             <div>
               <label className="mb-1 block text-xs text-gray-500">{t("merge.marginV")}</label>
-              <input type="number" min={0} max={100} value={marginV} disabled={processing} onChange={(e) => setMarginV(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
+              <input type="number" min={0} max={100} value={marginV} disabled={processing || softSubtitle} onChange={(e) => setMarginV(Number(e.target.value))} className="w-full rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 disabled:opacity-50" />
             </div>
           </div>
 
@@ -348,6 +391,13 @@ export default function SubtitleMergePage() {
               >
                 {t("merge.previewPlaceholder")}
               </div>
+              {softSubtitle && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-gray-900/80 backdrop-blur-[1px]">
+                  <span className="text-sm font-medium text-gray-300">
+                    样式将由播放端渲染决定 (Styles determined by player)
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </section>

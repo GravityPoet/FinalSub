@@ -72,6 +72,41 @@ export async function deleteModel(modelId: string): Promise<void> {
   return invoke("delete_model", { modelId });
 }
 
+export async function importLocalModel(
+  modelId: string,
+  sourcePath: string,
+  expectedSha256?: string,
+): Promise<void> {
+  return invoke("import_local_model", { modelId, sourcePath, expectedSha256 });
+}
+
+export async function importSensevoiceModel(
+  modelOnnxPath: string,
+  tokensPath: string,
+): Promise<void> {
+  return invoke("import_sensevoice_model", { modelOnnxPath, tokensPath });
+}
+
+export interface EmbeddedSubtitleStream {
+  sub_index: number;
+  codec: string;
+  language: string | null;
+}
+
+export async function listEmbeddedSubtitles(
+  videoPath: string,
+): Promise<EmbeddedSubtitleStream[]> {
+  return invoke("list_embedded_subtitles", { videoPath });
+}
+
+export async function extractEmbeddedSubtitle(
+  videoPath: string,
+  subIndex: number,
+  outputPath: string,
+): Promise<string> {
+  return invoke("extract_embedded_subtitle", { videoPath, subIndex, outputPath });
+}
+
 export async function getModelStatus(modelId: string): Promise<AsrModelInfo | null> {
   return invoke("get_model_status", { modelId });
 }
@@ -150,6 +185,7 @@ export interface BurnSubtitleRequest {
   font_color?: string;
   outline_color?: string;
   margin_v?: number;
+  soft_subtitle?: boolean;
 }
 
 export async function burnSubtitle(req: BurnSubtitleRequest): Promise<string> {
@@ -167,10 +203,22 @@ export interface VideoMetadata {
   height: number;
   fps: number;
   codec: string;
+  audio_codec?: string;
+  audio_sample_rate?: number;
+  audio_channels?: number;
+  audio_tracks: number;
 }
 
 export async function getVideoMetadata(videoPath: string): Promise<VideoMetadata> {
   return invoke("get_video_metadata", { videoPath });
+}
+
+export async function convertSubtitleOpencc(srtContent: string, config: string): Promise<string> {
+  return invoke("convert_subtitle_opencc", { srtContent, config });
+}
+
+export async function convertStringsOpencc(texts: string[], config: string): Promise<string[]> {
+  return invoke("convert_strings_opencc", { texts, config });
 }
 
 export async function generateSubtitlePreview(req: BurnSubtitleRequest): Promise<string> {

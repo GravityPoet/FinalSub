@@ -384,6 +384,19 @@ async fn run_task_impl(
                         ffmpeg_path,
                     ))
                 }
+                "sensevoice" => {
+                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    Box::new(crate::core::asr::sensevoice::SenseVoiceEngine::new(models_dir))
+                }
+                "custom-command" => {
+                    let settings = crate::core::settings::load_settings(&app_config_dir)
+                        .map_err(|e| format!("加载设置失败：{}", e))?;
+                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    Box::new(crate::core::asr::custom::CustomCommandEngine::new(
+                        settings.whisper_command,
+                        models_dir,
+                    ))
+                }
                 other => return Err(format!("不支持的 ASR 引擎：{}", other)),
             };
 
@@ -469,13 +482,18 @@ async fn run_task_impl(
             current_track = Some(transcribe_res?);
         }
     } else {
-        // TranslateOnly 模式直接读取原字幕文件
+        // TranslateOnly 模式直接读取原字幕文件，按扩展名解析 SRT/VTT/ASS/LRC。
         update_task_progress(app, tasks.clone(), task_id, 0.0, "正在读取源字幕文件...").await;
-        let srt_content = tokio::fs::read_to_string(&media_path)
+        let sub_content = tokio::fs::read_to_string(&media_path)
             .await
             .map_err(|e| format!("读取源字幕文件失败：{}", e))?;
-        let track =
-            SubtitleTrack::from_srt(&srt_content).map_err(|e| format!("解析字幕失败：{}", e))?;
+        let ext = media_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("srt")
+            .to_lowercase();
+        let track = SubtitleTrack::from_format(&sub_content, &ext)
+            .map_err(|e| format!("解析字幕失败：{}", e))?;
         current_track = Some(track);
     }
 
