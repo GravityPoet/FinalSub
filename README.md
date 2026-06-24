@@ -130,7 +130,7 @@ If FinalSub has saved your time, protected your data, or simplified your workflo
 
 ## 🤝 Acknowledgements & Licenses
 
-* **FinalSub**'s early architectural design and some feature concepts were inspired by the excellent open-source project [SmartSub](https://github.com/buxuku/SmartSub) (MIT licensed, Copyright (c) 2024 Lin Xiaodong). We express our sincere gratitude!
+* **FinalSub**'s early architectural design and some feature concepts were inspired by the excellent open-source project SmartSub (MIT licensed, Copyright (c) 2024 Lin Xiaodong). We express our sincere gratitude!
 * For a full list of third-party licenses, see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 * This project is licensed under the **MIT License**.
 
