@@ -109,6 +109,18 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 
 ---
 
+## 🤝 Support & Community
+
+⭐️ If you find this project helpful, please give it a star or buy me a coffee (please mention your GitHub account).
+
+👥 If you have any questions or feedback, feel free to join our WeChat community group for support.
+
+| WeChat Sponsor | WeChat Community | PayPal |
+| :---: | :---: | :---: |
+| <img src="./docs/sponsors/wechat_pay.jpg" width="220" alt="WeChat Sponsor" /> | <img src="./docs/sponsors/wechat_group.jpg" width="220" alt="WeChat Group" /> | <img src="./docs/sponsors/paypal.jpg" width="220" alt="PayPal" /> |
+
+---
+
 ## 🤝 Acknowledgements & Licenses
 
 * **FinalSub**'s early architectural design and some feature concepts were inspired by the excellent open-source project [SmartSub](https://github.com/buxuku/SmartSub) (MIT licensed, Copyright (c) 2024 Lin Xiaodong). We express our sincere gratitude!
