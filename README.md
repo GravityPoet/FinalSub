@@ -111,9 +111,17 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 
 ## 🤝 Support & Community
 
-⭐️ If you find this project helpful, please give it a star or buy me a coffee (please mention your GitHub account).
+**Why Sponsor FinalSub?**
 
-👥 If you have any questions or feedback, feel free to join our WeChat community group for support.
+**FinalSub** is built on a simple promise: complete privacy, total tool control, and zero recurring fees. Keeping this project 100% local, free, and open-source requires continuous dedication, and your support directly fuels our journey:
+*   **Save on Subscription Fees**: Instead of paying SaaS platforms per minute of transcription or subscribing to expensive monthly plans, FinalSub utilizes your local GPU/CPU. We help content creators and developers save hundreds of dollars annually.
+*   **Developer Certification Costs**: To prevent Gatekeeper warnings and provide a seamless "just unzip and run" experience, we dynamically package pre-signed FFmpeg/Whisper binaries. This requires paying ongoing Apple Developer Program fees and maintenance overheads out of pocket.
+*   **Backing the Future of Offline AI**: Your donations directly support the research and implementation of next-gen offline local LLM integrations, enhanced VAD algorithms, and keeping this app free of trackers and ads.
+
+If FinalSub has saved your time, protected your data, or simplified your workflow, please consider:
+*   🌟 Giving us a **Star** (It really helps boost our visibility!).
+*   ☕ **Buying us a coffee** to help offset server, certificate, and device testing costs (please mention your GitHub account).
+*   👥 Joining our **WeChat Community** to talk about local ASR and AI translation.
 
 | WeChat Sponsor | WeChat Community | PayPal |
 | :---: | :---: | :---: |
