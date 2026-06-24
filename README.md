@@ -109,7 +109,7 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 
 ---
 
-## 🤝 Support & Community
+## 🤝 Support & Sponsorship
 
 **Why Sponsor FinalSub?**
 
@@ -121,11 +121,10 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 If FinalSub has saved your time, protected your data, or simplified your workflow, please consider:
 *   🌟 Giving us a **Star** (It really helps boost our visibility!).
 *   ☕ **Buying us a coffee** to help offset server, certificate, and device testing costs (please mention your GitHub account).
-*   👥 Joining our **WeChat Community** to talk about local ASR and AI translation.
 
-| WeChat Sponsor | WeChat Community | PayPal |
-| :---: | :---: | :---: |
-| <img src="./docs/sponsors/wechat_pay.jpg" width="220" alt="WeChat Sponsor" /> | <img src="./docs/sponsors/wechat_group.jpg" width="220" alt="WeChat Group" /> | <img src="./docs/sponsors/paypal.jpg" width="220" alt="PayPal" /> |
+| WeChat Sponsor | PayPal |
+| :---: | :---: |
+| <img src="./docs/sponsors/wechat_pay.jpg" width="220" alt="WeChat Sponsor" /> | <img src="./docs/sponsors/paypal.jpg" width="220" alt="PayPal" /> |
 
 ---
 
