@@ -303,7 +303,7 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
         )));
     }
 
-    match req.provider.as_str() {
+    let res = match req.provider.as_str() {
         "baidu" => translate_baidu(req).await,
         "google" => translate_google(req).await,
         "aliyun" => translate_aliyun(req).await,
@@ -326,7 +326,38 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
             "翻译 provider '{}' 不可用，请在翻译管理中选择列表内服务",
             req.provider
         ))),
+    };
+
+    match res {
+        Ok(resp) => Ok(resp),
+        Err(err) => {
+            let original_msg = err.to_string();
+            let redacted_msg = redact_secrets(&original_msg, req);
+            Err(FinalSubError::Validation(redacted_msg))
+        }
     }
+}
+
+fn redact_secrets(err_msg: &str, req: &TranslateRequest) -> String {
+    let mut redacted = err_msg.to_string();
+    
+    if let Some(ref api_key) = req.api_key {
+        let trimmed = api_key.trim();
+        if !trimmed.is_empty() && trimmed.len() > 3 {
+            redacted = redacted.replace(trimmed, "[REDACTED_API_KEY]");
+        }
+    }
+    
+    if let Some(ref secrets) = req.secret_fields {
+        for (field_name, val) in secrets {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() && trimmed.len() > 3 {
+                redacted = redacted.replace(trimmed, &format!("[REDACTED_{}]", field_name.to_uppercase()));
+            }
+        }
+    }
+    
+    redacted
 }
 
 fn provider_info(provider: &str) -> Option<TranslationProvider> {

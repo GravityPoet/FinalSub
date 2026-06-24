@@ -23,6 +23,37 @@ impl SubtitleTrack {
         Ok(Self { cues })
     }
 
+    pub fn from_vtt(vtt: &str) -> crate::error::Result<Self> {
+        Ok(Self {
+            cues: parse_vtt(vtt)?,
+        })
+    }
+
+    pub fn from_ass(ass: &str) -> crate::error::Result<Self> {
+        Ok(Self {
+            cues: parse_ass(ass)?,
+        })
+    }
+
+    pub fn from_lrc(lrc: &str) -> crate::error::Result<Self> {
+        Ok(Self {
+            cues: parse_lrc(lrc)?,
+        })
+    }
+
+    /// 按显式格式或文件扩展名解析字幕文本。
+    pub fn from_format(content: &str, format: &str) -> crate::error::Result<Self> {
+        match format.trim().to_lowercase().as_str() {
+            "srt" => Self::from_srt(content),
+            "vtt" | "webvtt" => Self::from_vtt(content),
+            "ass" | "ssa" => Self::from_ass(content),
+            "lrc" => Self::from_lrc(content),
+            other => Err(crate::error::FinalSubError::Validation(format!(
+                "不支持解析的字幕格式：{other}"
+            ))),
+        }
+    }
+
     pub fn to_srt(&self) -> String {
         serialize_srt(&self.cues)
     }
@@ -260,6 +291,183 @@ pub fn serialize_ass(cues: &[Cue]) -> String {
     out
 }
 
+/// end 必须晚于 start；外部格式可能给出非法或缺失的 end，统一兜底为 start + 2s。
+fn ensure_end_after_start(start_ms: u64, end_ms: u64) -> u64 {
+    if end_ms > start_ms {
+        end_ms
+    } else {
+        start_ms + 2000
+    }
+}
+
+pub fn parse_vtt(vtt: &str) -> crate::error::Result<Vec<Cue>> {
+    let normalized = vtt.replace("\r\n", "\n").replace('\r', "\n");
+    let mut cues = Vec::new();
+    for block in normalized.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() || block.starts_with("WEBVTT") {
+            continue;
+        }
+        // NOTE / STYLE / REGION 等元数据块跳过。
+        let first = block.lines().next().unwrap_or("");
+        if first.starts_with("NOTE") || first.starts_with("STYLE") || first.starts_with("REGION") {
+            continue;
+        }
+        let Some(timing_line) = block.lines().find(|l| l.contains("-->")) else {
+            continue;
+        };
+        let arrow = "-->";
+        let arrow_pos = timing_line.find(arrow).unwrap();
+        let start_str = timing_line[..arrow_pos].trim();
+        // 右侧可能带 cue settings（align/position 等），取第一段。
+        let end_str = timing_line[arrow_pos + arrow.len()..]
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        let start_ms = parse_srt_time(start_str)?;
+        let end_ms = ensure_end_after_start(start_ms, parse_srt_time(end_str)?);
+        let text = block
+            .lines()
+            .skip_while(|l| !l.contains("-->"))
+            .skip(1)
+            .collect::<Vec<&str>>()
+            .join("\n")
+            .trim()
+            .to_string();
+        if text.is_empty() {
+            continue;
+        }
+        cues.push(Cue {
+            index: (cues.len() + 1) as u32,
+            start_ms,
+            end_ms,
+            text,
+        });
+    }
+    if cues.is_empty() {
+        return Err(crate::error::FinalSubError::Parse(
+            "no valid VTT cues found".into(),
+        ));
+    }
+    Ok(cues)
+}
+
+pub fn parse_ass(ass: &str) -> crate::error::Result<Vec<Cue>> {
+    let normalized = ass.replace("\r\n", "\n").replace('\r', "\n");
+    let mut cues = Vec::new();
+    for line in normalized.lines() {
+        let line = line.trim();
+        if !line.starts_with("Dialogue:") {
+            continue;
+        }
+        let payload = line.trim_start_matches("Dialogue:").trim_start();
+        // 字段：Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+        // Text 自身可含逗号，故仅按前 9 个逗号切分。
+        let parts: Vec<&str> = payload.splitn(10, ',').collect();
+        if parts.len() < 10 {
+            continue;
+        }
+        let start_ms = parse_srt_time(parts[1].trim())?;
+        let end_ms = ensure_end_after_start(start_ms, parse_srt_time(parts[2].trim())?);
+        let text = strip_ass_text(parts[9]);
+        if text.is_empty() {
+            continue;
+        }
+        cues.push(Cue {
+            index: (cues.len() + 1) as u32,
+            start_ms,
+            end_ms,
+            text,
+        });
+    }
+    if cues.is_empty() {
+        return Err(crate::error::FinalSubError::Parse(
+            "no valid ASS dialogue lines found".into(),
+        ));
+    }
+    Ok(cues)
+}
+
+/// 去除 ASS 行内覆盖标签 `{...}`，并把换行符 `\N` / `\n` 还原为真实换行。
+fn strip_ass_text(raw: &str) -> String {
+    let mut out = String::new();
+    let mut in_brace = false;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' => in_brace = true,
+            '}' => in_brace = false,
+            '\\' if !in_brace => {
+                if let Some(&next) = chars.peek() {
+                    if next == 'N' || next == 'n' {
+                        chars.next();
+                        out.push('\n');
+                        continue;
+                    }
+                }
+                out.push('\\');
+            }
+            _ if !in_brace => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+pub fn parse_lrc(lrc: &str) -> crate::error::Result<Vec<Cue>> {
+    let normalized = lrc.replace("\r\n", "\n").replace('\r', "\n");
+    let mut raw: Vec<(u64, String)> = Vec::new();
+    for line in normalized.lines() {
+        let line = line.trim();
+        // 一行可带多个时间标签：[00:01.00][00:05.00]文本
+        let mut rest = line;
+        let mut stamps = Vec::new();
+        while rest.starts_with('[') {
+            let Some(close) = rest.find(']') else { break };
+            let tag = &rest[1..close];
+            // 仅接受形如 mm:ss(.cc) 的时间标签，跳过 [ti:]/[ar:] 等元数据。
+            if let Some(colon) = tag.find(':') {
+                if tag[..colon].chars().all(|c| c.is_ascii_digit()) && colon > 0 {
+                    if let Ok(ms) = parse_srt_time(tag) {
+                        stamps.push(ms);
+                    }
+                }
+            }
+            rest = rest[close + 1..].trim_start();
+        }
+        let text = rest.trim().to_string();
+        if stamps.is_empty() || text.is_empty() {
+            continue;
+        }
+        for ms in stamps {
+            raw.push((ms, text.clone()));
+        }
+    }
+    raw.sort_by_key(|(ms, _)| *ms);
+    let mut cues = Vec::new();
+    for i in 0..raw.len() {
+        let start_ms = raw[i].0;
+        let end_ms = raw
+            .get(i + 1)
+            .map(|(next, _)| *next)
+            .filter(|next| *next > start_ms)
+            .unwrap_or(start_ms + 4000);
+        cues.push(Cue {
+            index: (i + 1) as u32,
+            start_ms,
+            end_ms,
+            text: raw[i].1.clone(),
+        });
+    }
+    if cues.is_empty() {
+        return Err(crate::error::FinalSubError::Parse(
+            "no valid LRC lines found".into(),
+        ));
+    }
+    Ok(cues)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +584,54 @@ mod tests {
         let ass = track.to_format("ass").unwrap();
         assert!(ass.contains("[Events]"));
         assert!(ass.contains("Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,Hello world"));
+    }
+
+    #[test]
+    fn parse_vtt_basic() {
+        let vtt = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.500 align:start\nHello world\n\n00:00:04.000 --> 00:00:06.000\nSecond line";
+        let track = SubtitleTrack::from_vtt(vtt).unwrap();
+        assert_eq!(track.len(), 2);
+        assert_eq!(track.cues[0].start_ms, 1000);
+        assert_eq!(track.cues[0].end_ms, 3500);
+        assert_eq!(track.cues[0].text, "Hello world");
+        assert_eq!(track.cues[1].text, "Second line");
+    }
+
+    #[test]
+    fn parse_vtt_skips_note_blocks() {
+        let vtt = "WEBVTT\n\nNOTE this is a comment\n\n00:00:01.000 --> 00:00:02.000\nText";
+        let track = SubtitleTrack::from_vtt(vtt).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues[0].text, "Text");
+    }
+
+    #[test]
+    fn parse_ass_dialogue() {
+        let ass = "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,{\\b1}Hello,\\Nworld";
+        let track = SubtitleTrack::from_ass(ass).unwrap();
+        assert_eq!(track.len(), 1);
+        assert_eq!(track.cues[0].start_ms, 1000);
+        assert_eq!(track.cues[0].end_ms, 3500);
+        // 覆盖标签 {\b1} 去除，\N 转换行，文本内逗号保留。
+        assert_eq!(track.cues[0].text, "Hello,\nworld");
+    }
+
+    #[test]
+    fn parse_lrc_lines() {
+        let lrc = "[ti:Song]\n[00:01.00]First line\n[00:05.00]Second line";
+        let track = SubtitleTrack::from_lrc(lrc).unwrap();
+        assert_eq!(track.len(), 2);
+        assert_eq!(track.cues[0].start_ms, 1000);
+        assert_eq!(track.cues[0].end_ms, 5000);
+        assert_eq!(track.cues[1].start_ms, 5000);
+        assert_eq!(track.cues[1].text, "Second line");
+    }
+
+    #[test]
+    fn from_format_dispatches() {
+        let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHi";
+        assert_eq!(SubtitleTrack::from_format(vtt, "vtt").unwrap().len(), 1);
+        let err = SubtitleTrack::from_format("x", "docx").unwrap_err();
+        assert!(err.to_string().contains("不支持解析的字幕格式"));
     }
 }

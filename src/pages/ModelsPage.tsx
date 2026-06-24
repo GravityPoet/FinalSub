@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   scanModels,
   deleteModel,
   getSettings,
   downloadModel,
   cancelModelDownload,
+  importLocalModel,
+  importSensevoiceModel,
   type AsrModelInfo,
   type ModelDownloadProgress,
 } from "../lib/tauri";
-import { Download, CheckCircle, AlertCircle, Clock, Trash2, RefreshCw, XCircle } from "lucide-react";
+import { Download, CheckCircle, AlertCircle, Clock, Trash2, RefreshCw, XCircle, FileInput } from "lucide-react";
 
 function StatusBadge({
   status,
@@ -144,6 +147,50 @@ export default function ModelsPage() {
     }
   };
 
+  const handleImportModel = async (modelId: string) => {
+    setMessage(null);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Whisper Model", extensions: ["bin"] }],
+      });
+      if (!selected) return;
+
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      setMessage({ type: "ok", text: "正在导入模型，请稍候..." });
+      await importLocalModel(modelId, path);
+      setMessage({ type: "ok", text: "本地模型导入成功" });
+      refresh();
+    } catch (err) {
+      setMessage({ type: "err", text: `导入模型失败: ${err}` });
+    }
+  };
+
+  // SenseVoice 需要 model.onnx + tokens.txt 两个文件，分别选取后导入。
+  const handleImportSensevoice = async () => {
+    setMessage(null);
+    try {
+      const onnx = await open({
+        multiple: false,
+        filters: [{ name: "ONNX Model", extensions: ["onnx"] }],
+      });
+      if (!onnx) return;
+      const tokens = await open({
+        multiple: false,
+        filters: [{ name: "Tokens", extensions: ["txt"] }],
+      });
+      if (!tokens) return;
+      const onnxPath = Array.isArray(onnx) ? onnx[0] : onnx;
+      const tokensPath = Array.isArray(tokens) ? tokens[0] : tokens;
+      setMessage({ type: "ok", text: "正在导入 SenseVoice 模型，请稍候..." });
+      await importSensevoiceModel(onnxPath, tokensPath);
+      setMessage({ type: "ok", text: "SenseVoice 模型导入成功" });
+      refresh();
+    } catch (err) {
+      setMessage({ type: "err", text: `导入 SenseVoice 模型失败: ${err}` });
+    }
+  };
+
   const handleDownload = async (modelId: string) => {
     setMessage(null);
     try {
@@ -180,7 +227,7 @@ export default function ModelsPage() {
   if (loading && models.length === 0) return <div className="text-gray-500">{t("models.scanning")}</div>;
 
   const visibleModels = models.filter(
-    (model) => model.engine_id !== "sensevoice" && model.engine_id !== "custom-command"
+    (model) => model.engine_id !== "custom-command"
   );
   const engineGroups = visibleModels.reduce<Record<string, AsrModelInfo[]>>((acc, model) => {
     (acc[model.engine_id] ??= []).push(model);
@@ -248,15 +295,39 @@ export default function ModelsPage() {
                         {model.size_mb && (
                           <span className="text-xs text-gray-400">{model.size_mb} MB</span>
                         )}
-                        {model.status === "available" && model.download_url && !isDownloading && (
-                          <button
-                            type="button"
-                            onClick={() => handleDownload(model.id)}
-                            className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300"
-                          >
-                            <Download size={12} />
-                            {t("models.downloadAction")}
-                          </button>
+                        {model.status === "available" && !isDownloading && (
+                          <div className="flex gap-2">
+                            {model.engine_id !== "sensevoice" && model.download_url && (
+                              <button
+                                type="button"
+                                onClick={() => handleDownload(model.id)}
+                                className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300"
+                              >
+                                <Download size={12} />
+                                {t("models.downloadAction")}
+                              </button>
+                            )}
+                            {model.engine_id === "whisper-cpp" && (
+                              <button
+                                type="button"
+                                onClick={() => handleImportModel(model.id)}
+                                className="inline-flex items-center gap-1 rounded bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
+                              >
+                                <FileInput size={12} />
+                                导入本地
+                              </button>
+                            )}
+                            {model.engine_id === "sensevoice" && (
+                              <button
+                                type="button"
+                                onClick={handleImportSensevoice}
+                                className="inline-flex items-center gap-1 rounded bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
+                              >
+                                <FileInput size={12} />
+                                导入模型
+                              </button>
+                            )}
+                          </div>
                         )}
                         {isDownloading && (
                           <button

@@ -109,7 +109,7 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
             id: "sensevoice-small".into(),
             engine_id: "sensevoice".into(),
             name: "SenseVoice Small".into(),
-            description: "中文和粤语识别候选模型，敬请期待".into(),
+            description: "中文和粤语高精度极速识别模型（原生 ONNX 运行时）".into(),
             languages: vec![
                 "zh".into(),
                 "yue".into(),
@@ -126,7 +126,7 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
             id: "custom-command".into(),
             engine_id: "custom-command".into(),
             name: "Custom Command".into(),
-            description: "高级用户自定义识别命令，敬请期待".into(),
+            description: "自定义识别 CLI 命令行（可在设置中配置）".into(),
             languages: vec!["any".into()],
             best_for: "advanced-users".into(),
             size_mb: None,
@@ -185,8 +185,16 @@ pub fn scan_model_status(catalog: &mut [AsrModelInfo], whisper_dir: &Path, parak
                     model.status = ModelStatus::NotReady;
                 }
             }
-            "sensevoice" | "custom-command" => {
-                model.status = ModelStatus::NotReady;
+            "sensevoice" => {
+                let path = whisper_dir.join("sensevoice-small").join("model.onnx");
+                if path.exists() {
+                    model.status = ModelStatus::Downloaded;
+                } else {
+                    model.status = ModelStatus::Available;
+                }
+            }
+            "custom-command" => {
+                model.status = ModelStatus::Downloaded;
             }
             _ => {}
         }

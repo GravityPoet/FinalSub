@@ -345,6 +345,43 @@ export const useStandaloneSubtitles = (
     }
   };
 
+  const handleExport = async (
+    filePath: string,
+    format: 'srt' | 'vtt' | 'ass' | 'lrc' | 'txt',
+    contentType: 'source' | 'onlyTranslate' | 'sourceAndTranslate' | 'translateAndSource',
+  ): Promise<boolean> => {
+    try {
+      const buildText = (sub: Subtitle, type: string): string => {
+        if (type === 'source') {
+          return sub.sourceContent ?? '';
+        }
+        const sourceVal = sub.sourceContent ?? '';
+        const targetVal = sub.targetContent ?? '';
+        if (type === 'onlyTranslate') {
+          return targetVal;
+        } else if (type === 'sourceAndTranslate') {
+          return `${sourceVal}\n${targetVal}`;
+        } else if (type === 'translateAndSource') {
+          return `${targetVal}\n${sourceVal}`;
+        }
+        return targetVal;
+      };
+
+      const entries = mergedSubtitles.map((sub) => ({
+        id: sub.id,
+        startEndTime: sub.startEndTime,
+        text: buildText(sub, contentType),
+      }));
+
+      const content = serializeSubtitleEntries(entries, format);
+      await writeTextFile(filePath, content);
+      return true;
+    } catch (error) {
+      console.error('Error exporting subtitles:', error);
+      return false;
+    }
+  };
+
   // 字幕统计
   const getSubtitleStats = (): SubtitleStats => {
     const total = mergedSubtitles.length;
@@ -626,6 +663,7 @@ export const useStandaloneSubtitles = (
     isLoading,
     handleSubtitleChange,
     handleSave,
+    handleExport,
     getSubtitleStats,
     isTranslationFailed,
     getFailedTranslationIndices,

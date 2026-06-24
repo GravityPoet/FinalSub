@@ -38,6 +38,8 @@ percent-encoding = "2.3"
 # rustls 传输，与项目其余 reqwest 配置一致，避免拖入 native-tls/openssl。
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
 sys-locale = "0.3"
+sherpa-onnx = "1.13.3"
+opencc-fmmseg = "0.11.0"
 
 [dev-dependencies]
 tempfile = "3"

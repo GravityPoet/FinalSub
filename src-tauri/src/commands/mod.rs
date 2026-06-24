@@ -163,6 +163,198 @@ pub fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), 
 }
 
 #[tauri::command]
+pub async fn import_local_model(
+    state: State<'_, AppState>,
+    model_id: String,
+    source_path: String,
+    expected_sha256: Option<String>,
+) -> Result<(), String> {
+    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let source = validate_existing_file_path(&source_path, "Source model file")?;
+    let normalized = models::validate_whisper_model_id(&model_id)
+        .map_err(|e| e.to_string())?;
+    let dest_path = models::whisper_model_path(&models_dir, &normalized);
+
+    if let Some(parent) = dest_path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+
+    // 流式计算源文件 SHA256。
+    let mut file = tokio::fs::File::open(&source)
+        .await
+        .map_err(|e| format!("无法打开源文件: {e}"))?;
+
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+
+    loop {
+        let n = file
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("读取源文件失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
+    let hash_str = hex::encode(hasher.finalize());
+
+    // 调用方提供期望值时强制校验：不匹配直接拒绝，绝不落盘。
+    if let Some(expected) = expected_sha256 {
+        let expected = expected.trim().to_lowercase();
+        if !expected.is_empty() && expected != hash_str {
+            return Err(format!(
+                "SHA256 校验失败：期望 {expected}，实际 {hash_str}，已拒绝导入"
+            ));
+        }
+    }
+
+    // 原子落盘：先拷到同目录临时文件，再 rename 覆盖目标，避免写一半留下半个模型。
+    let tmp_name = format!(
+        "{}.importing",
+        dest_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model.bin")
+    );
+    let tmp_path = dest_path.with_file_name(tmp_name);
+    tokio::fs::copy(&source, &tmp_path)
+        .await
+        .map_err(|e| format!("拷贝文件失败: {e}"))?;
+    if let Err(e) = tokio::fs::rename(&tmp_path, &dest_path).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(format!("原子替换模型文件失败: {e}"));
+    }
+
+    println!("导入模型 {normalized} 完成，SHA256: {hash_str}");
+    Ok(())
+}
+
+/// 原子拷贝：先写同目录临时文件再 rename，避免写一半留下损坏文件。
+async fn copy_atomic(src: &Path, dest: &Path) -> Result<(), String> {
+    let tmp_name = format!(
+        "{}.importing",
+        dest.file_name().and_then(|n| n.to_str()).unwrap_or("tmp")
+    );
+    let tmp = dest.with_file_name(tmp_name);
+    tokio::fs::copy(src, &tmp)
+        .await
+        .map_err(|e| format!("拷贝文件失败: {e}"))?;
+    if let Err(e) = tokio::fs::rename(&tmp, dest).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("原子替换失败: {e}"));
+    }
+    Ok(())
+}
+
+/// 导入 SenseVoice 模型：model.onnx + tokens.txt 落到 models/sensevoice-small/。
+#[tauri::command]
+pub async fn import_sensevoice_model(
+    state: State<'_, AppState>,
+    model_onnx_path: String,
+    tokens_path: String,
+) -> Result<(), String> {
+    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let onnx_src = validate_existing_file_path(&model_onnx_path, "SenseVoice model.onnx")?;
+    let tokens_src = validate_existing_file_path(&tokens_path, "SenseVoice tokens.txt")?;
+    let target_dir = models_dir.join("sensevoice-small");
+    tokio::fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| format!("创建 SenseVoice 模型目录失败: {e}"))?;
+    copy_atomic(&onnx_src, &target_dir.join("model.onnx")).await?;
+    copy_atomic(&tokens_src, &target_dir.join("tokens.txt")).await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EmbeddedSubtitleStream {
+    pub sub_index: u32,
+    pub codec: String,
+    pub language: Option<String>,
+}
+
+/// 列出视频内嵌字幕轨（解析 `ffmpeg -i` 的 stderr）。
+#[tauri::command]
+pub async fn list_embedded_subtitles(
+    app: AppHandle,
+    video_path: String,
+) -> Result<Vec<EmbeddedSubtitleStream>, String> {
+    let video_path = validate_media_path(&video_path)?;
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let output = tokio::process::Command::new(ffmpeg_path)
+        .arg("-i")
+        .arg(&video_path)
+        .output()
+        .await
+        .map_err(|e| format!("运行 FFmpeg 探测字幕流失败: {e}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut streams = Vec::new();
+    let mut sub_index = 0u32;
+    for line in stderr.lines() {
+        let line = line.trim();
+        if !(line.contains("Stream #") && line.contains("Subtitle:")) {
+            continue;
+        }
+        // 语言标签在 `Subtitle:` 之前的括号里，如 `Stream #0:2(eng): Subtitle: ...`；
+        // `Subtitle:` 之后的括号（如 `subrip (default)`）不是语言。
+        let prefix = line.split("Subtitle:").next().unwrap_or("");
+        let language = prefix.find('(').and_then(|o| {
+            prefix[o + 1..].find(')').and_then(|c| {
+                let lang = prefix[o + 1..o + 1 + c].trim();
+                (!lang.is_empty() && lang.len() <= 8).then(|| lang.to_string())
+            })
+        });
+        let codec = line
+            .split("Subtitle:")
+            .nth(1)
+            .and_then(|rest| rest.trim().split([' ', ',']).next())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unknown")
+            .to_string();
+        streams.push(EmbeddedSubtitleStream {
+            sub_index,
+            codec,
+            language,
+        });
+        sub_index += 1;
+    }
+    Ok(streams)
+}
+
+/// 提取指定内嵌字幕轨为独立字幕文件（输出格式由扩展名决定）。
+#[tauri::command]
+pub async fn extract_embedded_subtitle(
+    app: AppHandle,
+    video_path: String,
+    sub_index: u32,
+    output_path: String,
+) -> Result<String, String> {
+    let video_path = validate_media_path(&video_path)?;
+    let output_path = validate_new_output_path(&output_path, "Subtitle output path")?;
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let output = tokio::process::Command::new(ffmpeg_path)
+        .arg("-y")
+        .arg("-i")
+        .arg(&video_path)
+        .arg("-map")
+        .arg(format!("0:s:{sub_index}"))
+        .arg(&output_path)
+        .output()
+        .await
+        .map_err(|e| format!("运行 FFmpeg 提取字幕失败: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("提取内嵌字幕失败（流 {sub_index}）: {stderr}"));
+    }
+    Ok(output_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 pub async fn download_model(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -679,6 +871,7 @@ pub struct BurnSubtitleRequest {
     pub font_color: Option<String>,
     pub outline_color: Option<String>,
     pub margin_v: Option<u32>,
+    pub soft_subtitle: Option<bool>,
 }
 
 #[tauri::command]
@@ -698,12 +891,53 @@ pub async fn burn_subtitle(
         outline_color: req.outline_color,
         margin_v: req.margin_v,
     };
-    let args = audio::burn_in_args(
-        &video_path.to_string_lossy(),
-        &subtitle_path.to_string_lossy(),
-        &output_path.to_string_lossy(),
-        &style,
-    );
+    let args = if req.soft_subtitle.unwrap_or(false) {
+        let ext = output_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+            
+        let subtitle_codec = if ext == "mp4" {
+            "mov_text"
+        } else if ext == "mkv" {
+            // 根据输入字幕文件的后缀选择编码
+            let sub_ext = subtitle_path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if sub_ext == "ass" || sub_ext == "ssa" {
+                "ass"
+            } else {
+                "srt"
+            }
+        } else {
+            "srt"
+        };
+
+        vec![
+            "-i".to_string(),
+            video_path.to_string_lossy().to_string(),
+            "-i".to_string(),
+            subtitle_path.to_string_lossy().to_string(),
+            "-c".to_string(),
+            "copy".to_string(),
+            "-c:s".to_string(),
+            subtitle_codec.to_string(),
+            "-map".to_string(),
+            "0".to_string(),
+            "-map".to_string(),
+            "1".to_string(),
+            "-y".to_string(),
+            output_path.to_string_lossy().to_string(),
+        ]
+    } else {
+        audio::burn_in_args(
+            &video_path.to_string_lossy(),
+            &subtitle_path.to_string_lossy(),
+            &output_path.to_string_lossy(),
+            &style,
+        )
+    };
 
     let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
     let mut child = tokio::process::Command::new(ffmpeg_path)
@@ -822,6 +1056,10 @@ pub struct VideoMetadata {
     pub height: u32,
     pub fps: f64,
     pub codec: String,
+    pub audio_codec: Option<String>,
+    pub audio_sample_rate: Option<u32>,
+    pub audio_channels: Option<u32>,
+    pub audio_tracks: u32,
 }
 
 #[tauri::command]
@@ -847,6 +1085,10 @@ pub async fn get_video_metadata(
     let mut height = 0;
     let mut fps = 0.0;
     let mut codec = "unknown".to_string();
+    let mut audio_codec: Option<String> = None;
+    let mut audio_sample_rate: Option<u32> = None;
+    let mut audio_channels: Option<u32> = None;
+    let mut audio_tracks = 0;
 
     for line in stderr.lines() {
         if let Some(pos) = line.find("Duration: ") {
@@ -889,6 +1131,47 @@ pub async fn get_video_metadata(
                 }
             }
         }
+
+        if line.contains("Stream #") && line.contains("Audio:") {
+            audio_tracks += 1;
+            if let Some(audio_pos) = line.find("Audio: ") {
+                let audio_part = &line[audio_pos + 7..];
+                if let Some(comma_pos) = audio_part.find(',') {
+                    let codec_name = audio_part[..comma_pos].trim().to_string();
+                    if audio_codec.is_none() {
+                        audio_codec = Some(codec_name);
+                    }
+                }
+            }
+
+            for token in line.split(',') {
+                let token = token.trim();
+                if token.contains("Hz") {
+                    let hz_part = token.split_whitespace().next().unwrap_or("");
+                    if let Ok(hz) = hz_part.parse::<u32>() {
+                        if audio_sample_rate.is_none() {
+                            audio_sample_rate = Some(hz);
+                        }
+                    }
+                }
+                if token.contains("stereo") {
+                    if audio_channels.is_none() {
+                        audio_channels = Some(2);
+                    }
+                } else if token.contains("mono") {
+                    if audio_channels.is_none() {
+                        audio_channels = Some(1);
+                    }
+                } else if token.contains("channels") || token.contains("channel") {
+                    let ch_part = token.split_whitespace().next().unwrap_or("");
+                    if let Ok(ch) = ch_part.parse::<u32>() {
+                        if audio_channels.is_none() {
+                            audio_channels = Some(ch);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(VideoMetadata {
@@ -898,6 +1181,10 @@ pub async fn get_video_metadata(
         height,
         fps,
         codec,
+        audio_codec,
+        audio_sample_rate,
+        audio_channels,
+        audio_tracks,
     })
 }
 
@@ -1796,6 +2083,21 @@ fn is_newer_version(current_ver: &str, new_ver: &str) -> bool {
         }
     }
     false
+}
+
+#[tauri::command]
+pub fn convert_subtitle_opencc(srt_content: String, config: String) -> Result<String, String> {
+    crate::core::opencc::convert_subtitle(&srt_content, &config)
+        .map_err(|e| format!("简繁转换失败：{}", e))
+}
+
+#[tauri::command]
+pub fn convert_strings_opencc(texts: Vec<String>, config: String) -> Result<Vec<String>, String> {
+    let converter = opencc_fmmseg::OpenCC::new();
+    Ok(texts
+        .into_iter()
+        .map(|t| converter.convert(&t, &config, false))
+        .collect())
 }
 
 #[cfg(test)]
