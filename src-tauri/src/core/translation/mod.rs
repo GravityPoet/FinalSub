@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
 
 use crate::error::{FinalSubError, Result};
 
@@ -32,6 +33,78 @@ impl Default for TranslationConfig {
             provider: String::new(),
             api_key: None,
         }
+    }
+}
+
+fn translation_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent("FinalSub/1.0")
+        .build()
+        .map_err(|e| {
+            FinalSubError::Validation(format!(
+                "初始化 HTTP 客户端失败：{}",
+                describe_reqwest_error(&e)
+            ))
+        })
+}
+
+fn describe_reqwest_error(err: &reqwest::Error) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut flags = Vec::new();
+
+    if err.is_timeout() {
+        flags.push("timeout");
+    }
+    if err.is_connect() {
+        flags.push("connect");
+    }
+    if err.is_request() {
+        flags.push("request");
+    }
+    if err.is_body() {
+        flags.push("body");
+    }
+    if err.is_decode() {
+        flags.push("decode");
+    }
+    if let Some(status) = err.status() {
+        flags.push(if status.is_client_error() {
+            "http_4xx"
+        } else if status.is_server_error() {
+            "http_5xx"
+        } else {
+            "http_status"
+        });
+    }
+
+    if !flags.is_empty() {
+        parts.push(format!("分类：{}", flags.join(",")));
+    }
+
+    let mut source = err.source();
+    let mut source_parts = Vec::new();
+    while let Some(item) = source {
+        let text = item.to_string();
+        if !text.is_empty() && !source_parts.iter().any(|existing| existing == &text) {
+            source_parts.push(text);
+        }
+        source = item.source();
+        if source_parts.len() >= 4 {
+            break;
+        }
+    }
+
+    if !source_parts.is_empty() {
+        parts.push(format!("底层原因：{}", source_parts.join("；")));
+    }
+
+    parts.join("；")
+}
+
+fn validation_message(err: FinalSubError) -> String {
+    match err {
+        FinalSubError::Validation(msg) => msg,
+        other => other.to_string(),
     }
 }
 
@@ -331,7 +404,7 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
     match res {
         Ok(resp) => Ok(resp),
         Err(err) => {
-            let original_msg = err.to_string();
+            let original_msg = validation_message(err);
             let redacted_msg = redact_secrets(&original_msg, req);
             Err(FinalSubError::Validation(redacted_msg))
         }
@@ -340,23 +413,26 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
 
 fn redact_secrets(err_msg: &str, req: &TranslateRequest) -> String {
     let mut redacted = err_msg.to_string();
-    
+
     if let Some(ref api_key) = req.api_key {
         let trimmed = api_key.trim();
         if !trimmed.is_empty() && trimmed.len() > 3 {
             redacted = redacted.replace(trimmed, "[REDACTED_API_KEY]");
         }
     }
-    
+
     if let Some(ref secrets) = req.secret_fields {
         for (field_name, val) in secrets {
             let trimmed = val.trim();
             if !trimmed.is_empty() && trimmed.len() > 3 {
-                redacted = redacted.replace(trimmed, &format!("[REDACTED_{}]", field_name.to_uppercase()));
+                redacted = redacted.replace(
+                    trimmed,
+                    &format!("[REDACTED_{}]", field_name.to_uppercase()),
+                );
             }
         }
     }
-    
+
     redacted
 }
 
@@ -459,7 +535,7 @@ async fn translate_baidu(req: &TranslateRequest) -> Result<TranslateResponse> {
     let sign_str = format!("{}{}{}{}", app_id, req.text, salt, secret_key);
     let sign = format!("{:x}", md5::compute(sign_str));
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let url = "https://fanyi-api.baidu.com/api/trans/vip/translate";
     let params = [
         ("q", req.text.as_str()),
@@ -470,12 +546,9 @@ async fn translate_baidu(req: &TranslateRequest) -> Result<TranslateResponse> {
         ("sign", &sign),
     ];
 
-    let resp = client
-        .post(url)
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| FinalSubError::Validation(format!("百度翻译请求失败: {e}")))?;
+    let resp = client.post(url).form(&params).send().await.map_err(|e| {
+        FinalSubError::Validation(format!("百度翻译请求失败: {}", describe_reqwest_error(&e)))
+    })?;
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
             "百度翻译返回错误: {}",
@@ -512,7 +585,7 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
     if api_key.is_empty() {
         return Err(FinalSubError::Validation("谷歌翻译缺少 API Key".into()));
     }
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let url = "https://translation.googleapis.com/language/translate/v2";
 
     let source_lang = if req.source_language == "auto" {
@@ -531,12 +604,9 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
         query.push(("source", source_lang.to_string()));
     }
 
-    let resp = client
-        .post(url)
-        .query(&query)
-        .send()
-        .await
-        .map_err(|e| FinalSubError::Validation(format!("谷歌翻译请求失败: {e}")))?;
+    let resp = client.post(url).query(&query).send().await.map_err(|e| {
+        FinalSubError::Validation(format!("谷歌翻译请求失败: {}", describe_reqwest_error(&e)))
+    })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -567,7 +637,7 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
 async fn translate_deeplx(req: &TranslateRequest) -> Result<TranslateResponse> {
     let api_url =
         request_endpoint(req, "deeplx").unwrap_or_else(|| "http://localhost:1188/translate".into());
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let body = serde_json::json!({
         "text": req.text,
         "source_lang": req.source_language.to_uppercase(),
@@ -580,7 +650,9 @@ async fn translate_deeplx(req: &TranslateRequest) -> Result<TranslateResponse> {
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("DeepLX 请求失败：{e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!("DeepLX 请求失败：{}", describe_reqwest_error(&e)))
+        })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -618,7 +690,7 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
         req.source_language, req.target_language, req.text
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let body = serde_json::json!({
         "model": model,
         "prompt": prompt,
@@ -631,7 +703,9 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("Ollama 请求失败：{e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!("Ollama 请求失败：{}", describe_reqwest_error(&e)))
+        })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -677,7 +751,7 @@ async fn translate_openai_compatible(
         req.source_language, req.target_language
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let body = serde_json::json!({
         "model": model,
         "messages": [
@@ -695,7 +769,12 @@ async fn translate_openai_compatible(
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("{provider_name} 请求失败：{e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!(
+                "{provider_name} 请求失败：{}",
+                describe_reqwest_error(&e)
+            ))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -745,7 +824,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         req.source_language, req.target_language, req.text
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let body = serde_json::json!({
         "systemInstruction": {
             "parts": [{"text": system_prompt}]
@@ -767,7 +846,9 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("Gemini 请求失败：{e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!("Gemini 请求失败：{}", describe_reqwest_error(&e)))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -935,7 +1016,7 @@ async fn translate_azure(req: &TranslateRequest) -> Result<TranslateResponse> {
         url.push_str(&format!("&from={source_lang}"));
     }
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let mut builder = client
         .post(&url)
         .header("Ocp-Apim-Subscription-Key", api_key)
@@ -946,11 +1027,9 @@ async fn translate_azure(req: &TranslateRequest) -> Result<TranslateResponse> {
     }
 
     let body = serde_json::json!([{"Text": req.text}]);
-    let resp = builder
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| FinalSubError::Validation(format!("微软翻译请求失败: {e}")))?;
+    let resp = builder.json(&body).send().await.map_err(|e| {
+        FinalSubError::Validation(format!("微软翻译请求失败: {}", describe_reqwest_error(&e)))
+    })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -1012,7 +1091,7 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         req.source_language, req.target_language
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let body = serde_json::json!({
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -1028,7 +1107,12 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         .json(&body)
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("Azure OpenAI 请求失败: {e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!(
+                "Azure OpenAI 请求失败: {}",
+                describe_reqwest_error(&e)
+            ))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -1062,7 +1146,7 @@ async fn translate_niutrans(req: &TranslateRequest) -> Result<TranslateResponse>
     if api_key.is_empty() {
         return Err(FinalSubError::Validation("小牛翻译缺少 API Key".into()));
     }
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let url = "https://api.niutrans.com/NiuTransServer/translation";
 
     let params = [
@@ -1072,12 +1156,9 @@ async fn translate_niutrans(req: &TranslateRequest) -> Result<TranslateResponse>
         ("src_text", req.text.as_str()),
     ];
 
-    let resp = client
-        .post(url)
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| FinalSubError::Validation(format!("小牛翻译请求失败: {e}")))?;
+    let resp = client.post(url).form(&params).send().await.map_err(|e| {
+        FinalSubError::Validation(format!("小牛翻译请求失败: {}", describe_reqwest_error(&e)))
+    })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -1158,7 +1239,7 @@ async fn translate_tencent(req: &TranslateRequest) -> Result<TranslateResponse> 
         secret_id, credential_scope, signature
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let resp = client
         .post("https://tmt.tencentcloudapi.com")
         .header("Authorization", authorization)
@@ -1171,7 +1252,9 @@ async fn translate_tencent(req: &TranslateRequest) -> Result<TranslateResponse> 
         .body(payload_str)
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("腾讯翻译请求失败: {e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!("腾讯翻译请求失败: {}", describe_reqwest_error(&e)))
+        })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -1272,7 +1355,7 @@ async fn translate_aliyun(req: &TranslateRequest) -> Result<TranslateResponse> {
         string_to_sign.as_bytes(),
     ));
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let url = "https://mt.aliyuncs.com";
 
     let mut body_params = params.clone();
@@ -1283,7 +1366,12 @@ async fn translate_aliyun(req: &TranslateRequest) -> Result<TranslateResponse> {
         .form(&body_params)
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("阿里云翻译请求失败: {e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!(
+                "阿里云翻译请求失败: {}",
+                describe_reqwest_error(&e)
+            ))
+        })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -1409,7 +1497,7 @@ async fn translate_volc(req: &TranslateRequest) -> Result<TranslateResponse> {
         access_key, credential_scope, signature
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let url = "https://open.volcengineapi.com/?Action=TranslateText&Version=2020-06-01";
     let resp = client
         .post(url)
@@ -1421,7 +1509,9 @@ async fn translate_volc(req: &TranslateRequest) -> Result<TranslateResponse> {
         .body(payload_str)
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("火山翻译请求失败: {e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!("火山翻译请求失败: {}", describe_reqwest_error(&e)))
+        })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -1525,7 +1615,7 @@ async fn translate_xunfei(req: &TranslateRequest) -> Result<TranslateResponse> {
         api_key, signature
     );
 
-    let client = reqwest::Client::new();
+    let client = translation_http_client()?;
     let resp = client
         .post("https://itrans.xfyun.cn/v2/its")
         .header("Content-Type", "application/json")
@@ -1537,7 +1627,9 @@ async fn translate_xunfei(req: &TranslateRequest) -> Result<TranslateResponse> {
         .body(body_str)
         .send()
         .await
-        .map_err(|e| FinalSubError::Validation(format!("讯飞翻译请求失败: {e}")))?;
+        .map_err(|e| {
+            FinalSubError::Validation(format!("讯飞翻译请求失败: {}", describe_reqwest_error(&e)))
+        })?;
 
     if !resp.status().is_success() {
         return Err(FinalSubError::Validation(format!(
@@ -1669,6 +1761,15 @@ mod tests {
 
         assert_eq!(request_api_key(&req), Some("stored-key"));
         assert!(has_any_secret_field(&req));
+    }
+
+    #[test]
+    fn validation_message_does_not_double_wrap_validation_errors() {
+        let msg = validation_message(FinalSubError::Validation(
+            "自定义 OpenAI 兼容 请求失败：error sending request".into(),
+        ));
+
+        assert_eq!(msg, "自定义 OpenAI 兼容 请求失败：error sending request");
     }
 
     #[tokio::test]
