@@ -79,4 +79,4 @@ du -sh "src-tauri/target/release/bundle/dmg/FinalSub_<version>_aarch64_signed.dm
 ls -la "src-tauri/target/release/bundle/macos/FinalSub.app/Contents/MacOS/ffmpeg"
 ```
 
-macOS 发布打包、覆盖安装、DMG/PKG 深度验收和历史踩坑记录见 [macOS 发布打包 SOP](macos-release-packaging-sop.md)。
+发布打包、覆盖安装、平台产物深度验收和历史踩坑记录见 [Release SOP](release-sop.md)。

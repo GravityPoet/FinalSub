@@ -1,25 +1,83 @@
-# macOS 发布打包 SOP
+# Release SOP
 
-本 SOP 用于 FinalSub macOS 发布打包、覆盖旧版安装、签名验证和问题复盘。后续打包遇到新的障碍，直接追加到本文「踩坑记录」小节，避免重复踩坑。
+本 SOP 是 FinalSub 的项目级发版入口，覆盖 macOS、Windows、Linux 的安装包构建、验收、分发和问题复盘。后续发版遇到新的障碍，直接追加到本文「踩坑记录」小节，避免重复踩坑。
 
 ## 目标
 
-- 产出可覆盖旧版 `FinalSub.app` 的 macOS 安装包。
-- 验证 `.app`、`.dmg`、`.pkg` 内部产物一致且可运行。
-- 明确区分本地/内部测试包与正式外发包。
+- 产出可安装/可覆盖旧版的桌面安装包。
+- 验证各平台安装包内部产物一致且可运行。
+- 明确区分本地/内部测试包、正式外发包和 GitHub Release 分发。
 
 ## 当前项目事实
 
 - App 名称：`FinalSub`
 - Bundle ID：`com.gravitypoet.finalsub`
 - 版本来源：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`
-- 当前默认构建脚本：`npm run build:local`
+- 包管理器：`npm`
+- 当前已验证平台：macOS Apple Silicon
+- 当前默认 macOS 构建脚本：`npm run build:local`
 - `npm run build:local` 会执行：
   - `tauri build`
   - 对 `src-tauri/target/release/bundle/macos/FinalSub.app` 做 ad-hoc 签名
   - `codesign --verify --deep --strict` 校验 `.app`
+- Windows/Linux 打包命令：仓库当前没有专用脚本或 CI 配置证据，补齐前不得编造命令作为正式外发路径。
 
-## 发布前检查
+## 平台产物规划
+
+| 平台 | 当前状态 | 目标产物 | 备注 |
+| --- | --- | --- | --- |
+| macOS | 已有本地验证流程 | `.dmg`、`.pkg` | 正式外发需 Developer ID 签名和 notarization |
+| Windows | 待补齐 | `.msi` / `.exe` | 需要 Windows runner、签名证书和安装/卸载验收 |
+| Linux | 待补齐 | `.AppImage` / `.deb` / `.rpm` | 需要 Linux runner 和目标发行版验收矩阵 |
+
+## GitHub Release 规则
+
+- Tag 格式：`v<package.json version>`，例如 `v1.0.10`。
+- Release assets 必须同时上传安装包和对应 `.sha256`。
+- 公开创建 tag、推送 tag、创建 GitHub Release、上传资产属于 `[P1]`，执行前必须有回滚路径和熔断条件。
+- 本地打包、校验和生成、草稿说明属于低风险本地写入，不推送、不公开分发。
+- Release notes 来源：`CHANGELOG`、上一个 tag 以来的 commits，或本文件记录的验收摘要；禁止声称未执行过的测试通过。
+
+## 通用发布前检查
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && git status --short --branch
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && git remote -v
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && git tag --sort=-version:refname | head -20
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && node -v && npm -v && cargo --version && rustc --version
+```
+
+确认点：
+
+- 工作树里没有会被打包误带入或误覆盖的无关改动。
+- 三处版本号一致：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`。
+- Tag 与版本号一致，除非明确发布 prerelease。
+- 正式外发包必须有对应平台签名、notarization 或发行渠道要求的验收证据。
+
+## 通用命令
+
+### Install
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm ci
+```
+
+### Verify
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo test && cargo clippy -- -D warnings
+```
+
+### Checksums
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && shasum -a 256 <artifact> > <artifact>.sha256
+```
+
+## macOS 打包
+
+### 发布前检查
 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && git status --short --branch
@@ -35,7 +93,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && plutil -p src-tauri/tauri.conf.
 - 若要覆盖旧版，不能随意修改 `Bundle ID`。
 - 若要给 Intel 用户发布，不能只打 `aarch64`，需要走 Universal 构建。
 
-## 标准打包流程
+### 标准打包流程
 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:local
@@ -55,7 +113,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && file "src-tauri/target/release/
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && file "src-tauri/target/release/bundle/macos/FinalSub.app/Contents/MacOS/whisper-cli"
 ```
 
-## 重新制作可验证 DMG
+### 重新制作可验证 DMG
 
 经验教训：当前脚本是在 Tauri 生成 DMG 后，再对磁盘上的 `.app` 做 ad-hoc 签名。因此 Tauri 默认 DMG 里的 `.app` 不一定等于最终已校验的 `.app`。必须挂载 DMG 检查内部 `.app`，不能只看 `hdiutil verify`。
 
@@ -93,7 +151,7 @@ EOF
 src-tauri/target/release/bundle/dmg/FinalSub_<version>_aarch64_signed.dmg
 ```
 
-## 制作覆盖旧版的 PKG
+### 制作覆盖旧版的 PKG
 
 `.pkg` 适合“安装器覆盖旧软件”的场景。安装路径固定为 `/Applications/FinalSub.app`，并通过 `upgrade-bundle` 匹配 `com.gravitypoet.finalsub`。
 
@@ -160,7 +218,7 @@ EOF
 - `bundle id` 是 `com.gravitypoet.finalsub`。
 - 展开后的 `.app` 通过 `codesign --verify --deep --strict`。
 
-## 覆盖安装验证
+### 覆盖安装验证
 
 只在明确需要安装到本机时执行：
 
@@ -187,7 +245,7 @@ plutil -extract CFBundleShortVersionString raw "/Applications/FinalSub.app/Conte
 cp -a "/Applications/FinalSub.app" "/Applications/FinalSub.app.backup.$(date +%Y%m%d%H%M%S)"
 ```
 
-## 正式外发要求
+### 正式外发要求
 
 本地 ad-hoc 签名只适合开发和内部测试，不等同于正式分发签名。
 
@@ -205,6 +263,30 @@ security find-identity -v
 ```
 
 若 `pkgutil --check-signature` 显示 `Status: no signature`，或 `spctl -a -vv -t install` 显示 `source=no usable signature`，说明 `.pkg` 外壳未签名，不适合正式外发。
+
+## Windows 打包
+
+当前仓库没有 Windows 专用打包脚本、CI workflow 或签名验收记录。补齐前只允许 dry run 规划，不得声称 Windows 安装包可正式外发。
+
+最低需要补齐：
+
+- Windows runner 或本机 Windows 构建环境。
+- Tauri Windows 产物类型：`.msi`、`.exe` 或两者。
+- 代码签名证书和签名命令。
+- 安装、覆盖安装、卸载、SmartScreen/签名状态验收。
+- 产物路径、校验和、GitHub Release asset 命名。
+
+## Linux 打包
+
+当前仓库没有 Linux 专用打包脚本、CI workflow 或发行版验收记录。补齐前只允许 dry run 规划，不得声称 Linux 安装包可正式外发。
+
+最低需要补齐：
+
+- Linux runner 或本机 Linux 构建环境。
+- 目标产物：`.AppImage`、`.deb`、`.rpm` 或组合。
+- 目标发行版矩阵和基础运行验收。
+- 安装、覆盖安装、卸载验收。
+- 产物路径、校验和、GitHub Release asset 命名。
 
 ## 踩坑记录
 
@@ -262,6 +344,7 @@ source=no usable signature
 
 - 内部测试可继续使用未签名 `.pkg`。
 - 正式外发必须用 Apple Developer 证书签名 `.pkg`，并完成 notarization。
+- 2026-06-24 复现：`pkgutil --check-signature "src-tauri/target/release/bundle/pkg/FinalSub_1.0.10_aarch64.pkg"` 返回 `Status: no signature` 且 exit code 为 1；`spctl -a -vv -t install` 返回 `rejected` / `source=no usable signature` 且 exit code 为 3。内部包验收脚本不能把这两个命令放在 `set -e` 的硬失败链路里，应显式记录退出码；正式外发仍必须签名和 notarize。
 
 ### 追加模板
 
