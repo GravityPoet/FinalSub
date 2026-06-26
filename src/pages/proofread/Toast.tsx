@@ -46,15 +46,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2.5 max-w-md w-full pointer-events-none">
         {toasts.map((toast) => {
           const icons = {
-            success: <CheckCircle2 className="text-green-500 shrink-0 animate-bounce" size={18} />,
-            error: <XCircle className="text-red-500 shrink-0" size={18} />,
-            info: <AlertCircle className="text-blue-500 shrink-0" size={18} />,
+            success: <CheckCircle2 className="text-success shrink-0 animate-bounce" size={18} />,
+            error: <XCircle className="text-danger shrink-0" size={18} />,
+            info: <AlertCircle className="text-info shrink-0" size={18} />,
           };
           
           const bgColors = {
-            success: "bg-white dark:bg-gray-800 border-green-100 dark:border-green-950 border-l-4 border-l-green-500",
-            error: "bg-white dark:bg-gray-800 border-red-100 dark:border-red-950 border-l-4 border-l-red-500",
-            info: "bg-white dark:bg-gray-800 border-blue-100 dark:border-blue-950 border-l-4 border-l-blue-500",
+            success: "bg-surface border-border-subtle border-l-4 border-l-success",
+            error: "bg-surface border-border-subtle border-l-4 border-l-danger",
+            info: "bg-surface border-border-subtle border-l-4 border-l-info",
           };
 
           return (
@@ -63,12 +63,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               className={`flex items-start gap-3 p-3.5 rounded-xl border shadow-lg pointer-events-auto transform transition-all duration-300 translate-x-0 ${bgColors[toast.type]}`}
             >
               {icons[toast.type]}
-              <div className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200 break-words leading-relaxed font-sans">
+              <div className="flex-1 text-sm font-medium text-text-primary break-words leading-relaxed font-sans">
                 {toast.message}
               </div>
               <button
                 onClick={() => removeToast(toast.id)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition shrink-0"
+                className="text-text-tertiary hover:text-text-primary transition shrink-0"
               >
                 <X size={14} />
               </button>

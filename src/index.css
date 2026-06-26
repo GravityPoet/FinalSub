@@ -1,12 +1,125 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
+  /* 5.1 品牌色阶 */
+  --color-violet-50: #f5f3ff;
+  --color-violet-100: #ede9fe;
+  --color-violet-200: #ddd6fe;
+  --color-violet-300: #c4b5fd;
+  --color-violet-400: #a78bfa;
+  --color-violet-500: #8b5cf6;
+  --color-violet-600: #7c3aed;
+  --color-violet-700: #6d28d9;
+  --color-violet-800: #5b21b6;
+  --color-violet-900: #4c1d95;
+  --color-violet-950: #2e1065;
+
+  /* 亮色语义变量 */
+  --color-app-bg: #fafafb;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-overlay: #ffffff;
+  --color-border-subtle: #eef0f3;
+  --color-border-default: #e1e4e9;
+  --color-border-strong: #cfd4dc;
+  --color-text-primary: #0f1115;
+  --color-text-secondary: #5a6473;
+  --color-text-tertiary: #8b94a3;
+  --color-brand: #7c3aed;
+  --color-brand-hover: #6d28d9;
+  --color-brand-subtle: rgba(124, 58, 237, 0.10);
+  --color-brand-text: #6d28d9;
+  --color-success: #059669;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-info: #2563eb;
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.12);
+  --shadow-brand-glow: 0 0 0 1px rgba(124, 58, 237, 0.2), 0 4px 12px rgba(124, 58, 237, 0.1);
+
+  /* 动效 */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --ease-out: cubic-bezier(.25,1,.5,1);
+  --ease-standard: cubic-bezier(.4,0,.2,1);
+}
+
+.dark {
+  /* 暗色语义变量 */
+  --color-app-bg: #0b0c0f;
+  --color-surface: #131519;
+  --color-surface-raised: #1a1d23;
+  --color-surface-overlay: #21252c;
+  --color-border-subtle: #23272e;
+  --color-border-default: #2c313a;
+  --color-border-strong: #3a4150;
+  --color-text-primary: #f2f4f7;
+  --color-text-secondary: #aab3c0;
+  --color-text-tertiary: #6b7480;
+  --color-brand: #7c3aed;
+  --color-brand-hover: #8b5cf6;
+  --color-brand-subtle: rgba(124, 58, 237, 0.14);
+  --color-brand-text: #c4b5fd;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-info: #3b82f6;
+
+  /* 阴影（暗色用深投影 + 品牌微光） */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.30);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.45);
+  --shadow-brand-glow: 0 0 0 1px rgba(124,58,237,.40), 0 4px 16px rgba(124,58,237,.25);
+}
+
+@theme {
+  --color-app-bg: var(--color-app-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-raised: var(--color-surface-raised);
+  --color-surface-overlay: var(--color-surface-overlay);
+  --color-border-subtle: var(--color-border-subtle);
+  --color-border-default: var(--color-border-default);
+  --color-border-strong: var(--color-border-strong);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-tertiary: var(--color-text-tertiary);
+  --color-brand: var(--color-brand);
+  --color-brand-hover: var(--color-brand-hover);
+  --color-brand-subtle: var(--color-brand-subtle);
+  --color-brand-text: var(--color-brand-text);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-info: var(--color-info);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --font-sans: "SF Pro Text", "SF Pro Display", "Inter var", system-ui, -apple-system, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 21px;
   font-weight: 400;
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color: var(--color-text-primary);
+  background-color: var(--color-app-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -14,9 +127,9 @@
   -webkit-text-size-adjust: 100%;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
+body {
+  background-color: var(--color-app-bg);
+  color: var(--color-text-primary);
+  margin: 0;
+  min-height: 100vh;
 }

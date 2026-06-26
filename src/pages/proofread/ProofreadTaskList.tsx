@@ -13,6 +13,11 @@ import { getProofreadTasks, persistProofreadTasks } from './ProofreadPage';
 import { useToast } from './Toast';
 import { useI18n } from '../../lib/i18n';
 
+import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
+import { Badge } from '../../components/ui/Badge';
+import { Progress } from '../../components/ui/Progress';
+
 interface ProofreadTaskListProps {
   onLoadTask: (task: ProofreadTask) => void;
 }
@@ -26,7 +31,6 @@ export default function ProofreadTaskList({
   const [pendingDelete, setPendingDelete] = useState<ProofreadTask | null>(null);
   const { showToast } = useToast();
 
-  // 加载任务列表
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
@@ -43,7 +47,6 @@ export default function ProofreadTaskList({
     loadTasks();
   }, [loadTasks]);
 
-  // 删除任务
   const handleDeleteTask = useCallback(
     async (taskId: string) => {
       try {
@@ -60,7 +63,6 @@ export default function ProofreadTaskList({
     [tasks, loadTasks, showToast, t],
   );
 
-  // 计算任务进度
   const getTaskProgress = (task: ProofreadTask) => {
     const completed = task.items.filter((i) => i.status === 'completed').length;
     return {
@@ -73,7 +75,6 @@ export default function ProofreadTaskList({
     };
   };
 
-  // 格式化时间
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', {
       hour12: false,
@@ -83,17 +84,17 @@ export default function ProofreadTaskList({
   if (loading) {
     return (
       <div className="flex items-center justify-center h-48">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+        <Loader2 className="w-8 h-8 animate-spin text-brand" />
       </div>
     );
   }
 
   if (tasks.length === 0) {
     return (
-      <div className="text-center py-16 text-slate-500">
-        <FileText className="w-16 h-16 mx-auto mb-4 opacity-30 text-slate-400" />
-        <p className="text-base font-medium">{t('proofread.tasks.noHistory')}</p>
-        <p className="text-xs text-slate-400 mt-2">{t('proofread.tasks.noHistoryDesc')}</p>
+      <div className="text-center py-16 text-text-tertiary">
+        <FileText className="w-16 h-16 mx-auto mb-4 opacity-30 text-text-tertiary" />
+        <p className="text-base font-medium text-text-secondary">{t('proofread.tasks.noHistory')}</p>
+        <p className="text-xs text-text-tertiary mt-2">{t('proofread.tasks.noHistoryDesc')}</p>
       </div>
     );
   }
@@ -103,98 +104,96 @@ export default function ProofreadTaskList({
       {tasks.map((task) => {
         const progress = getTaskProgress(task);
         return (
-          <div
+          <Card
             key={task.id}
-            className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-5 hover:bg-slate-800/60 transition-colors shadow-md flex items-start justify-between gap-5"
+            className="p-5 flex items-start justify-between gap-5"
           >
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-3 mb-2.5">
-                <h3 className="font-semibold text-slate-100 text-base truncate" title={task.name}>
+                <h3 className="font-semibold text-text-primary text-base truncate" title={task.name}>
                   {task.name}
                 </h3>
                 {task.status === 'completed' ? (
-                  <span className="flex items-center text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/30 px-2 py-0.5 rounded font-medium">
+                  <Badge variant="success">
                     <CheckCircle2 className="w-3 h-3 mr-1" />
                     {t('proofread.tasks.completed')}
-                  </span>
+                  </Badge>
                 ) : (
-                  <span className="flex items-center text-[10px] bg-blue-950 text-blue-400 border border-blue-800/30 px-2 py-0.5 rounded font-medium">
+                  <Badge variant="info">
                     <Clock className="w-3 h-3 mr-1" />
                     {t('proofread.tasks.inProgress')}
-                  </span>
+                  </Badge>
                 )}
               </div>
 
-              <div className="flex items-center gap-4 text-xs text-slate-400 mb-4">
+              <div className="flex items-center gap-4 text-xs text-text-secondary mb-4">
                 <span>{t('proofread.tasks.filesCount').replace('{count}', String(task.items.length))}</span>
-                <span className="w-1 h-1 bg-slate-600 rounded-full" />
+                <span className="w-1 h-1 bg-border-strong rounded-full" />
                 <span>{t('proofread.tasks.lastUpdated')}{formatDate(task.updatedAt)}</span>
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="flex-1 bg-slate-900 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="bg-blue-600 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${progress.percent}%` }}
-                  />
-                </div>
-                <span className="text-xs text-slate-400 w-24 text-right font-medium">
+                <Progress value={progress.percent} className="flex-1" />
+                <span className="text-xs text-text-secondary w-24 text-right font-medium">
                   {progress.completed}/{progress.total} ({progress.percent}%)
                 </span>
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              <button
+              <Button
                 onClick={() => onLoadTask(task)}
-                className="flex items-center text-xs bg-blue-600 hover:bg-blue-700 text-white px-4.5 py-2 rounded-lg transition-colors font-medium shadow-md shadow-blue-500/5"
+                variant="primary"
+                size="sm"
               >
-                <Play className="w-3.5 h-3.5 mr-1.5" />
-                {task.status === 'completed' ? t('proofread.tasks.view') : t('proofread.tasks.continue')}
-              </button>
+                <Play size={13} />
+                <span>{task.status === 'completed' ? t('proofread.tasks.view') : t('proofread.tasks.continue')}</span>
+              </Button>
               <button
                 onClick={() => setPendingDelete(task)}
-                className="p-2 hover:bg-red-950/30 rounded-lg transition-colors text-slate-400 hover:text-red-400"
+                className="p-2 hover:bg-danger/10 rounded-lg transition-colors text-text-tertiary hover:text-danger"
                 title={t('proofread.tasks.delete')}
               >
-                <Trash2 className="w-4 h-4 text-red-500" />
+                <Trash2 className="w-4 h-4 text-danger" />
               </button>
             </div>
-          </div>
+          </Card>
         );
       })}
 
       {pendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default">
             <div className="mb-5 flex items-start gap-3">
-              <div className="rounded-full bg-red-950/50 p-2 text-red-400">
+              <div className="rounded-full bg-danger/10 p-2 text-danger">
                 <AlertCircle className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-slate-100">{t('proofread.tasks.deleteModalTitle')}</h3>
-                <p className="mt-1 text-sm leading-6 text-slate-300">
+                <h3 className="font-semibold text-text-primary text-h2 mb-1.5">{t('proofread.tasks.deleteModalTitle')}</h3>
+                <p className="text-xs text-text-secondary leading-5">
                   {t('proofread.tasks.deleteModalDesc').replace('{name}', pendingDelete.name)}
                 </p>
               </div>
             </div>
-            <div className="flex justify-end gap-2">
-              <button
+            <div className="flex justify-end gap-2.5">
+              <Button
                 type="button"
                 onClick={() => setPendingDelete(null)}
-                className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+                variant="secondary"
+                size="sm"
               >
                 {t('proofread.tasks.cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={() => handleDeleteTask(pendingDelete.id)}
-                className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+                variant="danger"
+                size="sm"
               >
                 {t('proofread.tasks.deleteConfirm')}
-              </button>
+              </Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
     </div>

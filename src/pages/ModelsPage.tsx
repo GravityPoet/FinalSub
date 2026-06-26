@@ -15,6 +15,11 @@ import {
 } from "../lib/tauri";
 import { Download, CheckCircle, AlertCircle, Clock, Trash2, RefreshCw, XCircle, FileInput } from "lucide-react";
 
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Badge } from "../components/ui/Badge";
+import { Progress } from "../components/ui/Progress";
+
 function StatusBadge({
   status,
   downloadInfo,
@@ -33,40 +38,40 @@ function StatusBadge({
 
   if (currentStatus === "available")
     return (
-      <span className="flex items-center gap-1 text-blue-600">
-        <Download size={14} /> {t("models.notInstalled")}
+      <span className="flex items-center gap-1.5 text-xs font-medium text-brand">
+        <Download size={13} /> {t("models.notInstalled")}
       </span>
     );
   if (currentStatus === "downloaded" || currentStatus === "done")
     return (
-      <span className="flex items-center gap-1 text-green-600">
-        <CheckCircle size={14} /> {t("models.downloaded")}
+      <span className="flex items-center gap-1.5 text-xs font-medium text-success">
+        <CheckCircle size={13} /> {t("models.downloaded")}
       </span>
     );
   if (currentStatus === "downloading") {
     const pct = downloadInfo ? Math.round(downloadInfo.progress * 100) : 0;
     return (
-      <span className="flex items-center gap-1 text-yellow-600 font-medium">
-        <Clock size={14} className="animate-spin" /> {t("models.downloading")} ({pct}%)
+      <span className="flex items-center gap-1.5 text-xs font-medium text-warning">
+        <Clock size={13} className="animate-spin" /> {t("models.downloading")} ({pct}%)
       </span>
     );
   }
   if (currentStatus === "cancelled")
     return (
-      <span className="flex items-center gap-1 text-gray-400">
-        <XCircle size={14} /> {t("models.cancelled")}
+      <span className="flex items-center gap-1.5 text-xs font-medium text-text-tertiary">
+        <XCircle size={13} /> {t("models.cancelled")}
       </span>
     );
   if (currentStatus === "not-ready")
     return (
-      <span className="flex items-center gap-1 text-gray-400">
-        <Clock size={14} /> {t("models.lazyLoad")}
+      <span className="flex items-center gap-1.5 text-xs font-medium text-text-tertiary">
+        <Clock size={13} /> {t("models.lazyLoad")}
       </span>
     );
   if (currentStatus === "error" || errorMsg)
     return (
-      <span className="flex items-center gap-1 text-red-600" title={errorMsg || t("common.error")}>
-        <AlertCircle size={14} /> {t("models.error")}
+      <span className="flex items-center gap-1.5 text-xs font-medium text-danger" title={errorMsg || t("common.error")}>
+        <AlertCircle size={13} /> {t("models.error")}
       </span>
     );
   return null;
@@ -157,16 +162,15 @@ export default function ModelsPage() {
       if (!selected) return;
 
       const path = Array.isArray(selected) ? selected[0] : selected;
-      setMessage({ type: "ok", text: "正在导入模型，请稍候..." });
+      setMessage({ type: "ok", text: t("models.importing") });
       await importLocalModel(modelId, path);
-      setMessage({ type: "ok", text: "本地模型导入成功" });
+      setMessage({ type: "ok", text: t("models.importSuccess") });
       refresh();
     } catch (err) {
-      setMessage({ type: "err", text: `导入模型失败: ${err}` });
+      setMessage({ type: "err", text: t("models.importFailed", { error: String(err) }) });
     }
   };
 
-  // SenseVoice 需要 model.onnx + tokens.txt 两个文件，分别选取后导入。
   const handleImportSensevoice = async () => {
     setMessage(null);
     try {
@@ -182,12 +186,12 @@ export default function ModelsPage() {
       if (!tokens) return;
       const onnxPath = Array.isArray(onnx) ? onnx[0] : onnx;
       const tokensPath = Array.isArray(tokens) ? tokens[0] : tokens;
-      setMessage({ type: "ok", text: "正在导入 SenseVoice 模型，请稍候..." });
+      setMessage({ type: "ok", text: t("models.importingSensevoice") });
       await importSensevoiceModel(onnxPath, tokensPath);
-      setMessage({ type: "ok", text: "SenseVoice 模型导入成功" });
+      setMessage({ type: "ok", text: t("models.importSensevoiceSuccess") });
       refresh();
     } catch (err) {
-      setMessage({ type: "err", text: `导入 SenseVoice 模型失败: ${err}` });
+      setMessage({ type: "err", text: t("models.importSensevoiceFailed", { error: String(err) }) });
     }
   };
 
@@ -224,7 +228,9 @@ export default function ModelsPage() {
     }
   };
 
-  if (loading && models.length === 0) return <div className="text-gray-500">{t("models.scanning")}</div>;
+  if (loading && models.length === 0) {
+    return <div className="text-text-tertiary py-16 text-center text-sm">{t("models.scanning")}</div>;
+  }
 
   const visibleModels = models.filter(
     (model) => model.engine_id !== "custom-command"
@@ -235,23 +241,25 @@ export default function ModelsPage() {
   }, {});
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{t("models.title")}</h2>
-        <button
+    <div className="max-w-5xl space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("models.title")}</h2>
+        <Button
           onClick={refresh}
-          className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+          variant="secondary"
+          className="h-8 py-0 px-3 text-xs"
         >
-          <RefreshCw size={16} /> {t("models.refresh")}
-        </button>
+          <RefreshCw size={12} />
+          <span>{t("models.refresh")}</span>
+        </Button>
       </div>
 
       {message && (
         <div
-          className={`mb-4 rounded-md border px-3 py-2 text-sm ${
+          className={`rounded-lg border px-3 py-2.5 text-xs font-semibold leading-5 ${
             message.type === "ok"
-              ? "border-green-200 bg-green-50 text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300"
-              : "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+              ? "border-success/20 bg-success/10 text-success"
+              : "border-danger/20 bg-danger/10 text-danger"
           }`}
         >
           {message.text}
@@ -259,33 +267,34 @@ export default function ModelsPage() {
       )}
 
       {Object.entries(engineGroups).map(([engineId, engineModels]) => (
-        <div key={engineId} className="mb-8">
-          <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">
+        <div key={engineId} className="space-y-3.5">
+          <h3 className="text-md font-semibold text-text-secondary">
             {engineLabel(engineId)}
           </h3>
-          <div className="grid gap-3">
+          <div className="grid gap-3.5">
             {engineModels.map((model) => {
               const downloadInfo = downloads[model.id];
               const isDownloading = downloadInfo?.status === "downloading";
               const showProgress = isDownloading && downloadInfo;
 
               return (
-                <div
+                <Card
                   key={model.id}
-                  className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm animate-fade-in"
+                  className="p-4"
                 >
-                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
+                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_12rem]">
                     <div className="min-w-0">
-                      <h4 className="font-medium text-gray-900 dark:text-white">{model.name}</h4>
-                      <p className="text-sm text-gray-500 mt-1">{model.description}</p>
-                      <div className="flex flex-wrap gap-2 mt-2">
+                      <h4 className="font-semibold text-text-primary text-base">{model.name}</h4>
+                      <p className="text-xs text-text-secondary mt-1 leading-5">{model.description}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-3">
                         {model.languages.map((lang) => (
-                          <span
+                          <Badge
                             key={lang}
-                            className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded"
+                            variant="default"
+                            className="font-normal border-none bg-surface-overlay text-text-secondary"
                           >
                             {lang}
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                     </div>
@@ -293,66 +302,70 @@ export default function ModelsPage() {
                       <StatusBadge status={model.status} downloadInfo={downloadInfo} />
                       <div className="flex items-center gap-2">
                         {model.size_mb && (
-                          <span className="text-xs text-gray-400">{model.size_mb} MB</span>
+                          <span className="text-xs text-text-tertiary font-mono mr-1.5">{model.size_mb} MB</span>
                         )}
                         {model.status === "available" && !isDownloading && (
                           <div className="flex gap-2">
                             {model.engine_id !== "sensevoice" && model.download_url && (
-                              <button
+                              <Button
                                 type="button"
                                 onClick={() => handleDownload(model.id)}
-                                className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300"
+                                variant="primary"
+                                className="h-7 py-0 px-2.5 text-xs font-semibold"
                               >
-                                <Download size={12} />
-                                {t("models.downloadAction")}
-                              </button>
+                                <Download size={11} />
+                                <span>{t("models.downloadAction")}</span>
+                              </Button>
                             )}
                             {model.engine_id === "whisper-cpp" && (
-                              <button
+                              <Button
                                 type="button"
                                 onClick={() => handleImportModel(model.id)}
-                                className="inline-flex items-center gap-1 rounded bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
+                                variant="secondary"
+                                className="h-7 py-0 px-2.5 text-xs font-semibold"
                               >
-                                <FileInput size={12} />
-                                导入本地
-                              </button>
+                                <FileInput size={11} />
+                                <span>{t("models.importLocalAction")}</span>
+                              </Button>
                             )}
                             {model.engine_id === "sensevoice" && (
-                              <button
+                              <Button
                                 type="button"
                                 onClick={handleImportSensevoice}
-                                className="inline-flex items-center gap-1 rounded bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
+                                variant="secondary"
+                                className="h-7 py-0 px-2.5 text-xs font-semibold"
                               >
-                                <FileInput size={12} />
-                                导入模型
-                              </button>
+                                <FileInput size={11} />
+                                <span>{t("models.importAction")}</span>
+                              </Button>
                             )}
                           </div>
                         )}
                         {isDownloading && (
-                          <button
+                          <Button
                             type="button"
                             onClick={() => handleCancelDownload(model.id)}
-                            className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-blue-300"
+                            variant="danger"
+                            className="h-7 py-0 px-2.5 text-xs font-semibold"
                           >
-                            {t("models.cancelAction")}
-                          </button>
+                            <span>{t("models.cancelAction")}</span>
+                          </Button>
                         )}
                         {downloadInfo?.status === "error" && (
-                          <button
+                          <Button
                             type="button"
                             onClick={() => handleDownload(model.id)}
-                            className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300"
+                            className="h-7 py-0 px-2.5 text-xs font-semibold text-warning border-warning/20 bg-warning/10 hover:bg-warning/20"
                           >
-                            {t("models.retryAction")}
-                          </button>
+                            <span>{t("models.retryAction")}</span>
+                          </Button>
                         )}
                         {model.status === "downloaded" && model.engine_id === "whisper-cpp" && (
                           <button
                             type="button"
                             onClick={() => setPendingDelete(model)}
                             disabled={deleting === model.id}
-                            className="text-red-500 hover:text-red-700 disabled:opacity-50"
+                            className="text-text-tertiary hover:text-danger disabled:opacity-50 transition p-1 rounded hover:bg-surface-overlay"
                             title={t("models.deleteAction")}
                           >
                             <Trash2 size={14} />
@@ -363,14 +376,9 @@ export default function ModelsPage() {
                   </div>
 
                   {showProgress && (
-                    <div className="mt-4 w-full">
-                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className="bg-blue-600 h-full rounded-full transition-all duration-300"
-                          style={{ width: `${(downloadInfo.progress * 100).toFixed(1)}%` }}
-                        />
-                      </div>
-                      <div className="flex justify-between items-center mt-1.5 text-[10px] text-gray-400">
+                    <div className="mt-4 w-full space-y-1.5">
+                      <Progress value={Number((downloadInfo.progress * 100).toFixed(1))} />
+                      <div className="flex justify-between items-center text-[10px] text-text-tertiary font-mono">
                         <span>{(downloadInfo.progress * 100).toFixed(0)}%</span>
                         {downloadInfo.total_bytes > 0 && (
                           <span>
@@ -381,7 +389,7 @@ export default function ModelsPage() {
                       </div>
                     </div>
                   )}
-                </div>
+                </Card>
               );
             })}
           </div>
@@ -389,42 +397,44 @@ export default function ModelsPage() {
       ))}
 
       {pendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-            <div className="mb-4 flex items-start gap-3">
-              <div className="rounded-full bg-red-50 p-2 text-red-600 dark:bg-red-950/40 dark:text-red-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default">
+            <div className="mb-5 flex items-start gap-3">
+              <div className="rounded-full bg-danger/10 p-2 text-danger">
                 <AlertCircle size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-gray-900 dark:text-white">{t("models.deleteModalTitle")}</h3>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                <h3 className="font-semibold text-text-primary text-h2 mb-1.5">{t("models.deleteModalTitle")}</h3>
+                <p className="text-xs text-text-secondary leading-5">
                   {t("models.deleteModalDesc").replace("{name}", pendingDelete.name)}
                 </p>
               </div>
             </div>
-            <div className="flex justify-end gap-2">
-              <button
+            <div className="flex justify-end gap-2.5">
+              <Button
                 type="button"
                 onClick={() => setPendingDelete(null)}
                 disabled={deleting === pendingDelete.id}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                variant="secondary"
+                size="sm"
               >
                 {t("models.deleteModalCancel")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={() => handleDelete(pendingDelete.id)}
                 disabled={deleting === pendingDelete.id}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                variant="danger"
+                size="sm"
               >
                 {deleting === pendingDelete.id ? t("models.deleting") : t("models.deleteModalConfirm")}
-              </button>
+              </Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
-      <div className="mt-6 text-xs text-gray-400 space-y-1">
+      <div className="mt-8 text-xs text-text-tertiary space-y-1.5 leading-5">
         <p>{t("models.pathInfo")}{modelsPath}</p>
         <p>{t("models.pathDesc")}</p>
         <p>{t("models.parakeetDesc")}</p>

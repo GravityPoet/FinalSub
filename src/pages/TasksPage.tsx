@@ -30,29 +30,34 @@ import {
   CheckCircle,
 } from "lucide-react";
 
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Badge } from "../components/ui/Badge";
+import { Progress } from "../components/ui/Progress";
+
 function StatusPill({ status }: { status: string }) {
   const { t } = useI18n();
-  const colors: Record<string, string> = {
-    pending: "bg-gray-100 text-gray-600 dark:bg-gray-700/60 dark:text-gray-400",
-    running: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-    paused: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-    cancelled: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
-    done: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
-    error: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  const variants: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
+    pending: "default",
+    running: "info",
+    paused: "warning",
+    cancelled: "default",
+    done: "success",
+    error: "danger",
   };
   return (
-    <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${colors[status] ?? colors.pending}`}>
+    <Badge variant={variants[status] ?? "default"}>
       {t(`tasks.status.${status}` as any)}
-    </span>
+    </Badge>
   );
 }
 
 function TaskTypeLabel({ type }: { type: string }) {
   const { t } = useI18n();
   return (
-    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+    <Badge variant="default" className="font-normal border-none bg-surface-overlay text-text-secondary">
       {t(`tasks.type.${type}` as any)}
-    </span>
+    </Badge>
   );
 }
 
@@ -171,7 +176,6 @@ export default function TasksPage() {
     setSelectedTaskIds((currentIds) => currentIds.filter((taskId) => deletableIds.has(taskId)));
   }, [tasks]);
 
-  // Listen to logs when activeLogTaskId is set
   useEffect(() => {
     if (!activeLogTaskId) return;
 
@@ -196,7 +200,6 @@ export default function TasksPage() {
     };
   }, [activeLogTaskId]);
 
-  // Auto-scroll logs to bottom
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
@@ -296,311 +299,310 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="max-w-5xl">
-      <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white font-sans tracking-tight">{t("tasks.title")}</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="max-w-5xl space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("tasks.title")}</h2>
+        <div className="flex flex-wrap items-center gap-3">
           {tasks.length > 0 && (
             <>
-              <label className="inline-flex h-8 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+              <label className="inline-flex h-8 items-center gap-2 rounded-lg border border-border-default bg-surface px-3 text-xs font-medium text-text-secondary shadow-sm cursor-pointer hover:bg-surface-overlay select-none transition">
                 <input
                   type="checkbox"
                   checked={allDeletableSelected}
                   disabled={deletableTasks.length === 0}
                   onChange={handleToggleSelectAll}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 disabled:opacity-40"
+                  className="h-3.5 w-3.5 rounded border-border-default text-brand focus:ring-0 cursor-pointer disabled:opacity-40"
                 />
-                {t("tasks.selectAllDeletable")}
+                <span>{t("tasks.selectAllDeletable")}</span>
               </label>
-              <button
+              <Button
                 type="button"
                 onClick={() => openDeleteDialog(selectedDeletableIds)}
                 disabled={selectedDeletableIds.length === 0}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-medium text-red-700 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+                className="h-8 py-0 px-3 text-xs"
+                variant="danger"
               >
-                <Trash2 size={14} />
-                {t("tasks.deleteSelected") + (selectedDeletableIds.length > 0 ? ` ${selectedDeletableIds.length}` : "")}
-              </button>
+                <Trash2 size={12} />
+                <span>{t("tasks.deleteSelected") + (selectedDeletableIds.length > 0 ? ` (${selectedDeletableIds.length})` : "")}</span>
+              </Button>
             </>
           )}
-          <button
+          <Button
             onClick={refresh}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-600 shadow-sm transition hover:border-gray-300 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-white"
+            variant="secondary"
+            className="h-8 py-0 px-3 text-xs"
           >
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> {t("tasks.refresh")}
-          </button>
+            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+            <span>{t("tasks.refresh")}</span>
+          </Button>
         </div>
       </div>
 
       {loading && tasks.length === 0 ? (
-        <div className="text-gray-500 py-10 text-center dark:text-gray-400">{t("tasks.loading")}</div>
+        <div className="text-text-tertiary py-16 text-center text-sm">{t("tasks.loading")}</div>
       ) : tasks.length === 0 ? (
-        <div className="text-gray-500 bg-white dark:bg-gray-800 rounded-xl py-12 px-6 text-center border border-gray-200 dark:border-gray-700 shadow-sm">
-          <p className="text-base font-medium">{t("tasks.noTasks")}</p>
-          <p className="text-xs text-gray-400 mt-1">
+        <Card className="py-16 px-6 text-center border-dashed">
+          <p className="text-base font-semibold text-text-primary">{t("tasks.noTasks")}</p>
+          <p className="text-xs text-text-tertiary mt-1.5 leading-5">
             {t("tasks.noTasksDesc")}
           </p>
-        </div>
+        </Card>
       ) : (
         <div className="space-y-4">
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              className={`rounded-xl border p-5 shadow-sm transition hover:shadow-md ${
-                selectedTaskIds.includes(task.id)
-                  ? "border-blue-200 bg-blue-50/40 dark:border-blue-900/50 dark:bg-blue-950/20"
-                  : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
-              }`}
-            >
-              <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
-                <div className="flex items-start pt-0.5">
-                  <input
-                    type="checkbox"
-                    checked={selectedTaskIds.includes(task.id)}
-                    disabled={!canDeleteTask(task)}
-                    onChange={() => handleToggleSelectTask(task.id)}
-                    aria-label={t('tasks.selectTaskAria', { name: task.media_name })}
-                    title={canDeleteTask(task) ? t("tasks.selectTask") : t("tasks.deleteRunningPrereq")}
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600 disabled:cursor-not-allowed disabled:opacity-35"
-                  />
-                </div>
-                <div className="min-w-0">
-                  <h4 className="font-semibold text-gray-900 dark:text-white truncate text-base">{task.media_name}</h4>
-                  <p className="mt-1.5 truncate text-xs text-gray-500 dark:text-gray-400" title={task.media_path}>
-                    {task.media_path}
-                  </p>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <TaskTypeLabel type={task.task_type} />
-                    <span className="text-[10px] text-gray-300 dark:text-gray-600">|</span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      {task.engine_id} · {task.model_id}
-                      {task.source_language && ` · ${task.source_language}`}
-                      {task.target_language && ` → ${task.target_language}`}
-                      {" · "}{task.output_format.toUpperCase()}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="col-span-2 flex items-center justify-between gap-3.5 border-t border-gray-100 pt-3 dark:border-gray-700/60 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
-                  <StatusPill status={task.status} />
-
-                  <div className="flex items-center gap-1">
-                    {/* Log button */}
-                    <button
-                      type="button"
-                      title={t("tasks.viewLogs")}
-                      onClick={() => setActiveLogTaskId(task.id)}
-                      className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
-                    >
-                      <FileText size={16} />
-                    </button>
-
-                    {/* Pause button */}
-                    {(task.status === "running" || task.status === "pending") && (
-                      <button
-                        type="button"
-                        title={t("tasks.pauseTask")}
-                        onClick={() => handlePause(task.id)}
-                        className="p-1.5 rounded-lg text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:text-amber-300 dark:hover:bg-amber-950/30 transition"
-                      >
-                        <Pause size={16} />
-                      </button>
-                    )}
-
-                    {/* Resume button */}
-                    {task.status === "paused" && (
-                      <button
-                        type="button"
-                        title={t("tasks.resumeTask")}
-                        onClick={() => handleResume(task.id)}
-                        className="p-1.5 rounded-lg text-green-600 hover:text-green-700 hover:bg-green-50 dark:text-green-400 dark:hover:text-green-300 dark:hover:bg-green-950/30 transition"
-                      >
-                        <Play size={16} />
-                      </button>
-                    )}
-
-                    {/* Retry button */}
-                    {(task.status === "error" || task.status === "cancelled") && (
-                      <button
-                        type="button"
-                        title={t("tasks.retryTask")}
-                        onClick={() => handleRetry(task.id)}
-                        className="p-1.5 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-green-950/30 transition"
-                      >
-                        <RotateCcw size={16} />
-                      </button>
-                    )}
-
-                    {/* Cancel button */}
-                    {(task.status === "running" || task.status === "pending" || task.status === "paused") && (
-                      <button
-                        type="button"
-                        title={t("tasks.cancelTask")}
-                        onClick={() => handleCancel(task.id)}
-                        className="p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-950/30 transition"
-                      >
-                        <XCircle size={16} />
-                      </button>
-                    )}
-                    {canDeleteTask(task) && (
-                      <button
-                        type="button"
-                        title={t("tasks.deleteTaskRecord")}
-                        onClick={() => openDeleteDialog([task.id])}
-                        disabled={deletingTaskIds.includes(task.id)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-700 hover:bg-red-50 disabled:opacity-45 dark:text-gray-500 dark:hover:text-red-300 dark:hover:bg-red-950/30 transition"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {task.status !== "pending" && (
-                <div className="mt-4">
-                  <div className="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-300 ${
-                        task.status === "error"
-                          ? "bg-red-500"
-                          : task.status === "paused"
-                          ? "bg-amber-400"
-                          : task.status === "cancelled"
-                          ? "bg-gray-400"
-                          : task.status === "done"
-                          ? "bg-green-500"
-                          : "bg-blue-600"
-                      }`}
-                      style={{ width: `${Math.round(task.progress * 100)}%` }}
+          {tasks.map((task) => {
+            const isSelected = selectedTaskIds.includes(task.id);
+            return (
+              <Card
+                key={task.id}
+                className={`p-5 transition-all duration-150 ${
+                  isSelected
+                    ? "border-brand bg-brand-subtle/20 shadow-sm"
+                    : "border-border-subtle bg-surface"
+                }`}
+              >
+                <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+                  <div className="flex items-start pt-1.5">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={!canDeleteTask(task)}
+                      onChange={() => handleToggleSelectTask(task.id)}
+                      aria-label={t('tasks.selectTaskAria', { name: task.media_name })}
+                      title={canDeleteTask(task) ? t("tasks.selectTask") : t("tasks.deleteRunningPrereq")}
+                      className="h-3.5 w-3.5 rounded border-border-default text-brand focus:ring-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-35"
                     />
                   </div>
-                  <div className="flex justify-between items-center mt-2">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[80%]">
-                      {task.status_message}
+                  <div className="min-w-0">
+                    <h4 className="font-semibold text-text-primary truncate text-base">{task.media_name}</h4>
+                    <p className="mt-1.5 truncate font-mono text-xs text-text-tertiary" title={task.media_path}>
+                      {task.media_path}
                     </p>
-                    <p className="text-xs font-semibold text-gray-600 dark:text-gray-300 shrink-0">
-                      {Math.round(task.progress * 100)}%
-                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <TaskTypeLabel type={task.task_type} />
+                      <span className="text-[10px] text-border-strong">|</span>
+                      <span className="text-xs text-text-secondary">
+                        {task.engine_id} · {task.model_id}
+                        {task.source_language && ` · ${task.source_language}`}
+                        {task.target_language && ` → ${task.target_language}`}
+                        {" · "}{task.output_format.toUpperCase()}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              )}
 
-              {task.status === "done" && task.output_path && (
-                <div className="mt-4 bg-gray-50 dark:bg-gray-900/30 p-3 rounded-lg border border-gray-100 dark:border-gray-800 text-xs">
-                  <p className="font-medium text-gray-700 dark:text-gray-300 truncate mb-2.5" title={task.output_path}>
-                    {t("tasks.outputPath")}{task.output_path}
-                  </p>
-                  <div className="flex gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenFile(task.output_path!)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 px-3 py-1.5 font-medium transition shadow-sm"
-                    >
-                      {t("tasks.openOutputFile")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenFolder(task.output_path!)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 px-3 py-1.5 font-medium transition shadow-sm"
-                    >
-                      {t("tasks.openOutputDir")}
-                    </button>
+                  <div className="col-span-2 flex items-center justify-between gap-4 border-t border-border-subtle pt-3 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
+                    <StatusPill status={task.status} />
+
+                    <div className="flex items-center gap-1.5">
+                      {/* Log button */}
+                      <button
+                        type="button"
+                        title={t("tasks.viewLogs")}
+                        onClick={() => setActiveLogTaskId(task.id)}
+                        className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-overlay transition"
+                      >
+                        <FileText size={15} />
+                      </button>
+
+                      {/* Pause button */}
+                      {(task.status === "running" || task.status === "pending") && (
+                        <button
+                          type="button"
+                          title={t("tasks.pauseTask")}
+                          onClick={() => handlePause(task.id)}
+                          className="p-1.5 rounded-lg text-warning hover:bg-warning/10 transition"
+                        >
+                          <Pause size={15} />
+                        </button>
+                      )}
+
+                      {/* Resume button */}
+                      {task.status === "paused" && (
+                        <button
+                          type="button"
+                          title={t("tasks.resumeTask")}
+                          onClick={() => handleResume(task.id)}
+                          className="p-1.5 rounded-lg text-success hover:bg-success/10 transition"
+                        >
+                          <Play size={15} />
+                        </button>
+                      )}
+
+                      {/* Retry button */}
+                      {(task.status === "error" || task.status === "cancelled") && (
+                        <button
+                          type="button"
+                          title={t("tasks.retryTask")}
+                          onClick={() => handleRetry(task.id)}
+                          className="p-1.5 rounded-lg text-brand hover:bg-brand-subtle transition"
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      )}
+
+                      {/* Cancel button */}
+                      {(task.status === "running" || task.status === "pending" || task.status === "paused") && (
+                        <button
+                          type="button"
+                          title={t("tasks.cancelTask")}
+                          onClick={() => handleCancel(task.id)}
+                          className="p-1.5 rounded-lg text-danger hover:bg-danger/10 transition"
+                        >
+                          <XCircle size={15} />
+                        </button>
+                      )}
+                      {canDeleteTask(task) && (
+                        <button
+                          type="button"
+                          title={t("tasks.deleteTaskRecord")}
+                          onClick={() => openDeleteDialog([task.id])}
+                          disabled={deletingTaskIds.includes(task.id)}
+                          className="p-1.5 rounded-lg text-text-tertiary hover:text-danger hover:bg-danger/10 disabled:opacity-45 transition"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              )}
-              {task.error && (
-                <div className="mt-3.5 p-3 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 text-xs text-red-600 dark:text-red-400 font-mono break-all">
-                  {t("tasks.errorLog")}{task.error}
-                </div>
-              )}
-            </div>
-          ))}
+
+                {task.status !== "pending" && (
+                  <div className="mt-4 space-y-2">
+                    <Progress value={Math.round(task.progress * 100)} />
+                    <div className="flex justify-between items-center text-xs">
+                      <p className="text-text-secondary truncate max-w-[80%]">
+                        {task.status_message}
+                      </p>
+                      <p className="font-semibold text-text-primary shrink-0">
+                        {Math.round(task.progress * 100)}%
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {task.status === "done" && task.output_path && (
+                  <div className="mt-4 bg-surface-overlay border border-border-subtle p-3 rounded-lg text-xs space-y-2.5">
+                    <p className="font-semibold text-text-secondary truncate" title={task.output_path}>
+                      {t("tasks.outputPath")}{task.output_path}
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        onClick={() => handleOpenFile(task.output_path!)}
+                        variant="secondary"
+                        size="sm"
+                      >
+                        {t("tasks.openOutputFile")}
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => handleOpenFolder(task.output_path!)}
+                        variant="secondary"
+                        size="sm"
+                      >
+                        {t("tasks.openOutputDir")}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {task.error && (
+                  <div className="mt-3.5 p-3 rounded-lg bg-danger/10 border border-danger/20 text-xs text-danger font-mono break-all leading-5">
+                    {t("tasks.errorLog")}{task.error}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
       {pendingDeleteTaskIds && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-            <div className="mb-4 flex items-start gap-3">
-              <div className="rounded-full bg-red-50 p-2 text-red-600 dark:bg-red-950/40 dark:text-red-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default">
+            <div className="mb-5 flex items-start gap-3">
+              <div className="rounded-full bg-danger/10 p-2 text-danger">
                 <AlertCircle size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-gray-900 dark:text-white">
+                <h3 className="font-semibold text-text-primary text-h2 mb-1.5">
                   {t("tasks.deleteModalTitle")}
                 </h3>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                <p className="text-xs text-text-secondary leading-5">
                   {t("tasks.deleteModalDesc")}
                 </p>
                 {pendingDeleteTasks.length > 0 && (
-                  <p className="mt-2 truncate text-xs text-gray-400" title={pendingDeleteTasks[0].media_name}>
+                  <p className="mt-3 truncate font-mono text-[11px] text-text-tertiary" title={pendingDeleteTasks[0].media_name}>
                     {pendingDeleteTasks[0].media_name}
                     {pendingDeleteTaskIds.length > 1 && ` (+${pendingDeleteTaskIds.length - 1})`}
                   </p>
                 )}
                 {deleteError && (
-                  <p className="mt-2 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-600 dark:bg-red-950/30 dark:text-red-300">
+                  <p className="mt-3 rounded-lg bg-danger/10 border border-danger/20 px-3 py-2 text-xs text-danger">
                     {deleteError}
                   </p>
                 )}
               </div>
             </div>
-            <div className="flex justify-end gap-2">
-              <button
+            <div className="flex justify-end gap-2.5">
+              <Button
                 type="button"
                 onClick={() => setPendingDeleteTaskIds(null)}
                 disabled={deletingTaskIds.length > 0}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                variant="secondary"
+                size="sm"
               >
                 {t("common.cancel")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={handleConfirmDelete}
                 disabled={deletingTaskIds.length > 0}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                variant="danger"
+                size="sm"
               >
                 {deletingTaskIds.length > 0 ? t("tasks.deleting") : t("tasks.deleteModalConfirm")}
-              </button>
+              </Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* Logs Modal */}
       {activeLogTaskId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface-overlay rounded-2xl w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl border border-border-default overflow-hidden">
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface">
               <div className="min-w-0">
-                <h3 className="text-base font-bold text-gray-900 dark:text-white truncate">
+                <h3 className="text-base font-bold text-text-primary truncate">
                   {t("tasks.modal.title")}
                 </h3>
-                <p className="text-xs text-gray-400 font-mono truncate mt-0.5">
+                <p className="text-[11px] text-text-tertiary font-mono truncate mt-0.5">
                   ID: {activeLogTaskId}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button
+                <Button
                   onClick={handleCopyLogs}
                   disabled={!logsText}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition disabled:opacity-50"
+                  variant="secondary"
+                  className="h-8 py-0 px-3 text-xs"
                 >
                   {copied ? (
                     <>
-                      <CheckCircle size={12} className="text-green-500" /> {t("tasks.modal.copied")}
+                      <CheckCircle size={12} className="text-success" />
+                      <span>{t("tasks.modal.copied")}</span>
                     </>
                   ) : (
                     <>
-                      <Copy size={12} /> {t("tasks.modal.copy")}
+                      <Copy size={12} />
+                      <span>{t("tasks.modal.copy")}</span>
                     </>
                   )}
-                </button>
+                </Button>
                 <button
                   onClick={() => setActiveLogTaskId(null)}
-                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-150 dark:hover:bg-gray-800 transition"
+                  className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-surface transition"
                 >
                   <X size={18} />
                 </button>
@@ -608,7 +610,7 @@ export default function TasksPage() {
             </div>
 
             {/* Modal Body (Logs) */}
-            <div className="flex-1 p-6 overflow-hidden bg-gray-950 dark:bg-black">
+            <div className="flex-1 p-6 overflow-hidden bg-black">
               <pre
                 ref={logContainerRef}
                 className="w-full h-full overflow-y-auto text-xs text-green-400 font-mono whitespace-pre-wrap select-text leading-relaxed scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent"
@@ -618,7 +620,7 @@ export default function TasksPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50 flex justify-end text-[10px] text-gray-400 dark:text-gray-500">
+            <div className="px-6 py-3 border-t border-border-subtle bg-surface flex justify-end text-[10px] text-text-tertiary font-mono">
               {(() => {
                 const activeLogTask = tasks.find((t) => t.id === activeLogTaskId);
                 switch (activeLogTask?.status) {

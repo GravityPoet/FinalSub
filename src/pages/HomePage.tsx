@@ -20,6 +20,10 @@ import {
   type VideoMetadata,
 } from "../lib/tauri";
 
+import { Button } from "../components/ui/Button";
+import { Select } from "../components/ui/Input";
+import { Card } from "../components/ui/Card";
+
 const mediaExtensions = ["mp4", "mov", "mkv", "webm", "mp3", "wav", "m4a", "aac", "flac"];
 
 const taskTypes = [
@@ -232,66 +236,67 @@ export default function HomePage() {
   };
 
   return (
-    <div className="max-w-5xl">
-      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("home.title")}</h2>
+    <div className="max-w-5xl space-y-6">
+      <h2 className="text-display font-bold tracking-tight text-text-primary">{t("home.title")}</h2>
 
       {updateInfo && (
-        <div className="mb-6 flex items-center justify-between rounded-lg bg-blue-50 border border-blue-200 p-4 dark:bg-blue-950/20 dark:border-blue-900/30">
+        <div className="flex items-center justify-between rounded-xl bg-info/10 border border-info/20 p-4">
           <div className="flex items-center gap-3">
-            <AlertCircle className="text-blue-600 dark:text-blue-400 shrink-0" size={18} />
-            <div className="text-sm text-blue-700 dark:text-blue-300">
-              <span className="font-semibold">{t("home.newVersionAvailable")}{updateInfo.latest_version}！</span>
+            <AlertCircle className="text-info shrink-0" size={18} />
+            <div className="text-sm text-text-secondary">
+              <span className="font-semibold text-text-primary">{t("home.newVersionAvailable")}{updateInfo.latest_version}！</span>
               {updateInfo.body && <span className="ml-1 opacity-90">{t("home.updateNotes")}: {updateInfo.body.slice(0, 100)}...</span>}
             </div>
           </div>
-          <button
+          <Button
             onClick={() => {
               openPath(updateInfo.url);
             }}
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition shrink-0"
+            variant="primary"
+            size="sm"
           >
             {t("home.goDownload")}
-          </button>
+          </Button>
         </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-5">
+        <div className="space-y-6">
           {/* 文件选择 */}
-          <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <Card className="p-5">
             <div className="mb-4 flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-subtle text-brand">
                 <FileVideo size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-gray-900 dark:text-white">{t("home.newTask")}</h3>
-                <p className="truncate text-sm text-gray-500">
+                <h3 className="font-semibold text-text-primary text-h2">{t("home.newTask")}</h3>
+                <p className="truncate text-xs text-text-secondary mt-0.5">
                   {selectedPath ? fileNameFromPath(selectedPath) : `${t("home.noFileSelected")} (${selectedFileKind})`}
                 </p>
               </div>
             </div>
 
             {selectedPath && (
-              <div className="mb-4 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-900/60">
-                <p className="truncate font-mono text-xs text-gray-600 dark:text-gray-300" title={selectedPath}>
+              <div className="mb-4 rounded-lg border border-border-subtle bg-surface-overlay px-3 py-2.5">
+                <p className="truncate font-mono text-xs text-text-secondary" title={selectedPath}>
                   {selectedPath}
                 </p>
                 {mediaMetadata && (
-                  <div className="mt-2.5 border-t border-gray-200 pt-2 dark:border-gray-800 text-[11px] text-gray-500 dark:text-gray-400 space-y-1">
-                    <div className="font-semibold text-gray-700 dark:text-gray-300">媒体属性信息 (Media Info):</div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                      <div>时长: {mediaMetadata.duration_string} ({mediaMetadata.duration_seconds.toFixed(1)}s)</div>
-                      {mediaMetadata.width > 0 && <div>分辨率: {mediaMetadata.width}x{mediaMetadata.height}</div>}
-                      {mediaMetadata.fps > 0 && <div>帧率: {mediaMetadata.fps.toFixed(2)} fps</div>}
-                      {mediaMetadata.codec !== "unknown" && <div>视频编码: {mediaMetadata.codec}</div>}
-                      {mediaMetadata.audio_codec && <div>音频编码: {mediaMetadata.audio_codec}</div>}
+                  <div className="mt-2.5 border-t border-border-default pt-2.5 text-xs text-text-secondary space-y-1">
+                    <div className="font-semibold text-text-primary mb-1">{t("home.mediaInfo")}:</div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                      <div>{t("home.miDuration")}: {mediaMetadata.duration_string} ({mediaMetadata.duration_seconds.toFixed(1)}s)</div>
+                      {mediaMetadata.width > 0 && <div>{t("home.miResolution")}: {mediaMetadata.width}x{mediaMetadata.height}</div>}
+                      {mediaMetadata.fps > 0 && <div>{t("home.miFps")}: {mediaMetadata.fps.toFixed(2)} fps</div>}
+                      {mediaMetadata.codec !== "unknown" && <div>{t("home.miVideoCodec")}: {mediaMetadata.codec}</div>}
+                      {mediaMetadata.audio_codec && <div>{t("home.miAudioCodec")}: {mediaMetadata.audio_codec}</div>}
                       {mediaMetadata.audio_sample_rate && (
-                        <div className={mediaMetadata.audio_sample_rate !== 16000 ? "text-amber-600 dark:text-amber-500 font-semibold" : ""}>
-                          音频采样率: {mediaMetadata.audio_sample_rate} Hz {mediaMetadata.audio_sample_rate !== 16000 && " (非 16kHz)"}
+                        <div className={mediaMetadata.audio_sample_rate !== 16000 ? "text-warning font-semibold" : ""}>
+                          {t("home.miSampleRate")}: {mediaMetadata.audio_sample_rate} Hz {mediaMetadata.audio_sample_rate !== 16000 && ` (${t("home.miNot16k")})`}
                         </div>
                       )}
-                      {mediaMetadata.audio_channels && <div>音频声道数: {mediaMetadata.audio_channels} ch</div>}
-                      <div>音轨数: {mediaMetadata.audio_tracks}</div>
+                      {mediaMetadata.audio_channels && <div>{t("home.miChannels")}: {mediaMetadata.audio_channels} ch</div>}
+                      <div>{t("home.miAudioTracks")}: {mediaMetadata.audio_tracks}</div>
                     </div>
                   </div>
                 )}
@@ -299,30 +304,31 @@ export default function HomePage() {
             )}
 
             {error && (
-              <div className="mb-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+              <div className="mb-4 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
                 <AlertCircle className="mt-0.5 shrink-0" size={16} />
                 <span>{error}</span>
               </div>
             )}
 
-            <button
+            <Button
               type="button"
               onClick={handleSelectMedia}
-              className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+              variant="secondary"
+              size="sm"
             >
-              <FolderOpen size={16} />
+              <FolderOpen size={14} />
               {taskType === "translate-only" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")}
-            </button>
-          </section>
+            </Button>
+          </Card>
 
           {/* 任务配置 */}
-          <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-            <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("home.taskConfig")}</h3>
+          <Card className="p-5">
+            <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("home.taskConfig")}</h3>
 
             {/* 任务类型 */}
             <div className="mb-4">
-              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.taskType")}</label>
-              <div className="grid grid-cols-3 gap-2">
+              <label className="mb-2 block text-sm font-medium text-text-secondary">{t("home.taskType")}</label>
+              <div className="grid grid-cols-3 gap-2.5">
                 {taskTypes.map((t) => {
                   const Icon = t.icon;
                   return (
@@ -336,14 +342,14 @@ export default function HomePage() {
                         setTaskType(nextTaskType);
                         setError("");
                       }}
-                      className={`flex flex-col items-center gap-1 rounded-lg border p-3 text-xs transition ${
+                      className={`flex flex-col items-center gap-1.5 rounded-lg border p-3.5 text-xs transition-all duration-150 ${
                         taskType === t.value
-                          ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300"
-                          : "border-gray-200 text-gray-600 hover:border-gray-300 dark:border-gray-600 dark:text-gray-400"
+                          ? "border-brand bg-brand-subtle text-brand-text shadow-sm font-semibold"
+                          : "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
                       }`}
                     >
                       <Icon size={16} />
-                      <span className="font-medium">{getTaskTypeLabel(t.value)}</span>
+                      <span>{getTaskTypeLabel(t.value)}</span>
                     </button>
                   );
                 })}
@@ -353,37 +359,35 @@ export default function HomePage() {
             {/* 引擎 */}
             <div className="mb-4 grid grid-cols-2 gap-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.asrEngine")}</label>
-                <select
+                <label className="mb-1 block text-sm font-medium text-text-secondary">{t("home.asrEngine")}</label>
+                <Select
                   value={engineId}
                   onChange={(e) => {
                     setEngineId(e.target.value);
                     const first = models.find((m) => m.engine_id === e.target.value);
                     if (first) setModelId(first.id);
                   }}
-                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
                 >
                   {engines.map((e) => (
                     <option key={e} value={e}>{e}</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.asrModel")}</label>
-                <select
+                <label className="mb-1 block text-sm font-medium text-text-secondary">{t("home.asrModel")}</label>
+                <Select
                   value={modelId}
                   onChange={(e) => setModelId(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
                 >
                   {engineModels.map((m) => (
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
             </div>
 
             {taskType === "translate-only" && (
-              <div className="mb-4 rounded-md bg-gray-50 p-2.5 text-xs text-gray-600 dark:bg-gray-900/50 dark:text-gray-300">
+              <div className="mb-4 rounded-lg bg-surface-overlay border border-border-subtle p-3 text-xs text-text-secondary leading-5">
                 {t("home.transOnlyInfo")}
               </div>
             )}
@@ -391,11 +395,10 @@ export default function HomePage() {
             {/* 语言 */}
             <div className="mb-4 grid grid-cols-2 gap-4">
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.sourceLang")}</label>
-                <select
+                <label className="mb-1 block text-sm font-medium text-text-secondary">{t("home.sourceLang")}</label>
+                <Select
                   value={sourceLanguage}
                   onChange={(e) => setSourceLanguage(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
                 >
                   <option value="auto">{t("language.auto")} (auto)</option>
                   <option value="zh">{t("language.zh")} (zh)</option>
@@ -403,42 +406,41 @@ export default function HomePage() {
                   <option value="ja">{t("language.ja")} (ja)</option>
                   <option value="ko">{t("language.ko")} (ko)</option>
                   <option value="yue">{t("language.yue")} (yue)</option>
-                </select>
+                </Select>
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.targetLang")}</label>
-                <select
+                <label className="mb-1 block text-sm font-medium text-text-secondary">{t("home.targetLang")}</label>
+                <Select
                   value={targetLanguage}
                   onChange={(e) => setTargetLanguage(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
                 >
                   <option value="zh">{t("language.zh")} (zh)</option>
                   <option value="en">{t("language.en")} (en)</option>
                   <option value="ja">{t("language.ja")} (ja)</option>
                   <option value="ko">{t("language.ko")} (ko)</option>
                   <option value="yue">{t("language.yue")} (yue)</option>
-                </select>
+                </Select>
               </div>
             </div>
 
             {taskType !== "generate-only" && (
               <div className="mb-4">
-                <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.subtitleContent")}</label>
-                <div className="grid gap-2 sm:grid-cols-3">
+                <label className="mb-2 block text-sm font-medium text-text-secondary">{t("home.subtitleContent")}</label>
+                <div className="grid gap-2.5 sm:grid-cols-3">
                   {translationContentModes.map((mode) => (
                     <button
                       key={mode.value}
                       type="button"
                       aria-pressed={translationContentMode === mode.value}
                       onClick={() => setTranslationContentMode(mode.value)}
-                      className={`min-h-[4.75rem] rounded-lg border px-3 py-2 text-left text-xs transition ${
+                      className={`min-h-[4.75rem] rounded-lg border px-3 py-2.5 text-left text-xs transition-all duration-150 ${
                         translationContentMode === mode.value
-                          ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300"
-                          : "border-gray-200 text-gray-600 hover:border-gray-300 dark:border-gray-600 dark:text-gray-400"
+                          ? "border-brand bg-brand-subtle text-brand-text shadow-sm"
+                          : "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
                       }`}
                     >
-                      <span className="block font-medium">{t(mode.labelKey)}</span>
-                      <span className="mt-1 block leading-5 text-gray-500 dark:text-gray-400">
+                      <span className="block font-semibold">{t(mode.labelKey)}</span>
+                      <span className="mt-1 block leading-5 text-text-tertiary">
                         {t(mode.descKey)}
                       </span>
                     </button>
@@ -449,20 +451,19 @@ export default function HomePage() {
 
             {/* 输出格式 */}
             <div className="mb-4">
-              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">{t("home.outputFormat")}</label>
-              <select
+              <label className="mb-1 block text-sm font-medium text-text-secondary">{t("home.outputFormat")}</label>
+              <Select
                 value={outputFormat}
                 onChange={(e) => setOutputFormat(e.target.value)}
-                className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700"
               >
                 {outputFormats.map((f) => (
                   <option key={f.value} value={f.value}>{f.label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             {engineId === "parakeet-mlx" && (
-              <div className="mb-4 text-xs text-blue-600 bg-blue-50 dark:bg-blue-900/20 dark:text-blue-300 p-2.5 rounded-md">
+              <div className="mb-4 text-xs text-brand-text bg-brand-subtle/40 border border-brand/10 p-3 rounded-lg leading-5">
                 {t("home.parakeetNotice")}
               </div>
             )}
@@ -470,7 +471,7 @@ export default function HomePage() {
             {prerequisiteHint && (
               <div
                 id="task-prerequisite-hint"
-                className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+                className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning"
               >
                 <AlertCircle size={14} className="shrink-0" />
                 <span>{prerequisiteHint}</span>
@@ -478,7 +479,7 @@ export default function HomePage() {
                   <button
                     type="button"
                     onClick={handleSelectMedia}
-                    className="font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
+                    className="font-medium underline hover:text-warning/80"
                   >
                     {t("home.selectModelNow")}
                   </button>
@@ -486,7 +487,7 @@ export default function HomePage() {
                   <button
                     type="button"
                     onClick={() => navigate("/models")}
-                    className="font-medium text-amber-900 underline-offset-2 hover:underline dark:text-amber-100"
+                    className="font-medium underline hover:text-warning/80"
                   >
                     {t("home.openModelManage")}
                   </button>
@@ -495,79 +496,79 @@ export default function HomePage() {
             )}
 
             {taskNeedsAsr && mediaMetadata && mediaMetadata.audio_sample_rate && mediaMetadata.audio_sample_rate !== 16000 && (
-              <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+              <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning">
                 <AlertCircle className="mt-0.5 shrink-0" size={14} />
                 <span>
-                  提示：当前音频采样率为 {mediaMetadata.audio_sample_rate} Hz。引擎需要 16000 Hz 音频输入，后台将在提取时自动进行重采样。
+                  {t("home.resampleHint", { rate: mediaMetadata.audio_sample_rate })}
                 </span>
               </div>
             )}
 
             {/* 操作按钮 */}
-            <div className="flex flex-wrap gap-3">
-              <button
+            <div className="flex flex-wrap gap-3 mt-5">
+              <Button
                 type="button"
                 onClick={handleCreate}
                 disabled={creating}
                 aria-describedby={prerequisiteHint ? "task-prerequisite-hint" : undefined}
-                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-gray-700"
                 title={prerequisiteHint || undefined}
+                variant="primary"
               >
-                <Play size={16} />
+                <Play size={14} />
                 {creating ? t("home.creating") : t("home.createTask")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={handlePreview}
                 disabled={creating}
-                className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700"
+                variant="secondary"
                 title={taskType === "translate-only" ? t("home.previewOnlyMedia") : undefined}
               >
                 {t("home.createPreview")}
-              </button>
+              </Button>
             </div>
-          </section>
+          </Card>
         </div>
 
         {/* 系统信息 */}
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800 h-fit">
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("home.appInfo")}</h3>
-          <dl className="space-y-3">
-            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-              <dt className="text-sm text-gray-500">{t("home.appName")}</dt>
-              <dd className="min-w-0 break-words text-right font-mono text-sm text-gray-900 dark:text-gray-100">
+        <Card className="p-5 h-fit">
+          <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("home.appInfo")}</h3>
+          <dl className="space-y-3.5">
+            <div className="flex justify-between items-center gap-3">
+              <dt className="text-xs text-text-secondary">{t("home.appName")}</dt>
+              <dd className="min-w-0 break-all text-right font-mono text-xs text-text-primary">
                 {appInfo?.name ?? t("home.loading")}
               </dd>
             </div>
-            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-              <dt className="text-sm text-gray-500">{t("home.version")}</dt>
-              <dd className="min-w-0 text-right font-mono text-sm text-gray-900 dark:text-gray-100">
+            <div className="flex justify-between items-center gap-3">
+              <dt className="text-xs text-text-secondary">{t("home.version")}</dt>
+              <dd className="min-w-0 text-right font-mono text-xs text-text-primary">
                 {appInfo?.version ?? t("home.loading")}
               </dd>
             </div>
-            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-              <dt className="text-sm text-gray-500">FFmpeg</dt>
-              <dd className="min-w-0 text-right text-sm text-gray-900 dark:text-gray-100">
+            <div className="flex justify-between items-center gap-3">
+              <dt className="text-xs text-text-secondary">FFmpeg</dt>
+              <dd className="min-w-0 text-right text-xs text-text-primary">
                 {ffmpegVersion === "detecting" ? (
-                  <span className="text-gray-500">{t("home.detecting")}</span>
+                  <span className="text-text-tertiary">{t("home.detecting")}</span>
                 ) : ffmpegVersion === "unavailable" ? (
-                  <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-300">
-                    <AlertCircle size={14} />
+                  <span className="inline-flex items-center gap-1 text-danger font-medium">
+                    <AlertCircle size={12} />
                     {t("home.unavailable")}
                   </span>
                 ) : (
                   <span
-                    className="inline-flex items-center gap-1 text-green-700 dark:text-green-300"
+                    className="inline-flex items-center gap-1 text-success font-medium"
                     title={ffmpegVersion}
                   >
-                    <CheckCircle className="shrink-0" size={14} />
+                    <CheckCircle className="shrink-0" size={12} />
                     {t("home.available")}
                   </span>
                 )}
               </dd>
             </div>
           </dl>
-        </section>
+        </Card>
       </div>
     </div>
   );

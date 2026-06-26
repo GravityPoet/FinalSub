@@ -11,6 +11,10 @@ import {
   type Settings,
 } from "../lib/tauri";
 
+import { Button } from "../components/ui/Button";
+import { Input, Select } from "../components/ui/Input";
+import { Card } from "../components/ui/Card";
+
 const languages = [
   { value: "zh", label: "language.zh" },
   { value: "en", label: "language.en" },
@@ -33,11 +37,11 @@ const SettingRow = ({
   description?: string;
   children: React.ReactNode;
 }) => (
-  <div className="flex items-center justify-between gap-4 py-3">
+  <div className="flex items-center justify-between gap-4 py-3.5">
     <div className="min-w-0">
-      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{label}</div>
+      <div className="text-sm font-semibold text-text-primary">{label}</div>
       {description && (
-        <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{description}</div>
+        <div className="mt-1 text-xs text-text-tertiary leading-4">{description}</div>
       )}
     </div>
     <div className="shrink-0">{children}</div>
@@ -53,14 +57,14 @@ const SettingGroup = ({
   title: string;
   children: React.ReactNode;
 }) => (
-  <div>
-    <div className="flex items-center gap-2 mb-3 px-1">
-      <Icon className="size-4 text-gray-500" />
-      <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{title}</span>
+  <div className="space-y-2">
+    <div className="flex items-center gap-2 mb-2 px-1">
+      <Icon className="size-4 text-text-secondary" />
+      <span className="text-sm font-semibold text-text-secondary">{title}</span>
     </div>
-    <div className="rounded-lg border border-gray-200 bg-white divide-y divide-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:divide-gray-700">
+    <Card className="p-0 bg-surface divide-y divide-border-subtle overflow-hidden">
       {children}
-    </div>
+    </Card>
   </div>
 );
 
@@ -151,70 +155,73 @@ export default function SettingsPage() {
 
   if (!settings) {
     return (
-      <div className="max-w-4xl">
-        <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("settings.title")}</h2>
-        <p className="text-gray-500">{t("home.loading")}</p>
+      <div className="max-w-4xl space-y-6">
+        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
+        <p className="text-text-tertiary text-sm">{t("home.loading")}</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl">
-      <div className="mb-6 flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{t("settings.title")}</h2>
-        <div className="flex items-center gap-2">
+    <div className="max-w-4xl space-y-6 pb-12">
+      <div className="flex items-center justify-between">
+        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
+        <div className="flex items-center gap-3.5">
           {message && (
             <span
-              className={`text-xs ${message.type === "ok" ? "text-green-600" : "text-red-600"}`}
+              className={`text-xs font-semibold ${message.type === "ok" ? "text-success" : "text-danger"}`}
             >
               {message.text}
             </span>
           )}
-          <button
+          <Button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            variant="primary"
+            className="h-9"
           >
             <Save size={14} />
-            {saving ? t("settings.saving") : t("common.save")}
-          </button>
+            <span>{saving ? t("settings.saving") : t("common.save")}</span>
+          </Button>
         </div>
       </div>
 
       <div className="space-y-6">
         {/* 语言设置 */}
         <SettingGroup icon={SettingsIcon} title={t("settings.langGroup")}>
-          <div className="px-4 py-3">
+          <div className="px-5">
             <SettingRow label={t("settings.langLabel")} description={t("settings.langDesc")}>
-              <select
+              <Select
                 value={settings.language}
                 onChange={(e) => update("language", e.target.value)}
-                className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm dark:border-gray-600 dark:bg-gray-700"
+                className="w-32 h-9 py-1"
               >
                 {languages.map((l) => (
                   <option key={l.value} value={l.value}>
                     {t(l.label)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </SettingRow>
           </div>
         </SettingGroup>
 
         {/* 模型存储 */}
         <SettingGroup icon={FolderOpen} title={t("settings.modelStorageGroup")}>
-          <div className="px-4 py-3">
+          <div className="px-5">
             <SettingRow label={t("settings.modelStorageLabel")} description={t("settings.modelStorageDesc")}>
-              <div className="flex items-center gap-2">
-                <span className="max-w-[300px] truncate text-xs text-gray-500">
+              <div className="flex items-center gap-3">
+                <span className="max-w-[300px] truncate text-xs text-text-secondary font-mono bg-surface-overlay px-2.5 py-1.5 rounded-lg border border-border-subtle">
                   {settings.models_path}
                 </span>
-                <button
+                <Button
                   onClick={handleSelectModelsPath}
-                  className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"
+                  variant="secondary"
+                  size="sm"
+                  className="h-8 py-0"
                 >
                   {t("settings.change")}
-                </button>
+                </Button>
               </div>
             </SettingRow>
           </div>
@@ -222,39 +229,39 @@ export default function SettingsPage() {
 
         {/* 任务设置 */}
         <SettingGroup icon={SettingsIcon} title={t("settings.taskGroup")}>
-          <div className="px-4 py-3">
+          <div className="px-5">
             <SettingRow label={t("settings.concurrentLabel")} description={t("settings.concurrentDesc")}>
-              <input
+              <Input
                 type="number"
                 min={1}
                 max={8}
                 value={settings.max_concurrent_tasks}
                 onChange={(e) => update("max_concurrent_tasks", Number(e.target.value))}
-                className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
+                className="w-20 text-right h-9"
               />
             </SettingRow>
             <SettingRow label={t("settings.outputLabel")} description={t("settings.outputDesc")}>
-              <select
+              <Select
                 value={settings.subtitle_output_format}
                 onChange={(e) => update("subtitle_output_format", e.target.value)}
-                className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm dark:border-gray-600 dark:bg-gray-700"
+                className="w-28 h-9 py-1"
               >
                 {outputFormats.map((f) => (
                   <option key={f.value} value={f.value}>
                     {f.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </SettingRow>
             <SettingRow
               label={t("settings.defaultTargetLanguageLabel")}
               description={t("settings.defaultTargetLanguageDesc")}
             >
-              <input
+              <Input
                 type="text"
                 value={settings.target_language}
                 onChange={(e) => update("target_language", e.target.value)}
-                className="w-32 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm dark:border-gray-600 dark:bg-gray-700"
+                className="w-32 h-9"
               />
             </SettingRow>
           </div>
@@ -262,93 +269,93 @@ export default function SettingsPage() {
 
         {/* VAD 设置（whisper-cpp 与自定义命令支持） */}
         {(settings.asr_engine === "whisper-cpp" || settings.asr_engine === "custom-command") && (
-        <SettingGroup icon={SettingsIcon} title={t("settings.vadGroup")}>
-          <div className="px-4 py-3">
-            <div className="mb-3 rounded-lg bg-blue-50/50 p-3 text-xs text-blue-700 dark:bg-blue-950/20 dark:text-blue-300">
-              {t("settings.vadGroupDesc")}
+          <SettingGroup icon={SettingsIcon} title={t("settings.vadGroup")}>
+            <div className="px-5 py-2 space-y-1">
+              <div className="my-3 rounded-lg bg-brand-subtle border border-brand/10 p-3 text-xs text-brand-text leading-5">
+                {t("settings.vadGroupDesc")}
+              </div>
+              <SettingRow label={t("settings.useVadLabel")} description={t("settings.useVadDesc")}>
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    checked={settings.use_vad}
+                    onChange={(e) => update("use_vad", e.target.checked)}
+                    className="peer sr-only"
+                  />
+                  <div className="peer h-5 w-9 rounded-full bg-border-strong after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-brand peer-checked:after:translate-x-full" />
+                </label>
+              </SettingRow>
+              {settings.use_vad && (
+                <div className="divide-y divide-border-subtle">
+                  <SettingRow label={t("settings.vadThresholdLabel")} description={t("settings.vadThresholdDesc")}>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      value={settings.vad_threshold}
+                      onChange={(e) => update("vad_threshold", Number(e.target.value))}
+                      className="w-24 text-right h-9"
+                    />
+                  </SettingRow>
+                  <SettingRow label={t("settings.vadMinSpeechLabel")} description={t("settings.vadMinSpeechDesc")}>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={settings.vad_min_speech_duration_ms}
+                      onChange={(e) => update("vad_min_speech_duration_ms", Number(e.target.value))}
+                      className="w-24 text-right h-9"
+                    />
+                  </SettingRow>
+                  <SettingRow label={t("settings.vadMinSilenceLabel")} description={t("settings.vadMinSilenceDesc")}>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={settings.vad_min_silence_duration_ms}
+                      onChange={(e) => update("vad_min_silence_duration_ms", Number(e.target.value))}
+                      className="w-24 text-right h-9"
+                    />
+                  </SettingRow>
+                  <SettingRow label={t("settings.vadMaxSpeechLabel")} description={t("settings.vadMaxSpeechDesc")}>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={settings.vad_max_speech_duration_s}
+                      onChange={(e) => update("vad_max_speech_duration_s", Number(e.target.value))}
+                      className="w-24 text-right h-9"
+                    />
+                  </SettingRow>
+                  <SettingRow label={t("settings.vadSpeechPadLabel")} description={t("settings.vadSpeechPadDesc")}>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={5000}
+                      value={settings.vad_speech_pad_ms}
+                      onChange={(e) => update("vad_speech_pad_ms", Number(e.target.value))}
+                      className="w-24 text-right h-9"
+                    />
+                  </SettingRow>
+                  <SettingRow label={t("settings.vadSamplesOverlapLabel")} description={t("settings.vadSamplesOverlapDesc")}>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={settings.vad_samples_overlap}
+                      onChange={(e) => update("vad_samples_overlap", Number(e.target.value))}
+                      className="w-24 text-right h-9"
+                    />
+                  </SettingRow>
+                </div>
+              )}
             </div>
-            <SettingRow label={t("settings.useVadLabel")} description={t("settings.useVadDesc")}>
-              <label className="relative inline-flex cursor-pointer items-center">
-                <input
-                  type="checkbox"
-                  checked={settings.use_vad}
-                  onChange={(e) => update("use_vad", e.target.checked)}
-                  className="peer sr-only"
-                />
-                <div className="peer h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-blue-600 peer-checked:after:translate-x-full dark:bg-gray-600" />
-              </label>
-            </SettingRow>
-            {settings.use_vad && (
-              <>
-                <SettingRow label={t("settings.vadThresholdLabel")} description={t("settings.vadThresholdDesc")}>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    value={settings.vad_threshold}
-                    onChange={(e) => update("vad_threshold", Number(e.target.value))}
-                    className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
-                  />
-                </SettingRow>
-                <SettingRow label={t("settings.vadMinSpeechLabel")} description={t("settings.vadMinSpeechDesc")}>
-                  <input
-                    type="number"
-                    min={0}
-                    value={settings.vad_min_speech_duration_ms}
-                    onChange={(e) => update("vad_min_speech_duration_ms", Number(e.target.value))}
-                    className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
-                  />
-                </SettingRow>
-                <SettingRow label={t("settings.vadMinSilenceLabel")} description={t("settings.vadMinSilenceDesc")}>
-                  <input
-                    type="number"
-                    min={0}
-                    value={settings.vad_min_silence_duration_ms}
-                    onChange={(e) => update("vad_min_silence_duration_ms", Number(e.target.value))}
-                    className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
-                  />
-                </SettingRow>
-                <SettingRow label={t("settings.vadMaxSpeechLabel")} description={t("settings.vadMaxSpeechDesc")}>
-                  <input
-                    type="number"
-                    min={0}
-                    max={3600}
-                    value={settings.vad_max_speech_duration_s}
-                    onChange={(e) => update("vad_max_speech_duration_s", Number(e.target.value))}
-                    className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
-                  />
-                </SettingRow>
-                <SettingRow label={t("settings.vadSpeechPadLabel")} description={t("settings.vadSpeechPadDesc")}>
-                  <input
-                    type="number"
-                    min={0}
-                    max={5000}
-                    value={settings.vad_speech_pad_ms}
-                    onChange={(e) => update("vad_speech_pad_ms", Number(e.target.value))}
-                    className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
-                  />
-                </SettingRow>
-                <SettingRow label={t("settings.vadSamplesOverlapLabel")} description={t("settings.vadSamplesOverlapDesc")}>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={settings.vad_samples_overlap}
-                    onChange={(e) => update("vad_samples_overlap", Number(e.target.value))}
-                    className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
-                  />
-                </SettingRow>
-              </>
-            )}
-          </div>
-        </SettingGroup>
+          </SettingGroup>
         )}
 
         {/* 通用与更新设置 */}
         <SettingGroup icon={SettingsIcon} title={t("settings.updateGroup")}>
-          <div className="px-4 py-3">
+          <div className="px-5">
             <SettingRow label={t("settings.updateLabel")} description={t("settings.updateDesc")}>
               <label className="relative inline-flex cursor-pointer items-center">
                 <input
@@ -357,7 +364,7 @@ export default function SettingsPage() {
                   onChange={(e) => update("check_update_on_startup", e.target.checked)}
                   className="peer sr-only"
                 />
-                <div className="peer h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-blue-600 peer-checked:after:translate-x-full dark:bg-gray-600" />
+                <div className="peer h-5 w-9 rounded-full bg-border-strong after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-brand peer-checked:after:translate-x-full" />
               </label>
             </SettingRow>
             <SettingRow label={t("settings.telemetryLabel")} description={t("settings.telemetryDesc")}>
@@ -368,7 +375,7 @@ export default function SettingsPage() {
                   onChange={(e) => update("enable_telemetry", e.target.checked)}
                   className="peer sr-only"
                 />
-                <div className="peer h-5 w-9 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-blue-600 peer-checked:after:translate-x-full dark:bg-gray-600" />
+                <div className="peer h-5 w-9 rounded-full bg-border-strong after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-brand peer-checked:after:translate-x-full" />
               </label>
             </SettingRow>
           </div>
@@ -376,20 +383,20 @@ export default function SettingsPage() {
 
         {/* 转录高级设置 */}
         <SettingGroup icon={SettingsIcon} title={t("settings.advancedGroup")}>
-          <div className="px-4 py-3">
+          <div className="px-5">
             <SettingRow
               label={t("settings.whisperCommandLabel")}
               description={t("settings.whisperCommandDesc")}
             >
-              <div className="flex gap-2">
-                <input
+              <div className="flex gap-2 w-[400px]">
+                <Input
                   type="text"
                   placeholder={t("settings.whisperCommandPlaceholder")}
                   value={settings.whisper_command}
                   onChange={(e) => update("whisper_command", e.target.value)}
-                  className="w-80 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm dark:border-gray-600 dark:bg-gray-700"
+                  className="flex-1 h-9"
                 />
-                <button
+                <Button
                   onClick={async () => {
                     const selected = await open({
                       multiple: false,
@@ -399,23 +406,24 @@ export default function SettingsPage() {
                       update("whisper_command", selected);
                     }
                   }}
-                  className="rounded-md border border-gray-300 px-2.5 py-1 text-xs hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"
+                  variant="secondary"
+                  className="h-9 px-3 text-xs"
                 >
                   {t("common.browse")}
-                </button>
+                </Button>
               </div>
             </SettingRow>
             <SettingRow
               label={t("settings.maxContextLabel")}
               description={t("settings.maxContextDesc")}
             >
-              <input
+              <Input
                 type="number"
                 min={-1}
                 max={65536}
                 value={settings.max_context}
                 onChange={(e) => update("max_context", Number(e.target.value))}
-                className="w-20 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-sm text-right dark:border-gray-600 dark:bg-gray-700"
+                className="w-24 text-right h-9"
               />
             </SettingRow>
           </div>
@@ -423,70 +431,75 @@ export default function SettingsPage() {
 
         {/* 配置导入导出 */}
         <SettingGroup icon={Download} title={t("settings.importExportGroup")}>
-          <div className="flex gap-3 px-4 py-3">
-            <button
+          <div className="flex gap-3 px-5 py-3.5">
+            <Button
               onClick={handleExport}
-              className="flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"
+              variant="secondary"
+              size="sm"
             >
-              <Download size={14} />
-              {t("settings.export")}
-            </button>
-            <button
+              <Download size={13} />
+              <span>{t("settings.export")}</span>
+            </Button>
+            <Button
               onClick={handleImport}
-              className="flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-gray-700"
+              variant="secondary"
+              size="sm"
             >
-              <Upload size={14} />
-              {t("settings.import")}
-            </button>
+              <Upload size={13} />
+              <span>{t("settings.import")}</span>
+            </Button>
           </div>
         </SettingGroup>
 
         {/* 危险操作 */}
         <SettingGroup icon={RotateCcw} title={t("settings.dangerGroup")}>
-          <div className="px-4 py-3">
+          <div className="px-5">
             <SettingRow label={t("settings.resetLabel")} description={t("settings.resetDesc")}>
-              <button
+              <Button
                 onClick={() => setConfirmReset(true)}
-                className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                variant="danger"
+                size="sm"
               >
                 {t("settings.reset")}
-              </button>
+              </Button>
             </SettingRow>
           </div>
         </SettingGroup>
       </div>
 
       {confirmReset && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-            <div className="mb-4 flex items-start gap-3">
-              <div className="rounded-full bg-red-50 p-2 text-red-600 dark:bg-red-950/40 dark:text-red-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default animate-fade-in">
+            <div className="mb-5 flex items-start gap-3">
+              <div className="rounded-full bg-danger/10 p-2 text-danger">
                 <AlertCircle size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-gray-900 dark:text-white">{t("settings.resetConfirmTitle")}</h3>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                <h3 className="font-semibold text-text-primary text-h2 mb-1.5">{t("settings.resetConfirmTitle")}</h3>
+                <p className="text-xs text-text-secondary leading-5">
                   {t("settings.resetConfirmDesc")}
                 </p>
               </div>
             </div>
-            <div className="flex justify-end gap-2">
-              <button
+            <div className="flex justify-end gap-2.5">
+              <Button
                 type="button"
                 onClick={() => setConfirmReset(false)}
-                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                variant="secondary"
+                size="sm"
               >
                 {t("common.cancel")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={handleReset}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+                variant="danger"
+                size="sm"
               >
                 {t("settings.reset")}
-              </button>
+              </Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
     </div>

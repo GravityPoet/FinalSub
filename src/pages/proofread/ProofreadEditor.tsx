@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback } from 'react';
 import { ArrowLeft, Check, Save, Loader2, AlertTriangle, Download, Languages } from 'lucide-react';
 import { save } from "@tauri-apps/plugin-dialog";
 import { useToast } from './Toast';
+import { Button } from '../../components/ui/Button';
 
 import { useStandaloneSubtitles } from './useStandaloneSubtitles';
 import { useVideoPlayer } from './useVideoPlayer';
@@ -122,13 +123,13 @@ export default function ProofreadEditor({
       const contentType = shouldShowTranslation ? 'sourceAndTranslate' : 'source';
       const success = await handleExport(path, format, contentType);
       if (success) {
-        showToast('success', '字幕导出成功');
+        showToast('success', t('proofread.editor.exportSuccess'));
       } else {
-        showToast('error', '字幕导出失败');
+        showToast('error', t('proofread.editor.exportFailed'));
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showToast('error', `导出失败: ${err}`);
+      showToast('error', t('proofread.editor.exportError', { error: err.toString() }));
     }
   };
 
@@ -143,7 +144,7 @@ export default function ProofreadEditor({
       });
       
       if (stringsToConvert.length === 0) {
-        showToast('info', '没有可转换的字幕内容');
+        showToast('info', t('proofread.editor.noConvertibleSubtitles'));
         return;
       }
       
@@ -178,10 +179,10 @@ export default function ProofreadEditor({
       });
       
       updateSubtitles(newSubtitles);
-      showToast('success', '简繁/地域词汇转换成功');
-    } catch (err) {
+      showToast('success', t('proofread.editor.openccConvertSuccess'));
+    } catch (err: any) {
       console.error(err);
-      showToast('error', `转换失败: ${err}`);
+      showToast('error', t('proofread.editor.openccConvertFailed', { error: err.toString() }));
     }
   };
 
@@ -238,115 +239,120 @@ export default function ProofreadEditor({
 
   if (isLoading) {
     return (
-      <div className="h-full flex items-center justify-center bg-slate-900">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+      <div className="h-full flex items-center justify-center bg-app-bg">
+        <Loader2 className="w-8 h-8 animate-spin text-brand" />
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-slate-900 text-slate-100 overflow-hidden relative">
+    <div className="h-full flex flex-col bg-app-bg text-text-primary overflow-hidden relative">
       {/* 顶部工具栏 */}
-      <div className="flex items-center justify-between px-6 py-4 bg-slate-800/60 border-b border-slate-700/50 flex-shrink-0">
+      <div className="flex items-center justify-between px-6 py-4 bg-surface/50 border-b border-border-subtle flex-shrink-0 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <button
+          <Button
+            variant="secondary"
             onClick={handleBackClick}
-            className="flex items-center text-xs text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-655 px-3.5 py-1.5 rounded-lg transition-colors font-medium border border-slate-600/30"
+            size="sm"
           >
-            <ArrowLeft className="w-4 h-4 mr-1.5 text-slate-400" />
+            <ArrowLeft className="w-4 h-4" />
             {t('proofread.editor.backToList')}
-          </button>
-          <div className="text-sm font-medium text-slate-300 truncate max-w-[320px]" title={file.fileName}>
+          </Button>
+          <div className="text-sm font-medium text-text-secondary truncate max-w-[320px]" title={file.fileName}>
             {file.fileName}
           </div>
         </div>
         <div className="flex items-center gap-2.5">
-          <button
+          <Button
+            variant="secondary"
             onClick={handleSave}
-            className="flex items-center text-xs bg-slate-700 hover:bg-slate-655 text-slate-200 border border-slate-655 px-4 py-2 rounded-lg transition-colors font-medium"
+            size="sm"
           >
-            <Save className="w-4 h-4 mr-1.5 text-slate-400" />
+            <Save className="w-4 h-4 text-text-secondary" />
             {t('proofread.editor.saveChanges')}
-          </button>
+          </Button>
           
           <div className="relative group">
-            <button
-              className="flex items-center text-xs bg-slate-700 hover:bg-slate-655 text-slate-200 border border-slate-655 px-4 py-2 rounded-lg transition-colors font-medium"
+            <Button
+              variant="secondary"
+              size="sm"
             >
-              <Download className="w-4 h-4 mr-1.5 text-slate-400" />
-              导出字幕
-            </button>
-            <div className="absolute right-0 mt-1 hidden group-hover:block bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 w-32 overflow-hidden">
+              <Download className="w-4 h-4 text-text-secondary" />
+              {t('proofread.editor.exportSubtitle')}
+            </Button>
+            <div className="absolute right-0 mt-1.5 hidden group-hover:block bg-surface border border-border-default rounded-xl shadow-lg z-50 w-32 overflow-hidden backdrop-blur-md">
               <button
                 type="button"
                 onClick={() => handleExportClick('srt')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                SRT 格式
+                {t('proofread.editor.formatSrt')}
               </button>
               <button
                 type="button"
                 onClick={() => handleExportClick('vtt')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                VTT 格式
+                {t('proofread.editor.formatVtt')}
               </button>
               <button
                 type="button"
                 onClick={() => handleExportClick('ass')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                ASS 格式
+                {t('proofread.editor.formatAss')}
               </button>
             </div>
           </div>
 
           <div className="relative group">
-            <button
-              className="flex items-center text-xs bg-slate-700 hover:bg-slate-655 text-slate-200 border border-slate-655 px-4 py-2 rounded-lg transition-colors font-medium"
+            <Button
+              variant="secondary"
+              size="sm"
             >
-              <Languages className="w-4 h-4 mr-1.5 text-slate-400" />
-              简繁转换
-            </button>
-            <div className="absolute right-0 mt-1 hidden group-hover:block bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 w-36 overflow-hidden">
+              <Languages className="w-4 h-4 text-text-secondary" />
+              {t('proofread.editor.openccConvert')}
+            </Button>
+            <div className="absolute right-0 mt-1.5 hidden group-hover:block bg-surface border border-border-default rounded-xl shadow-lg z-50 w-36 overflow-hidden backdrop-blur-md">
               <button
                 type="button"
                 onClick={() => handleOpenccConvert('s2t')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                简体 → 繁体 (S2T)
+                {t('proofread.editor.openccS2t')}
               </button>
               <button
                 type="button"
                 onClick={() => handleOpenccConvert('t2s')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                繁体 → 简体 (T2S)
+                {t('proofread.editor.openccT2s')}
               </button>
               <button
                 type="button"
                 onClick={() => handleOpenccConvert('s2twp')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                简体 → 台湾繁体 (S2TWP)
+                {t('proofread.editor.openccS2twp')}
               </button>
               <button
                 type="button"
                 onClick={() => handleOpenccConvert('s2hk')}
-                className="w-full text-left px-4 py-2 text-xs hover:bg-slate-700 text-slate-200 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
-                简体 → 香港繁体 (S2HK)
+                {t('proofread.editor.openccS2hk')}
               </button>
             </div>
           </div>
 
-          <button
+          <Button
+            variant="primary"
             onClick={onMarkComplete}
-            className="flex items-center text-xs bg-blue-600 hover:bg-blue-700 text-white px-4.5 py-2 rounded-lg transition-colors font-medium shadow-md shadow-blue-500/10"
+            size="sm"
           >
-            <Check className="w-4 h-4 mr-1.5" />
+            <Check className="w-4 h-4" />
             {t('proofread.editor.markComplete')}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -437,39 +443,42 @@ export default function ProofreadEditor({
 
       {/* 冲突挽救 Dialog */}
       {showUnsavedDialog && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden text-slate-100 font-sans p-6 space-y-6">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-surface border border-border-default rounded-xl w-full max-w-md shadow-lg overflow-hidden text-text-primary font-sans p-6 space-y-6">
             <div className="flex items-start gap-4">
-              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-500 shrink-0">
+              <div className="p-3 bg-warning/10 border border-warning/20 rounded-xl text-warning shrink-0">
                 <AlertTriangle size={24} />
               </div>
               <div className="space-y-1.5">
-                <h3 className="text-base font-bold text-slate-100">{t('proofread.editor.unsavedTitle')}</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
+                <h3 className="text-base font-bold text-text-primary">{t('proofread.editor.unsavedTitle')}</h3>
+                <p className="text-xs text-text-secondary leading-relaxed">
                   {t('proofread.editor.unsavedDesc')}
                 </p>
               </div>
             </div>
 
             <div className="flex flex-col gap-2.5">
-              <button
+              <Button
+                variant="primary"
                 onClick={handleSaveAndExit}
-                className="w-full text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg transition-colors shadow-lg shadow-blue-500/10"
+                className="w-full"
               >
                 {t('proofread.editor.saveExit')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
                 onClick={handleDiscardAndExit}
-                className="w-full text-xs font-semibold bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-800 py-2.5 rounded-lg transition-colors"
+                className="w-full"
               >
                 {t('proofread.editor.discardExit')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
                 onClick={() => setShowUnsavedDialog(false)}
-                className="w-full text-xs font-semibold bg-transparent hover:bg-slate-850 text-slate-400 py-2.5 rounded-lg transition-colors"
+                className="w-full"
               >
                 {t('proofread.editor.cancel')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

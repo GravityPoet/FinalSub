@@ -1,6 +1,7 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings } from "lucide-react";
+import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, Sun, Moon, Laptop } from "lucide-react";
 import { useI18n } from "../lib/i18n";
+import { useTheme } from "../lib/theme";
 
 const navItems = [
   { to: "/", key: "nav.tasks", icon: FileVideo2 },
@@ -12,32 +13,72 @@ const navItems = [
   { to: "/settings", key: "nav.settings", icon: Settings },
 ] as const;
 
+const Logo = () => (
+  <svg className="size-5 text-brand" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="currentColor" opacity="0.85" />
+    <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
 export default function Layout() {
   const location = useLocation();
   const { t } = useI18n();
+  const { theme, setTheme } = useTheme();
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50 dark:bg-gray-900 sm:flex-row">
-      <aside className="w-full shrink-0 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 sm:flex sm:h-screen sm:w-56 sm:flex-col sm:border-b-0 sm:border-r">
-        <div className="border-b border-gray-200 p-4 dark:border-gray-700">
-          <h1 className="text-lg font-bold text-gray-900 dark:text-white">FinalSub</h1>
+    <div className="flex min-h-screen flex-col bg-app-bg text-text-primary sm:flex-row">
+      <aside className="w-full shrink-0 border-b border-border-subtle bg-surface sm:flex sm:h-screen sm:w-60 sm:flex-col sm:border-b-0 sm:border-r">
+        <div className="flex items-center gap-3 border-b border-border-subtle p-4">
+          <Logo />
+          <h1 className="text-md font-bold tracking-tight text-text-primary">FinalSub</h1>
         </div>
-        <nav className="flex gap-2 overflow-x-auto p-2 sm:block sm:flex-1 sm:space-y-1">
-          {navItems.map(({ to, key, icon: Icon }) => (
-            <Link
-              key={to}
-              to={to}
-              className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                location.pathname === to
-                  ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                  : "text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
-              }`}
-            >
-              <Icon size={18} />
-              {t(key)}
-            </Link>
-          ))}
+        <nav className="flex gap-1 overflow-x-auto p-2 sm:block sm:flex-1 sm:space-y-1">
+          {navItems.map(({ to, key, icon: Icon }) => {
+            const isActive = location.pathname === to;
+            return (
+              <Link
+                key={to}
+                to={to}
+                className={`relative flex shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                  isActive
+                    ? "bg-brand-subtle text-brand-text font-semibold before:absolute before:left-0 before:top-1/4 before:h-1/2 before:w-0.5 before:bg-brand before:rounded-full"
+                    : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+                }`}
+              >
+                <Icon size={16} className={isActive ? "text-brand" : "text-text-tertiary"} />
+                <span>{t(key)}</span>
+              </Link>
+            );
+          })}
         </nav>
+        
+        <div className="mt-auto border-t border-border-subtle p-3 flex items-center justify-between">
+          <span className="text-xs text-text-secondary">{t("settings.theme") || "Theme"}</span>
+          <div className="flex bg-surface-raised border border-border-default rounded-lg p-0.5">
+            <button
+              onClick={() => setTheme("light")}
+              className={`p-1.5 rounded-md transition ${theme === "light" ? "bg-surface text-brand shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
+              title="Light Theme"
+            >
+              <Sun size={14} />
+            </button>
+            <button
+              onClick={() => setTheme("dark")}
+              className={`p-1.5 rounded-md transition ${theme === "dark" ? "bg-surface text-brand shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
+              title="Dark Theme"
+            >
+              <Moon size={14} />
+            </button>
+            <button
+              onClick={() => setTheme("system")}
+              className={`p-1.5 rounded-md transition ${theme === "system" ? "bg-surface text-brand shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
+              title="System Theme"
+            >
+              <Laptop size={14} />
+            </button>
+          </div>
+        </div>
       </aside>
       <main className="flex-1 overflow-auto p-4 sm:p-6">
         <Outlet />
