@@ -230,10 +230,11 @@ impl AsrEngine for SenseVoiceEngine {
         let handle = tokio::task::spawn_blocking(move || -> DecodeResult {
             let mut recognizer_config = sherpa_onnx::OfflineRecognizerConfig::default();
 
-            let mut sense_voice_config = sherpa_onnx::OfflineSenseVoiceModelConfig::default();
-            sense_voice_config.model = Some(model_path.to_string_lossy().to_string());
-            sense_voice_config.language = Some(job.language.clone().unwrap_or_else(|| "auto".to_string()));
-            sense_voice_config.use_itn = true;
+            let sense_voice_config = sherpa_onnx::OfflineSenseVoiceModelConfig {
+                model: Some(model_path.to_string_lossy().to_string()),
+                language: Some(job.language.clone().unwrap_or_else(|| "auto".to_string())),
+                use_itn: true,
+            };
 
             recognizer_config.model_config.sense_voice = sense_voice_config;
             recognizer_config.model_config.tokens = Some(tokens_path.to_string_lossy().to_string());
@@ -247,7 +248,7 @@ impl AsrEngine for SenseVoiceEngine {
                 .ok_or_else(|| "读取音频文件失败".to_string())?;
 
             let stream = recognizer.create_stream();
-            stream.accept_waveform(wave.sample_rate() as i32, wave.samples());
+            stream.accept_waveform(wave.sample_rate(), wave.samples());
             recognizer.decode_multiple_streams(&[&stream]);
 
             let res = stream.get_result().ok_or_else(|| "识别结果为空".to_string())?;
@@ -349,4 +350,3 @@ mod tests {
         assert_eq!(normalize_token("\u{2581}hello"), " hello");
     }
 }
-

@@ -117,7 +117,7 @@ impl AsrEngine for CustomCommandEngine {
 
         progress.send(ProgressUpdate {
             progress: 0.3,
-            message: format!("正在执行自定义命令: {}...", processed_args[0]).into(),
+            message: format!("正在执行自定义命令: {}...", processed_args[0]),
         }).await.ok();
 
         let mut cmd = tokio::process::Command::new(&processed_args[0]);
@@ -185,4 +185,3 @@ mod tests {
         assert_eq!(args, vec!["whisper-cli", "&&", "echo", "hello"]);
     }
 }
-

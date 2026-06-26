@@ -107,19 +107,24 @@ pub fn settings_path(app_config_dir: &Path) -> PathBuf {
 }
 
 fn detect_os_language() -> String {
-    sys_locale::get_locale()
+    if sys_locale::get_locale()
         .unwrap_or_else(|| "en".to_string())
         .to_lowercase()
         .starts_with("zh")
-        .then(|| "zh".to_string())
-        .unwrap_or_else(|| "en".to_string())
+    {
+        "zh".to_string()
+    } else {
+        "en".to_string()
+    }
 }
 
 pub fn load_settings(app_config_dir: &Path) -> Result<Settings> {
     let path = settings_path(app_config_dir);
     if !path.exists() {
-        let mut s = Settings::default();
-        s.language = detect_os_language();
+        let s = Settings {
+            language: detect_os_language(),
+            ..Settings::default()
+        };
         save_settings(app_config_dir, &s)?;
         return Ok(s);
     }

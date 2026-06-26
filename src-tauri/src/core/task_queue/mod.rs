@@ -23,9 +23,10 @@ pub enum TaskType {
     TranslateOnly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TranslationContentMode {
+    #[default]
     TargetOnly,
     SourceAndTarget,
     TargetAndSource,
@@ -34,12 +35,6 @@ pub enum TranslationContentMode {
 impl TranslationContentMode {
     pub fn is_bilingual(self) -> bool {
         !matches!(self, TranslationContentMode::TargetOnly)
-    }
-}
-
-impl Default for TranslationContentMode {
-    fn default() -> Self {
-        Self::TargetOnly
     }
 }
 

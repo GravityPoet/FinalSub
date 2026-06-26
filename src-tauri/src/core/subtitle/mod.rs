@@ -321,7 +321,6 @@ pub fn parse_vtt(vtt: &str) -> crate::error::Result<Vec<Cue>> {
         let start_str = timing_line[..arrow_pos].trim();
         // 右侧可能带 cue settings（align/position 等），取第一段。
         let end_str = timing_line[arrow_pos + arrow.len()..]
-            .trim()
             .split_whitespace()
             .next()
             .unwrap_or("");
