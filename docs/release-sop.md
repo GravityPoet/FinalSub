@@ -229,6 +229,78 @@ plutil -extract CFBundleIdentifier raw "/Applications/FinalSub.app/Contents/Info
 plutil -extract CFBundleShortVersionString raw "/Applications/FinalSub.app/Contents/Info.plist"
 ```
 
+若当前会话不能无交互使用 `sudo`，且 `/Applications/FinalSub.app` 归当前用户所有，可使用本机覆盖 fallback。此路径只适合本机测试，不等同于 `.pkg` 安装器验收：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
+set -euo pipefail
+
+SRC="/Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/target/release/bundle/macos/FinalSub.app"
+DST="/Applications/FinalSub.app"
+BACKUP="/Applications/FinalSub.app.backup.$(date +%Y%m%d%H%M%S)"
+RESTORED=0
+
+rollback() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    rm -rf "$DST"
+    if [ -d "$BACKUP" ]; then
+      mv "$BACKUP" "$DST"
+      RESTORED=1
+    fi
+    echo "ROLLBACK_RESTORED=$RESTORED"
+  fi
+  exit "$status"
+}
+trap rollback EXIT
+
+if [ ! -d "$SRC" ] || [ ! -d "$DST" ]; then
+  echo "missing source or destination app" >&2
+  exit 1
+fi
+if ps ax -o args= | rg -q '^/Applications/FinalSub\.app/Contents/MacOS/finalsubtauri( |$)'; then
+  echo "FinalSub is running; stop before overwrite" >&2
+  exit 1
+fi
+
+codesign --verify --deep --strict --verbose=4 "$SRC"
+mv "$DST" "$BACKUP"
+ditto "$SRC" "$DST"
+codesign --verify --deep --strict --verbose=4 "$DST"
+plutil -extract CFBundleIdentifier raw "$DST/Contents/Info.plist"
+plutil -extract CFBundleShortVersionString raw "$DST/Contents/Info.plist"
+file "$DST/Contents/MacOS/finalsubtauri"
+file "$DST/Contents/MacOS/ffmpeg"
+file "$DST/Contents/MacOS/whisper-cli"
+echo "BACKUP=$BACKUP"
+EOF
+```
+
+本机启动验收使用等待循环，避免应用启动较慢导致误判：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
+set -euo pipefail
+
+open -na "/Applications/FinalSub.app"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if pgrep -f '^/Applications/FinalSub\.app/Contents/MacOS/finalsubtauri( |$)' >/dev/null; then
+    echo "LAUNCH_PROCESS_OK"
+    PIDS="$(pgrep -f '^/Applications/FinalSub\.app/Contents/MacOS/finalsubtauri( |$)' || true)"
+    if [ -n "$PIDS" ]; then
+      kill $PIDS
+    fi
+    echo "QUIT_REQUESTED"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "FinalSub did not appear as a running process within 15s" >&2
+exit 1
+EOF
+```
+
 熔断条件：
 
 - 安装后 `/Applications/FinalSub.app` 不存在。
@@ -345,6 +417,103 @@ source=no usable signature
 - 内部测试可继续使用未签名 `.pkg`。
 - 正式外发必须用 Apple Developer 证书签名 `.pkg`，并完成 notarization。
 - 2026-06-24 复现：`pkgutil --check-signature "src-tauri/target/release/bundle/pkg/FinalSub_1.0.10_aarch64.pkg"` 返回 `Status: no signature` 且 exit code 为 1；`spctl -a -vv -t install` 返回 `rejected` / `source=no usable signature` 且 exit code 为 3。内部包验收脚本不能把这两个命令放在 `set -e` 的硬失败链路里，应显式记录退出码；正式外发仍必须签名和 notarize。
+
+### 2026-06-26：本机覆盖安装不能假设有 passwordless sudo
+
+现象：
+
+```text
+Command: sudo -n true
+sudo: a password is required
+```
+
+原因：
+
+- 本机 `.pkg` 的 `PackageInfo` 为 `auth="root"`；`installer -pkg ... -target /` 需要 root 授权。
+- 当前 Codex 会话不能交互输入 sudo 密码。
+- `/Applications/FinalSub.app` 实际归当前用户 `moonlitpoet:staff` 所有，可用本机 fallback 覆盖 `.app`。
+
+处理：
+
+- 先确认 FinalSub 没有运行。
+- 对当前 `/Applications/FinalSub.app` 做时间戳备份。
+- 用 `ditto` 将已签名校验的 `src-tauri/target/release/bundle/macos/FinalSub.app` 覆盖到 `/Applications/FinalSub.app`。
+- 覆盖后重新执行 `codesign --verify --deep --strict`、Bundle ID、版本号和 sidecar 架构校验。
+
+防复发：
+
+- 覆盖本机旧版前先跑 `sudo -n true`、`stat -f '%Su %Sg %Sp %N' /Applications/FinalSub.app` 和精确进程检查。
+- 若无 passwordless sudo 但目标 `.app` 归当前用户所有，走本机 fallback；若目标归 root 或权限不明，只给 dry run 和需要用户授权的命令。
+
+### 2026-06-26：启动验收 4 秒等待会误判失败
+
+现象：
+
+```text
+Command: open -na "/Applications/FinalSub.app"; sleep 4; ps ax -o args= | rg '^/Applications/FinalSub\.app/Contents/MacOS/finalsubtauri( |$)'
+FinalSub did not appear as a running process after launch
+```
+
+原因：
+
+- 后续复核 `ps ax -o pid=,comm=,args= | rg -i 'FinalSub|finalsubtauri|finalsub'` 发现 `/Applications/FinalSub.app/Contents/MacOS/finalsubtauri` 已经启动。
+- 固定 `sleep 4` 对 Tauri GUI 启动不够稳，容易在应用尚未完成拉起时误判。
+
+处理：
+
+- 改为最多 15 秒的 `pgrep -f '^/Applications/FinalSub\.app/Contents/MacOS/finalsubtauri( |$)'` 等待循环。
+
+防复发：
+
+- 本机启动验收不得只用一次短 sleep；必须使用等待循环和精确可执行路径匹配。
+
+### 2026-06-26：AppleScript quit 不一定退出 Tauri 进程
+
+现象：
+
+```text
+Command: osascript -e 'tell application "FinalSub" to quit'
+Result: /Applications/FinalSub.app/Contents/MacOS/finalsubtauri remained running
+```
+
+原因：
+
+- Tauri 应用不一定响应 AppleScript 的 `quit` 事件。
+
+处理：
+
+- 启动验收确认进程存在后，用精确匹配到的 `finalsubtauri` PID 执行 `kill`；若短时间内仍未退出，再 `kill -9`。
+
+防复发：
+
+- 验收脚本要同时校验启动和退出；退出不要只依赖 `osascript`。
+
+### 2026-06-26：Rust 1.94 下 `cargo clippy -- -D warnings` 失败
+
+现象：
+
+```text
+Command: cargo clippy -- -D warnings
+error: field assignment outside of initializer for an instance created with Default::default()
+error: casting to the same type is unnecessary (`i32` -> `i32`)
+error: useless conversion to the same type: `std::string::String`
+error: this method chain can be written more clearly with `if .. else ..`
+error: found call to `str::trim` before `str::split_whitespace`
+error: this `impl` can be derived
+```
+
+原因：
+
+- 本机 Rust/Clippy 版本为 `rustc 1.94.0`、`cargo 1.94.0`，`-D warnings` 会把这些风格 lint 升级为构建失败。
+
+处理：
+
+- 对 `src-tauri/src/core/asr/sensevoice.rs`、`src-tauri/src/core/asr/custom.rs`、`src-tauri/src/core/settings/mod.rs`、`src-tauri/src/core/subtitle/mod.rs`、`src-tauri/src/core/task_queue/mod.rs` 做行为保持的机械修复。
+- 重新执行 `cargo fmt`、`cargo clippy -- -D warnings`、`cargo test`、`npm run build:local`，再重制 `.pkg` 和覆盖 `/Applications/FinalSub.app`。
+
+防复发：
+
+- 本机覆盖安装前先完成 `cargo clippy -- -D warnings`；若 clippy 失败，不要把旧构建当成最终安装结果，必须修复后重建再覆盖。
 
 ### 追加模板
 
