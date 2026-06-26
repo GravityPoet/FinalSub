@@ -807,7 +807,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
     let api_url = gemini_generate_content_url(
         &request_endpoint(req, "gemini")
             .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".into()),
-        request_model(req).unwrap_or("gemini-3.5-flash"),
+        request_model(req).unwrap_or("gemini-2.5-flash"),
     );
     let api_key = request_api_key(req).unwrap_or("");
     if api_key.is_empty() {
