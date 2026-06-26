@@ -198,48 +198,48 @@ export default function ProofreadImport({
   return (
     <div className="space-y-8 max-w-4xl mx-auto py-10">
       <div className="text-center mb-10">
-        <h2 className="text-2xl font-bold mb-3 text-slate-100">{t('proofread.import.selectMethod')}</h2>
-        <p className="text-slate-400 text-sm">
+        <h2 className="text-2xl font-bold mb-3 text-text-primary">{t('proofread.import.selectMethod')}</h2>
+        <p className="text-text-tertiary text-sm">
           {t('proofread.import.selectMethodDesc')}
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div
-          className="group cursor-pointer bg-slate-800/50 hover:bg-slate-800/80 transition-all border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-6 flex flex-col items-center text-center shadow-lg hover:shadow-blue-500/5"
+          className="group cursor-pointer bg-surface hover:bg-surface-raised transition-all duration-150 border border-border-subtle hover:border-brand hover:shadow-brand-glow rounded-xl p-6 flex flex-col items-center text-center shadow-sm"
           onClick={handleImportVideos}
         >
-          <div className="w-14 h-14 bg-blue-600/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-            <Video className="w-7 h-7 text-blue-500" />
+          <div className="w-14 h-14 bg-brand-subtle rounded-full flex items-center justify-center mb-4 group-hover:scale-105 transition-transform duration-150">
+            <Video className="w-7 h-7 text-brand" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-200 mb-2">{t('proofread.import.importVideos')}</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <h3 className="text-lg font-semibold text-text-primary mb-2">{t('proofread.import.importVideos')}</h3>
+          <p className="text-xs text-text-secondary leading-relaxed">
             {t('proofread.import.importVideosDesc')}
           </p>
         </div>
 
         <div
-          className="group cursor-pointer bg-slate-800/50 hover:bg-slate-800/80 transition-all border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-6 flex flex-col items-center text-center shadow-lg hover:shadow-blue-500/5"
+          className="group cursor-pointer bg-surface hover:bg-surface-raised transition-all duration-150 border border-border-subtle hover:border-brand hover:shadow-brand-glow rounded-xl p-6 flex flex-col items-center text-center shadow-sm"
           onClick={handleImportSubtitles}
         >
-          <div className="w-14 h-14 bg-emerald-600/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-            <FileText className="w-7 h-7 text-emerald-500" />
+          <div className="w-14 h-14 bg-success/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-105 transition-transform duration-150">
+            <FileText className="w-7 h-7 text-success" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-200 mb-2">{t('proofread.import.importSubtitles')}</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <h3 className="text-lg font-semibold text-text-primary mb-2">{t('proofread.import.importSubtitles')}</h3>
+          <p className="text-xs text-text-secondary leading-relaxed">
             {t('proofread.import.importSubtitlesDesc')}
           </p>
         </div>
 
         <div
-          className="group cursor-pointer bg-slate-800/50 hover:bg-slate-800/80 transition-all border border-slate-700/60 hover:border-blue-500/50 rounded-xl p-6 flex flex-col items-center text-center shadow-lg hover:shadow-blue-500/5"
+          className="group cursor-pointer bg-surface hover:bg-surface-raised transition-all duration-150 border border-border-subtle hover:border-brand hover:shadow-brand-glow rounded-xl p-6 flex flex-col items-center text-center shadow-sm"
           onClick={handleImportFolder}
         >
-          <div className="w-14 h-14 bg-amber-600/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-            <FolderOpen className="w-7 h-7 text-amber-500" />
+          <div className="w-14 h-14 bg-warning/10 rounded-full flex items-center justify-center mb-4 group-hover:scale-105 transition-transform duration-150">
+            <FolderOpen className="w-7 h-7 text-warning" />
           </div>
-          <h3 className="text-lg font-semibold text-slate-200 mb-2">{t('proofread.import.importFolder')}</h3>
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <h3 className="text-lg font-semibold text-text-primary mb-2">{t('proofread.import.importFolder')}</h3>
+          <p className="text-xs text-text-secondary leading-relaxed">
             {t('proofread.import.importFolderDesc')}
           </p>
         </div>

@@ -38,7 +38,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const videoUrl = videoPath ? convertFileSrc(videoPath) : '';
 
   return (
-    <div className="flex flex-col flex-shrink-0 bg-slate-950 rounded-xl overflow-hidden border border-slate-800/80 shadow-2xl relative">
+    <div className="flex flex-col flex-shrink-0 bg-app-bg rounded-xl overflow-hidden border border-border-default shadow-2xl relative">
       <div className="relative aspect-video max-h-[38.5vh] flex items-center justify-center bg-black">
         {videoUrl ? (
           <video
@@ -64,7 +64,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
             ))}
           </video>
         ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-text-tertiary gap-2">
             <span className="text-sm">{t('proofread.player.noVideo')}</span>
           </div>
         )}

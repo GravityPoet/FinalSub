@@ -7,11 +7,14 @@ import {
   getSettings,
   saveSettingsCmd,
   hasProviderSecret,
-  getProviderSecret,
   setProviderSecret,
   type TranslationProvider,
   type Settings,
 } from "../lib/tauri";
+
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Input, Textarea } from "../components/ui/Input";
 
 const CUSTOM_OPENAI_PROVIDER_ID = "custom-openai";
 
@@ -81,7 +84,7 @@ function writeSecretDraft(providerId: string, field: string, value: string) {
       window.sessionStorage.removeItem(key);
     }
   } catch {
-    // Session storage is a convenience cache only; Keychain remains the source of truth.
+    // Session storage is a convenience cache only
   }
 }
 
@@ -132,17 +135,20 @@ export default function TranslationPage() {
         const loadedSecrets: Record<string, string> = {};
         for (const field of selectedProviderInfo.secret_fields) {
           try {
-            const savedSecret = await getProviderSecret(selectedProvider, field);
-            if (savedSecret && savedSecret.trim()) {
-              configured[field] = true;
-              loadedSecrets[field] = savedSecret;
+            const hasSecret = await hasProviderSecret(selectedProvider, field);
+            configured[field] = hasSecret;
+            if (hasSecret) {
+              loadedSecrets[field] = "••••••••";
+              dirty[field] = false;
             } else {
               const draftSecret = readSecretDraft(selectedProvider, field);
               if (draftSecret) {
                 loadedSecrets[field] = draftSecret;
                 dirty[field] = true;
+              } else {
+                loadedSecrets[field] = "";
+                dirty[field] = false;
               }
-              configured[field] = await hasProviderSecret(selectedProvider, field);
             }
           } catch (e) {
             console.error(`Failed to check key ${field}`, e);
@@ -177,6 +183,13 @@ export default function TranslationPage() {
     }
   };
 
+  const handleSecretFocus = (field: string) => {
+    if (!secretDirty[field] && secrets[field] === "••••••••") {
+      setSecrets((prev) => ({ ...prev, [field]: "" }));
+      setSecretDirty((prev) => ({ ...prev, [field]: true }));
+    }
+  };
+
   const handleSaveProvider = async () => {
     if (!settings || !selectedProvider) return;
     if (selectedProviderUnavailable) {
@@ -200,36 +213,23 @@ export default function TranslationPage() {
       if (selectedProviderInfo?.secret_fields) {
         for (const field of selectedProviderInfo.secret_fields) {
           const value = secrets[field]?.trim();
-          if (value) {
+          if (secretDirty[field] && value && value !== "••••••••") {
             await setProviderSecret(selectedProvider, field, value);
           }
         }
       }
 
-      const confirmedSecrets: Record<string, string> = {};
       const confirmedConfigured: Record<string, boolean> = {};
+      const confirmedSecrets: Record<string, string> = {};
       for (const field of selectedProviderInfo?.secret_fields || []) {
-        const savedSecret = await getProviderSecret(selectedProvider, field);
-        if (savedSecret && savedSecret.trim()) {
-          confirmedSecrets[field] = savedSecret;
-          confirmedConfigured[field] = true;
+        const hasSecret = await hasProviderSecret(selectedProvider, field);
+        confirmedConfigured[field] = hasSecret;
+        if (hasSecret) {
+          confirmedSecrets[field] = "••••••••";
         } else {
-          confirmedConfigured[field] = false;
+          confirmedSecrets[field] = "";
         }
-      }
-
-      const missingSecrets = requiredSecretFields(selectedProvider).filter(
-        (field) => !confirmedSecrets[field]?.trim()
-      );
-      if (missingSecrets.length > 0) {
-        setSecretConfigured(confirmedConfigured);
-        setSecrets(confirmedSecrets);
-        setError(
-          t("translation.saveSecretsMissing")
-            .replace("{name}", selectedProviderInfo?.name ?? selectedProvider)
-            .replace("{secrets}", missingSecrets.map(secretFieldLabel).join(locale === "en" ? ", " : "、"))
-        );
-        return;
+        writeSecretDraft(selectedProvider, field, "");
       }
 
       await saveSettingsCmd(updated);
@@ -237,9 +237,6 @@ export default function TranslationPage() {
       setSecretConfigured(confirmedConfigured);
       setSecretDirty({});
       setSecrets(confirmedSecrets);
-      for (const field of selectedProviderInfo?.secret_fields || []) {
-        writeSecretDraft(selectedProvider, field, "");
-      }
       setSuccessMsg(t("translation.saveSuccess"));
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err) {
@@ -261,6 +258,14 @@ export default function TranslationPage() {
     setError("");
     setTestResult("");
     try {
+      // 仅发送 dirty (用户本次输入) 的密钥，未修改的由 Rust 自动 fallback 去 Keychain 读取，避免暴露
+      const testSecrets: Record<string, string> = {};
+      for (const field of selectedProviderInfo?.secret_fields || []) {
+        if (secretDirty[field] && secrets[field] && secrets[field] !== "••••••••") {
+          testSecrets[field] = secrets[field].trim();
+        }
+      }
+
       const resp = await testTranslation({
         text: testText,
         source_language: "en",
@@ -268,19 +273,10 @@ export default function TranslationPage() {
         provider: selectedProvider,
         api_url: apiUrl.trim() || undefined,
         model_name: modelName.trim() || undefined,
-        api_key:
-          secrets["apiKey"]?.trim() ||
-          secrets["appSecret"]?.trim() ||
-          secrets["secretKey"]?.trim() ||
-          undefined,
-        secret_fields: Object.keys(secrets).length > 0
-          ? Object.fromEntries(
-              Object.entries(secrets)
-                .map(([field, value]) => [field, value.trim()])
-                .filter(([, value]) => value)
-            )
-          : undefined,
+        api_key: testSecrets["apiKey"] || undefined,
+        secret_fields: Object.keys(testSecrets).length > 0 ? testSecrets : undefined,
       });
+
       if (resp.success) {
         setTestResult(resp.translated_text);
       } else {
@@ -322,87 +318,90 @@ export default function TranslationPage() {
     return true;
   };
 
-  const renderProviderButton = (provider: TranslationProvider) => (
-    <button
-      key={provider.id}
-      type="button"
-      onClick={() => {
-        if (!provider.implemented) {
+  const renderProviderButton = (provider: TranslationProvider) => {
+    const isSelected = selectedProvider === provider.id;
+    return (
+      <button
+        key={provider.id}
+        type="button"
+        onClick={() => {
+          if (!provider.implemented) {
+            setSelectedProvider(provider.id);
+            setSecretConfigured({});
+            setSecretDirty({});
+            setSecrets({});
+            setVisibleSecrets({});
+            setError(t("translation.notImplementedSelectError").replace("{name}", provider.name));
+            setTestResult("");
+            return;
+          }
           setSelectedProvider(provider.id);
           setSecretConfigured({});
           setSecretDirty({});
           setSecrets({});
           setVisibleSecrets({});
-          setError(t("translation.notImplementedSelectError").replace("{name}", provider.name));
-          setTestResult("");
-          return;
-        }
-        setSelectedProvider(provider.id);
-        setSecretConfigured({});
-        setSecretDirty({});
-        setSecrets({});
-        setVisibleSecrets({});
-        setError("");
-      }}
-      className={`rounded-lg border p-2 text-left text-sm transition ${
-        selectedProvider === provider.id
-          ? provider.implemented
-            ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30"
-            : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
-          : provider.implemented
-            ? "border-gray-200 text-gray-600 hover:border-gray-300 dark:border-gray-600 dark:text-gray-400"
-            : "border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-500"
-      }`}
-      title={provider.implemented ? undefined : t("translation.notImplementedTitle")}
-    >
-      <span className="flex items-center justify-between gap-2">
-        <span>{provider.name}</span>
-        {!provider.implemented && (
-          <span className="shrink-0 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-            {t("translation.notImplemented")}
-          </span>
-        )}
-      </span>
-    </button>
-  );
+          setError("");
+        }}
+        className={`rounded-lg border p-3.5 text-left text-sm transition-all duration-150 flex flex-col justify-between h-20 ${
+          isSelected
+            ? provider.implemented
+              ? "border-brand bg-brand-subtle text-brand-text font-semibold shadow-sm"
+              : "border-warning/35 bg-warning/10 text-warning"
+            : provider.implemented
+            ? "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
+            : "border-border-subtle bg-surface-overlay/50 text-text-tertiary cursor-not-allowed"
+        }`}
+        title={provider.implemented ? undefined : t("translation.notImplementedTitle")}
+      >
+        <span className="flex items-center justify-between w-full gap-2">
+          <span className="truncate">{provider.name}</span>
+          {!provider.implemented && (
+            <span className="shrink-0 rounded bg-surface-overlay border border-border-subtle px-1.5 py-0.5 text-[9px] text-text-tertiary uppercase font-mono">
+              {t("translation.notImplemented")}
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
 
   return (
-    <div className="max-w-4xl pb-10">
-      <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">{t("translation.title")}</h2>
+    <div className="max-w-4xl pb-10 space-y-6">
+      <h2 className="text-display font-bold tracking-tight text-text-primary">{t("translation.title")}</h2>
 
       {/* Provider 选择 */}
-      <section className="mb-6 rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("translation.providers")}</h3>
+      <Card className="p-5">
+        <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("translation.providers")}</h3>
 
-        <div className="mb-4">
-          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+        <div className="mb-5">
+          <label className="mb-2 block text-xs font-semibold text-text-secondary tracking-wider uppercase">
             {t("translation.apiProvider")}
           </label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             {apiProviders.map(renderProviderButton)}
           </div>
         </div>
 
-        <div className="mb-4">
-          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+        <div className="mb-5">
+          <label className="mb-2 block text-xs font-semibold text-text-secondary tracking-wider uppercase">
             {t("translation.aiProvider")}
           </label>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
             {aiProviders.map(renderProviderButton)}
           </div>
         </div>
 
         {/* 动态配置表单 */}
         {selectedProviderInfo && (selectedProviderInfo.requires_endpoint || selectedProviderInfo.requires_model || selectedProviderInfo.secret_fields?.length > 0) && (
-          <div className="my-5 border-t border-gray-150 pt-5 dark:border-gray-700 space-y-4">
-            <h4 className="font-semibold text-sm text-gray-900 dark:text-white">
+          <div className="my-6 border-t border-border-subtle pt-6 space-y-4">
+            <h4 className="font-semibold text-sm text-text-primary">
               {t("translation.configParams").replace("{name}", selectedProviderInfo.name)}
             </h4>
             
             {selectedProviderInfo.requires_endpoint && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">{t("translation.endpointUrl")}</label>
-                <input
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("translation.endpointUrl")}</label>
+                <Input
                   type="text"
                   value={apiUrl}
                   onChange={(e) => setApiUrl(e.target.value)}
@@ -411,15 +410,14 @@ export default function TranslationPage() {
                       ? "https://your-gateway.example.com/v1"
                       : selectedProviderInfo.default_endpoint || t("translation.endpointPlaceholder")
                   }
-                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                 />
               </div>
             )}
             
             {selectedProviderInfo.requires_model && (
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">{t("translation.modelName")}</label>
-                <input
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("translation.modelName")}</label>
+                <Input
                   type="text"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
@@ -428,41 +426,41 @@ export default function TranslationPage() {
                       ? t("translation.modelPlaceholderOp")
                       : t("translation.modelPlaceholder")
                   }
-                  className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                 />
               </div>
             )}
             
             {selectedProviderInfo.secret_fields?.map((field) => (
               <div key={field}>
-                <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                <label className="mb-1.5 block text-xs font-medium text-text-secondary">
                   {secretFieldLabel(field)}
                 </label>
                 <div className="relative">
-                  <input
+                  <Input
                      type={visibleSecrets[field] ? "text" : "password"}
                      value={secrets[field] || ""}
                      onChange={(e) => handleSecretChange(field, e.target.value)}
+                     onFocus={() => handleSecretFocus(field)}
                      placeholder={t("translation.keyPlaceholder")}
-                     className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 pr-10 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                     className="pr-10"
                   />
                   <button
                     type="button"
                     onClick={() => {
                       setVisibleSecrets((prev) => ({ ...prev, [field]: !prev[field] }));
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-600 dark:hover:text-gray-100"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-text-tertiary hover:bg-surface-overlay hover:text-text-primary transition"
                     title={visibleSecrets[field] ? t("translation.hideKey") : t("translation.showKey")}
                   >
-                    {visibleSecrets[field] ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {visibleSecrets[field] ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
-                {secretDirty[field] && secrets[field]?.trim() ? (
-                  <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                {secretDirty[field] && secrets[field]?.trim() && secrets[field] !== "••••••••" ? (
+                  <p className="mt-1.5 text-[11px] text-warning">
                     {t("translation.toSaveKeychain")}
                   </p>
                 ) : secretConfigured[field] ? (
-                  <p className="mt-1 text-[11px] text-green-600 dark:text-green-400">
+                  <p className="mt-1.5 text-[11px] text-success">
                     {t("translation.savedKeychain")}
                   </p>
                 ) : null}
@@ -472,75 +470,76 @@ export default function TranslationPage() {
         )}
 
         {selectedProviderUnavailable && (
-          <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-            <AlertCircle className="mt-0.5 shrink-0" size={16} />
-            <span>{t("translation.notImplementedSelect").replace("{name}", selectedProviderInfo?.name ?? "").replace("{available}", availableProviderNames)}</span>
+          <div className="mb-5 flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+            <AlertCircle className="mt-0.5 shrink-0" size={14} />
+            <span className="leading-5">{t("translation.notImplementedSelect").replace("{name}", selectedProviderInfo?.name ?? "").replace("{available}", availableProviderNames)}</span>
           </div>
         )}
 
         <div className="flex items-center gap-3">
-          <button
+          <Button
             onClick={handleSaveProvider}
             disabled={!selectedProvider || selectedProviderUnavailable}
-            className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            variant="primary"
             title={selectedProviderUnavailable ? t("translation.notImplementedBtnTooltip") : undefined}
           >
             {t("translation.saveBtn")}
-          </button>
+          </Button>
           {successMsg && (
-            <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
-              <CheckCircle size={14} /> {successMsg}
+            <span className="text-xs text-success flex items-center gap-1.5 font-medium">
+              <CheckCircle size={13} /> {successMsg}
             </span>
           )}
         </div>
-      </section>
+      </Card>
 
       {/* 测试翻译 */}
-      <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-        <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">{t("translation.testTitle")}</h3>
+      <Card className="p-5">
+        <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("translation.testTitle")}</h3>
 
         <div className="mb-4">
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+          <label className="mb-1.5 block text-sm font-medium text-text-secondary">
             {t("translation.testLabel")}
           </label>
-          <textarea
+          <Textarea
             value={testText}
             onChange={(e) => setTestText(e.target.value)}
             rows={3}
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
           />
         </div>
 
         {error && (
-          <div className="mb-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-            <AlertCircle className="mt-0.5 shrink-0" size={16} />
+          <div className="mb-4 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs text-danger">
+            <AlertCircle className="mt-0.5 shrink-0" size={14} />
             <span>{error}</span>
           </div>
         )}
 
         {testResult && (
-          <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 dark:border-green-900/60 dark:bg-green-950/30">
-            <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300 mb-1">
-              <CheckCircle size={14} /> {t("translation.testResult")}
+          <div className="mb-4 rounded-lg border border-success/20 bg-success/10 px-3.5 py-3">
+            <div className="flex items-center gap-1.5 text-xs text-success font-semibold mb-1.5">
+              <CheckCircle size={13} /> {t("translation.testResult")}
             </div>
-            <p className="text-sm text-gray-800 dark:text-gray-200">{testResult}</p>
+            <p className="text-sm text-text-primary leading-relaxed">{testResult}</p>
           </div>
         )}
 
-        <button
-          onClick={handleTest}
-          disabled={testing || !selectedProvider || selectedProviderUnavailable}
-          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-          title={selectedProviderUnavailable ? t("translation.notImplementedBtnTooltip") : undefined}
-        >
-          <Languages size={14} />
-          {testing ? t("translation.testingBtn") : t("translation.testBtn")}
-        </button>
+        <div className="flex items-center gap-3">
+          <Button
+            onClick={handleTest}
+            disabled={testing || !selectedProvider || selectedProviderUnavailable}
+            variant="primary"
+            title={selectedProviderUnavailable ? t("translation.notImplementedBtnTooltip") : undefined}
+          >
+            <Languages size={14} />
+            {testing ? t("translation.testingBtn") : t("translation.testBtn")}
+          </Button>
+        </div>
 
-        <p className="mt-3 text-xs text-gray-400">
+        <p className="mt-3.5 text-[11px] text-text-tertiary leading-4">
           {t("translation.testNotice")}
         </p>
-      </section>
+      </Card>
     </div>
   );
 }

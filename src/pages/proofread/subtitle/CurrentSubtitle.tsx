@@ -28,34 +28,34 @@ const CurrentSubtitle: React.FC<CurrentSubtitleProps> = ({
       : null;
 
   return (
-    <div className="p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl mb-4 shadow-lg">
+    <div className="p-4 bg-surface-raised border border-border-default rounded-xl mb-4 shadow-lg">
       <div className="flex justify-between items-center mb-3">
-        <div className="text-xs font-semibold text-slate-400">{t('proofread.current.title')}</div>
-        <div className="text-xs font-medium text-slate-400">
+        <div className="text-xs font-semibold text-text-secondary">{t('proofread.current.title')}</div>
+        <div className="text-xs font-medium text-text-secondary">
           {formatTime(currentTime)} / {formatTime(duration)}
         </div>
       </div>
 
       {currentSubtitle ? (
         <div className="space-y-2">
-          <div className="text-xs text-slate-500 font-mono">
+          <div className="text-xs text-text-tertiary font-mono">
             {currentSubtitle.startEndTime}
           </div>
           {currentSubtitle.sourceContent && (
-            <div className="p-2.5 bg-slate-900/60 rounded-lg border-l-3 border-blue-500 text-sm text-slate-200 font-medium">
+            <div className="p-2.5 bg-app-bg rounded-lg border-l-3 border-brand text-sm text-text-primary font-medium">
               {currentSubtitle.sourceContent}
             </div>
           )}
           {shouldShowTranslation &&
             hasTranslationFile &&
             currentSubtitle.targetContent && (
-              <div className="p-2.5 bg-slate-900/60 rounded-lg border-l-3 border-emerald-500 text-sm text-slate-200 font-medium">
+              <div className="p-2.5 bg-app-bg rounded-lg border-l-3 border-success text-sm text-text-primary font-medium">
                 {currentSubtitle.targetContent}
               </div>
             )}
         </div>
       ) : (
-        <div className="text-sm text-slate-500 p-2 italic text-center">
+        <div className="text-sm text-text-tertiary p-2 italic text-center">
           {t('proofread.current.empty')}
         </div>
       )}

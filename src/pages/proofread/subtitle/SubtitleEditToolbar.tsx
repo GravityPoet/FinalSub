@@ -15,6 +15,8 @@ import BatchAiOptimizeDialog from './BatchAiOptimizeDialog';
 import { listTranslationProviders, testTranslation } from '../../../lib/tauri';
 import { useToast } from '../Toast';
 import { useI18n } from '../../../lib/i18n';
+import { Button } from '../../../components/ui/Button';
+import { Input, Select, Textarea } from '../../../components/ui/Input';
 
 interface SubtitleEditToolbarProps {
   subtitles: Subtitle[];
@@ -393,12 +395,12 @@ Only respond with the translated/improved text, nothing else.`;
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-6 py-2.5 bg-slate-800/35 border-b border-slate-700/50 flex-shrink-0 relative">
+    <div className="flex items-center gap-1.5 px-6 py-2 bg-surface/50 backdrop-blur-md border-b border-border-subtle flex-shrink-0 relative">
       {/* 撤销/重做 */}
       <button
         onClick={onUndo}
         disabled={!canUndo}
-        className="p-1.5 hover:bg-slate-700/50 rounded-lg text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-40"
+        className="p-1.5 hover:bg-surface-raised rounded-lg text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 cursor-pointer"
         title={t('proofread.toolbar.undo')}
       >
         <Undo2 className="h-4 w-4" />
@@ -406,13 +408,13 @@ Only respond with the translated/improved text, nothing else.`;
       <button
         onClick={onRedo}
         disabled={!canRedo}
-        className="p-1.5 hover:bg-slate-700/50 rounded-lg text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-40"
+        className="p-1.5 hover:bg-surface-raised rounded-lg text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40 cursor-pointer"
         title={t('proofread.toolbar.redo')}
       >
         <Redo2 className="h-4 w-4" />
       </button>
 
-      <div className="w-px h-5 bg-slate-750 mx-1.5" />
+      <div className="w-px h-5 bg-border-subtle mx-1.5" />
 
       {/* 搜索替换 */}
       <div className="relative">
@@ -422,65 +424,67 @@ Only respond with the translated/improved text, nothing else.`;
             closeAllPopovers();
             setShowSearchReplace(state);
           }}
-          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent ${
+          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent cursor-pointer ${
             showSearchReplace
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/5'
-              : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              ? 'bg-brand text-white shadow-brand-glow'
+              : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
           }`}
         >
           <Search className="h-3.5 w-3.5 mr-1.5" />
           {t('proofread.toolbar.searchReplace')}
         </button>
         {showSearchReplace && (
-          <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-80 text-xs space-y-3">
+          <div className="absolute top-10 left-0 z-40 bg-surface/95 border border-border-default p-4 rounded-xl shadow-lg w-80 text-xs space-y-3 backdrop-blur-md">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.findContent')}</label>
-              <input
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.findContent')}</label>
+              <Input
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
                 onKeyUp={handleSearch}
                 placeholder={t('proofread.toolbar.findPlaceholder')}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                className="py-1 px-2.5 text-xs"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.replaceWith')}</label>
-              <input
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.replaceWith')}</label>
+              <Input
                 type="text"
                 value={replaceText}
                 onChange={(e) => setReplaceText(e.target.value)}
                 placeholder={t('proofread.toolbar.replacePlaceholder')}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                className="py-1 px-2.5 text-xs"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.replaceScope')}</label>
-              <select
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.replaceScope')}</label>
+              <Select
                 value={searchTarget}
                 onChange={(e) => setSearchTarget(e.target.value as any)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                className="py-1 px-2.5 text-xs"
               >
                 <option value="both">{t('proofread.toolbar.scopeBoth')}</option>
                 <option value="source">{t('proofread.toolbar.scopeSource')}</option>
                 {shouldShowTranslation && <option value="target">{t('proofread.toolbar.scopeTarget')}</option>}
-              </select>
+              </Select>
             </div>
-            {matchCount > 0 && <p className="text-[10px] text-amber-500">{t('proofread.toolbar.matchCount').replace('{count}', String(matchCount))}</p>}
+            {matchCount > 0 && <p className="text-[10px] text-warning font-medium">{t('proofread.toolbar.matchCount').replace('{count}', String(matchCount))}</p>}
             <div className="flex justify-end gap-2 pt-1">
-              <button
+              <Button
+                variant="secondary"
                 onClick={handleSearch}
-                className="bg-slate-800 hover:bg-slate-750 px-3 py-1.5 rounded-lg text-slate-200 font-medium transition-colors border border-slate-700/50"
+                size="sm"
               >
                 {t('proofread.toolbar.find')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
                 onClick={handleReplace}
                 disabled={matchCount === 0}
-                className="bg-blue-600 hover:bg-blue-750 px-3 py-1.5 rounded-lg text-white font-medium transition-colors disabled:opacity-40"
+                size="sm"
               >
                 {t('proofread.toolbar.replaceAll')}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -494,32 +498,32 @@ Only respond with the translated/improved text, nothing else.`;
             closeAllPopovers();
             setShowTimeOffset(state);
           }}
-          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent ${
+          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent cursor-pointer ${
             showTimeOffset
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/5'
-              : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              ? 'bg-brand text-white shadow-brand-glow'
+              : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
           }`}
         >
           <Clock className="h-3.5 w-3.5 mr-1.5" />
           {t('proofread.toolbar.timelineShift')}
         </button>
         {showTimeOffset && (
-          <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-72 text-xs space-y-3.5">
+          <div className="absolute top-10 left-0 z-40 bg-surface/95 border border-border-default p-4 rounded-xl shadow-lg w-72 text-xs space-y-3.5 backdrop-blur-md">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.direction')}</label>
-              <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.direction')}</label>
+              <div className="flex bg-surface-raised p-0.5 rounded-lg border border-border-subtle">
                 <button
                   onClick={() => setOffsetDirection('forward')}
-                  className={`flex-1 py-1 rounded-md text-[10px] font-medium transition-all ${
-                    offsetDirection === 'forward' ? 'bg-slate-800 text-white' : 'text-slate-400'
+                  className={`flex-1 py-1 rounded-md text-[10px] font-medium transition-all cursor-pointer ${
+                    offsetDirection === 'forward' ? 'bg-surface text-text-primary shadow-sm border border-border-subtle/50' : 'text-text-tertiary'
                   }`}
                 >
                   {t('proofread.toolbar.delay')}
                 </button>
                 <button
                   onClick={() => setOffsetDirection('backward')}
-                  className={`flex-1 py-1 rounded-md text-[10px] font-medium transition-all ${
-                    offsetDirection === 'backward' ? 'bg-slate-800 text-white' : 'text-slate-400'
+                  className={`flex-1 py-1 rounded-md text-[10px] font-medium transition-all cursor-pointer ${
+                    offsetDirection === 'backward' ? 'bg-surface text-text-primary shadow-sm border border-border-subtle/50' : 'text-text-tertiary'
                   }`}
                 >
                   {t('proofread.toolbar.advance')}
@@ -527,28 +531,30 @@ Only respond with the translated/improved text, nothing else.`;
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.offsetSeconds')}</label>
-              <input
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.offsetSeconds')}</label>
+              <Input
                 type="number"
                 step="0.1"
                 value={timeOffset}
                 onChange={(e) => setTimeOffset(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 text-center"
+                className="py-1 px-2.5 text-xs text-center font-mono"
               />
             </div>
             <div className="flex justify-end gap-2 pt-1">
-              <button
+              <Button
+                variant="primary"
                 onClick={handleTimeOffset}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded-lg transition-colors font-medium"
+                className="w-full"
+                size="sm"
               >
                 {t('proofread.toolbar.applyAll')}
-              </button>
+              </Button>
             </div>
           </div>
         )}
       </div>
 
-      <div className="w-px h-5 bg-slate-750 mx-1.5" />
+      <div className="w-px h-5 bg-border-subtle mx-1.5" />
 
       {/* 合并 */}
       <div className="relative">
@@ -562,50 +568,52 @@ Only respond with the translated/improved text, nothing else.`;
               handleOpenMergeDialog();
             }
           }}
-          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent ${
+          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent cursor-pointer ${
             showMerge
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/5'
-              : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              ? 'bg-brand text-white shadow-brand-glow'
+              : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
           }`}
         >
           <Combine className="h-3.5 w-3.5 mr-1.5" />
           {t('proofread.toolbar.merge')}
         </button>
         {showMerge && (
-          <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-80 text-xs space-y-3.5">
-            <div className="p-3 bg-slate-955 rounded-lg border border-slate-800 text-[10px] text-slate-400 leading-relaxed">
+          <div className="absolute top-10 left-0 z-40 bg-surface/95 border border-border-default p-4 rounded-xl shadow-lg w-80 text-xs space-y-3.5 backdrop-blur-md">
+            <div className="p-3 bg-surface-overlay rounded-lg border border-border-subtle text-[10px] text-text-secondary leading-relaxed">
               {t('proofread.toolbar.mergeDesc')}
             </div>
             <div className="grid grid-cols-2 gap-3.5">
               <div className="space-y-1.5">
-                <label className="text-slate-400 font-medium">{t('proofread.toolbar.startIndex')}</label>
-                <input
+                <label className="text-text-secondary font-medium">{t('proofread.toolbar.startIndex')}</label>
+                <Input
                   type="number"
                   min={1}
                   max={subtitles.length}
                   value={mergeStart + 1}
                   onChange={(e) => setMergeStart(Math.max(0, parseInt(e.target.value) - 1))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 text-center focus:outline-none"
+                  className="py-1 px-2.5 text-xs text-center font-mono"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-slate-400 font-medium">{t('proofread.toolbar.endIndex')}</label>
-                <input
+                <label className="text-text-secondary font-medium">{t('proofread.toolbar.endIndex')}</label>
+                <Input
                   type="number"
                   min={2}
                   max={subtitles.length + 1}
                   value={mergeEnd + 1}
                   onChange={(e) => setMergeEnd(Math.max(1, parseInt(e.target.value) - 1))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 text-center focus:outline-none"
+                  className="py-1 px-2.5 text-xs text-center font-mono"
                 />
               </div>
             </div>
-            <button
+            <Button
+              variant="primary"
               onClick={handleMerge}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded-lg transition-colors font-medium"
+              className="w-full"
+              size="sm"
             >
               {t('proofread.toolbar.merge')}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -623,32 +631,32 @@ Only respond with the translated/improved text, nothing else.`;
             }
           }}
           disabled={currentSubtitleIndex < 0}
-          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent disabled:opacity-40 ${
+          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent disabled:opacity-40 cursor-pointer ${
             showSplit
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/5'
-              : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              ? 'bg-brand text-white shadow-brand-glow'
+              : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
           }`}
         >
           <Split className="h-3.5 w-3.5 mr-1.5" />
           {t('proofread.toolbar.split')}
         </button>
         {showSplit && (
-          <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-80 text-xs space-y-3.5">
+          <div className="absolute top-10 left-0 z-40 bg-surface/95 border border-border-default p-4 rounded-xl shadow-lg w-80 text-xs space-y-3.5 backdrop-blur-md">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.splitPos')}</label>
-              <input
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.splitPos')}</label>
+              <Input
                 type="number"
                 min={1}
                 max={(subtitles[currentSubtitleIndex]?.sourceContent || '').length - 1}
                 value={splitPosition}
                 onChange={(e) => setSplitPosition(parseInt(e.target.value) || 1)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
+                className="py-1 px-2.5 text-xs font-mono"
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium flex justify-between">
+              <label className="text-text-secondary font-medium flex justify-between">
                 <span>{t('proofread.toolbar.timeRatio')}</span>
-                <span className="text-blue-500">{splitTimePercent}% : {100 - splitTimePercent}%</span>
+                <span className="text-brand font-mono font-bold">{splitTimePercent}% : {100 - splitTimePercent}%</span>
               </label>
               <input
                 type="range"
@@ -656,20 +664,22 @@ Only respond with the translated/improved text, nothing else.`;
                 max={90}
                 value={splitTimePercent}
                 onChange={(e) => setSplitTimePercent(parseInt(e.target.value))}
-                className="w-full h-1.5 bg-slate-955 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                className="w-full h-1.5 bg-surface-raised border border-border-subtle rounded-lg appearance-none cursor-pointer accent-brand"
               />
             </div>
-            <button
+            <Button
+              variant="primary"
               onClick={executeSplit}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded-lg transition-colors font-medium"
+              className="w-full"
+              size="sm"
             >
               {t('proofread.toolbar.split')}
-            </button>
+            </Button>
           </div>
         )}
       </div>
 
-      <div className="w-px h-5 bg-slate-750 mx-1.5" />
+      <div className="w-px h-5 bg-border-subtle mx-1.5" />
 
       {/* AI 优化 (单条) */}
       <div className="relative">
@@ -684,62 +694,64 @@ Only respond with the translated/improved text, nothing else.`;
             }
           }}
           disabled={currentSubtitleIndex < 0}
-          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent disabled:opacity-40 ${
+          className={`flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent disabled:opacity-40 cursor-pointer ${
             showAiOptimize
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-500/5'
-              : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              ? 'bg-brand text-white shadow-brand-glow'
+              : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
           }`}
         >
           <Wand2 className="h-3.5 w-3.5 mr-1.5" />
           {t('proofread.toolbar.aiOptimize')}
         </button>
         {showAiOptimize && (
-          <div className="absolute top-10 left-0 z-40 bg-slate-900 border border-slate-750 p-4 rounded-xl shadow-2xl w-[360px] text-xs space-y-3.5">
+          <div className="absolute top-10 left-0 z-40 bg-surface/95 border border-border-default p-4 rounded-xl shadow-lg w-[360px] text-xs space-y-3.5 backdrop-blur-md">
             <div className="space-y-1.5">
-              <label className="text-slate-400 font-medium">{t('proofread.toolbar.selectAiService')}</label>
+              <label className="text-text-secondary font-medium">{t('proofread.toolbar.selectAiService')}</label>
               {aiProviders.length === 0 ? (
-                <div className="p-2 border border-slate-800 text-[10px] text-slate-400 italic rounded bg-slate-950/50">
+                <div className="p-2 border border-border-subtle text-[10px] text-text-tertiary italic rounded bg-surface-overlay">
                   {t('proofread.toolbar.toastNoServiceInSettings')}
                 </div>
               ) : (
-                <select
+                <Select
                   value={selectedProviderId}
                   onChange={(e) => setSelectedProviderId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
+                  className="py-1 px-2.5 text-xs"
                 >
                   {aiProviders.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               )}
             </div>
 
             <div className="space-y-1.5">
               <div className="flex justify-between items-center">
-                <label className="text-slate-400 font-medium">{t('proofread.toolbar.customPrompt')}</label>
+                <label className="text-text-secondary font-medium">{t('proofread.toolbar.customPrompt')}</label>
                 <button
                   onClick={() => setShowCustomPrompt(!showCustomPrompt)}
-                  className="text-[10px] text-blue-500 hover:underline"
+                  className="text-[10px] text-brand hover:underline cursor-pointer"
                 >
                   {showCustomPrompt ? t('proofread.toolbar.hideCustom') : t('proofread.toolbar.showCustom')}
                 </button>
               </div>
               {showCustomPrompt && (
-                <textarea
+                <Textarea
                   value={customPrompt}
                   onChange={(e) => handlePromptChange(e.target.value)}
-                  className="w-full bg-slate-950 font-mono border border-slate-800 text-[10px] text-slate-350 p-2.5 rounded-lg min-h-[120px] focus:outline-none"
+                  className="font-mono text-[10px] min-h-[120px] py-1.5 px-2.5"
                 />
               )}
             </div>
 
             <div className="flex gap-2">
-              <button
+              <Button
+                variant="primary"
                 onClick={handleAiOptimize}
                 disabled={aiOptimizing || aiProviders.length === 0}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-1 disabled:opacity-40"
+                className="w-full"
+                size="sm"
               >
                 {aiOptimizing ? (
                   <>
@@ -748,27 +760,29 @@ Only respond with the translated/improved text, nothing else.`;
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-3.5 w-3.5 text-blue-200" />
+                    <Sparkles className="h-3.5 w-3.5" />
                     {t('proofread.toolbar.startOptimize')}
                   </>
                 )}
-              </button>
+              </Button>
             </div>
 
             {optimizedText && (
-              <div className="space-y-1.5 border-t border-slate-800 pt-3">
-                <label className="text-emerald-400 font-semibold flex items-center gap-1">
+              <div className="space-y-1.5 border-t border-border-subtle pt-3">
+                <label className="text-success font-semibold flex items-center gap-1">
                   <span>{t('proofread.toolbar.aiSuggestion')}</span>
                 </label>
-                <div className="p-2.5 bg-slate-950/70 border border-slate-850 rounded-lg text-slate-200 break-words leading-relaxed">
+                <div className="p-2.5 bg-brand-subtle border border-brand/10 rounded-lg text-brand-text break-words leading-relaxed">
                   {optimizedText}
                 </div>
-                <button
+                <Button
+                  variant="primary"
                   onClick={handleAcceptOptimization}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 rounded-lg transition-colors font-medium"
+                  className="w-full"
+                  size="sm"
                 >
                   {t('proofread.toolbar.applySuggestion')}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -778,9 +792,9 @@ Only respond with the translated/improved text, nothing else.`;
       {/* 批量 AI 优化 */}
       <button
         onClick={() => setShowBatchOptimize(true)}
-        className="flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent text-slate-300 hover:text-white hover:bg-slate-700/50"
+        className="flex items-center text-xs px-3 py-1.5 rounded-lg transition-colors font-medium border border-transparent text-text-secondary hover:text-text-primary hover:bg-surface-overlay cursor-pointer"
       >
-        <Sparkles className="h-3.5 w-3.5 mr-1.5 text-blue-500" />
+        <Sparkles className="h-3.5 w-3.5 mr-1.5 text-brand" />
         {t('proofread.toolbar.fullAiOptimize')}
       </button>
 

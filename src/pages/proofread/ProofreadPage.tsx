@@ -216,14 +216,14 @@ export default function ProofreadPage() {
 
   return (
     <ToastProvider>
-      <div className="h-full p-6 overflow-hidden flex flex-col bg-slate-900 text-slate-100">
-        <div className="flex-shrink-0 flex space-x-2 bg-slate-800/80 p-1.5 rounded-lg w-fit border border-slate-700/50 mb-4">
+      <div className="h-full overflow-hidden flex flex-col">
+        <div className="flex-shrink-0 flex space-x-2 bg-surface-raised p-1.5 rounded-lg w-fit border border-border-subtle mb-4">
           <button
             onClick={() => setActiveTab('new')}
-            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all ${
+            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all duration-150 ${
               activeTab === 'new'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                ? 'bg-brand text-white shadow-sm font-semibold'
+                : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
             }`}
           >
             <Plus className="w-3.5 h-3.5 mr-1.5" />
@@ -231,10 +231,10 @@ export default function ProofreadPage() {
           </button>
           <button
             onClick={() => setActiveTab('history')}
-            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all ${
+            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all duration-150 ${
               activeTab === 'history'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                ? 'bg-brand text-white shadow-sm font-semibold'
+                : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
             }`}
           >
             <History className="w-3.5 h-3.5 mr-1.5" />
