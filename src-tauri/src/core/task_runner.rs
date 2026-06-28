@@ -10,11 +10,23 @@ use crate::commands::{default_local_llm_dir, resolve_sidecar, whisper_models_dir
 use crate::core::asr::parakeet::ParakeetMlxEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, ProgressUpdate, TranscribeJob};
-use crate::core::subtitle::SubtitleTrack;
+use crate::core::subtitle::{Cue, SubtitleTrack};
 use crate::core::task_queue::{Task, TaskStatus, TaskType, TranslationContentMode};
-use crate::core::translation::{builtin_providers, translate_text, TranslateRequest};
+use crate::core::translation::{
+    builtin_providers, translate_text, TranslateRequest, TranslationProvider,
+};
 
 const MAX_OUTPUT_FILE_NAME_BYTES: usize = 240;
+const TRANSLATION_PROGRESS_START: f32 = 0.80;
+const TRANSLATION_PROGRESS_END: f32 = 0.95;
+const AI_TRANSLATION_MAX_BATCH_CUES: usize = 24;
+const AI_TRANSLATION_MAX_BATCH_CHARS: usize = 4_000;
+
+enum TranslationAttemptResult {
+    Success(String),
+    Cancelled,
+    Failed(String),
+}
 
 pub fn start_task(
     app: AppHandle,
@@ -593,74 +605,60 @@ async fn run_task_impl(
         if temp_translated_path.exists() {
             if let Ok(temp_content) = std::fs::read_to_string(&temp_translated_path) {
                 if let Ok(temp_track) = SubtitleTrack::from_srt(&temp_content) {
-                    let temp_len = temp_track.len();
-                    if temp_len > 0 && temp_len <= total_cues {
-                        for idx in 0..temp_len {
-                            track.cues[idx].text = temp_track.cues[idx].text.clone();
-                        }
-                        start_cue_index = temp_len;
+                    start_cue_index = restore_translated_checkpoint(&mut track, &temp_track);
+                    if start_cue_index > 0 {
                         let msg = format!(
-                            "发现已保存的翻译进度，从第 {}/{} 行恢复...",
-                            start_cue_index + 1,
-                            total_cues
+                            "发现已保存的翻译进度，已恢复 {}/{} 行{}",
+                            start_cue_index,
+                            total_cues,
+                            if start_cue_index == total_cues {
+                                "，准备写出字幕..."
+                            } else {
+                                "，继续翻译..."
+                            }
                         );
                         write_task_log(app, &app_config_dir, task_id, &msg).await;
+                        update_task_progress(
+                            app,
+                            tasks.clone(),
+                            task_id,
+                            translation_progress(start_cue_index, total_cues),
+                            &msg,
+                        )
+                        .await;
                     }
                 }
             }
         }
 
-        for i in start_cue_index..total_cues {
+        let mut batch_translation_enabled = translation_supports_batch(provider_info.as_ref());
+        let mut next_cue_index = start_cue_index;
+        while next_cue_index < total_cues {
             if check_cancelled(cancel_rx) {
-                let current_status = {
-                    let task_map = tasks.read().await;
-                    task_map
-                        .get(task_id)
-                        .map(|t| t.status)
-                        .unwrap_or(TaskStatus::Cancelled)
-                };
-                if current_status == TaskStatus::Paused {
-                    let partial_track = SubtitleTrack {
-                        cues: track.cues[0..i].to_vec(),
-                    };
-                    let _ = std::fs::write(&temp_translated_path, partial_track.to_srt());
-                    write_task_log(app, &app_config_dir, task_id, "翻译已暂停，已保存当前进度")
-                        .await;
-                } else {
-                    update_task_cancelled(app, tasks, task_id).await;
-                }
+                handle_translation_stop(
+                    app,
+                    tasks.clone(),
+                    &app_config_dir,
+                    task_id,
+                    &temp_translated_path,
+                    &track,
+                    next_cue_index,
+                )
+                .await;
                 return Ok(());
             }
 
-            let text_to_translate = track.cues[i].text.clone();
-            let mut translated_text = String::new();
-            let mut success = false;
-            let mut last_err = String::new();
-
-            for attempt in 0..=retry_times {
-                if check_cancelled(cancel_rx) {
-                    let current_status = {
-                        let task_map = tasks.read().await;
-                        task_map
-                            .get(task_id)
-                            .map(|t| t.status)
-                            .unwrap_or(TaskStatus::Cancelled)
-                    };
-                    if current_status == TaskStatus::Paused {
-                        let partial_track = SubtitleTrack {
-                            cues: track.cues[0..i].to_vec(),
-                        };
-                        let _ = std::fs::write(&temp_translated_path, partial_track.to_srt());
-                        write_task_log(app, &app_config_dir, task_id, "翻译已暂停，已保存当前进度")
-                            .await;
-                    } else {
-                        update_task_cancelled(app, tasks, task_id).await;
-                    }
-                    return Ok(());
-                }
-
-                let req = TranslateRequest {
-                    text: text_to_translate.clone(),
+            let batch_end = if batch_translation_enabled {
+                translation_batch_end(&track.cues, next_cue_index)
+            } else {
+                (next_cue_index + 1).min(total_cues)
+            };
+            if batch_translation_enabled && batch_end - next_cue_index > 1 {
+                let batch_cues = &track.cues[next_cue_index..batch_end];
+                let (batch_prompt, batch_keys) =
+                    build_batch_translation_prompt(&source_lang, &target_lang, batch_cues);
+                let batch_req = TranslateRequest {
+                    text: batch_prompt,
                     source_language: source_lang.clone(),
                     target_language: target_lang.clone(),
                     provider: provider.clone(),
@@ -670,91 +668,114 @@ async fn run_task_impl(
                     secret_fields: secret_fields_opt.clone(),
                 };
 
-                let translate_fut = translate_text(&req);
-                tokio::pin!(translate_fut);
-                let translate_result = loop {
-                    tokio::select! {
-                        res = &mut translate_fut => break res,
-                        change_res = cancel_rx.changed() => {
-                            if change_res.is_err() || *cancel_rx.borrow() {
-                                let current_status = {
-                                    let task_map = tasks.read().await;
-                                    task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-                                };
-                                if current_status == TaskStatus::Paused {
-                                    let partial_track = SubtitleTrack {
-                                        cues: track.cues[0..i].to_vec(),
-                                    };
-                                    let _ = std::fs::write(&temp_translated_path, partial_track.to_srt());
-                                    write_task_log(app, &app_config_dir, task_id, "翻译已暂停，已保存当前进度").await;
-                                } else {
-                                    update_task_cancelled(app, tasks, task_id).await;
+                match translate_with_retries(&batch_req, retry_times, cancel_rx).await {
+                    TranslationAttemptResult::Success(raw_text) => {
+                        match parse_batch_translation_response(&raw_text, &batch_keys) {
+                            Ok(translated_batch) => {
+                                for (offset, translated_text) in
+                                    translated_batch.into_iter().enumerate()
+                                {
+                                    track.cues[next_cue_index + offset].text = translated_text;
                                 }
-                                return Ok(());
+
+                                next_cue_index = batch_end;
+                                save_translation_checkpoint(
+                                    &temp_translated_path,
+                                    &track,
+                                    next_cue_index,
+                                );
+                                let progress = translation_progress(next_cue_index, total_cues);
+                                let msg = format!(
+                                    "正在批量翻译字幕... ({}/{})",
+                                    next_cue_index, total_cues
+                                );
+                                update_task_progress(app, tasks.clone(), task_id, progress, &msg)
+                                    .await;
+                                continue;
+                            }
+                            Err(parse_err) => {
+                                batch_translation_enabled = false;
+                                write_task_log(
+                                    app,
+                                    &app_config_dir,
+                                    task_id,
+                                    &format!(
+                                        "批量翻译响应无法对齐，降级逐条翻译当前批次：{}",
+                                        parse_err
+                                    ),
+                                )
+                                .await;
                             }
                         }
                     }
-                };
-
-                match translate_result {
-                    Ok(resp) => {
-                        if resp.success {
-                            translated_text = resp.translated_text;
-                            success = true;
-                            break;
-                        } else {
-                            last_err = resp.error.unwrap_or_else(|| "未知翻译错误".into());
-                        }
+                    TranslationAttemptResult::Cancelled => {
+                        handle_translation_stop(
+                            app,
+                            tasks.clone(),
+                            &app_config_dir,
+                            task_id,
+                            &temp_translated_path,
+                            &track,
+                            next_cue_index,
+                        )
+                        .await;
+                        return Ok(());
                     }
-                    Err(e) => {
-                        last_err = e.to_string();
-                    }
-                }
-
-                if attempt < retry_times {
-                    let retry_delay = tokio::time::sleep(std::time::Duration::from_millis(500));
-                    tokio::pin!(retry_delay);
-                    tokio::select! {
-                        _ = &mut retry_delay => {}
-                        change_res = cancel_rx.changed() => {
-                            if change_res.is_err() || *cancel_rx.borrow() {
-                                let current_status = {
-                                    let task_map = tasks.read().await;
-                                    task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-                                };
-                                if current_status == TaskStatus::Paused {
-                                    let partial_track = SubtitleTrack {
-                                        cues: track.cues[0..i].to_vec(),
-                                    };
-                                    let _ = std::fs::write(&temp_translated_path, partial_track.to_srt());
-                                    write_task_log(app, &app_config_dir, task_id, "翻译已暂停，已保存当前进度").await;
-                                } else {
-                                    update_task_cancelled(app, tasks, task_id).await;
-                                }
-                                return Ok(());
-                            }
-                        }
+                    TranslationAttemptResult::Failed(batch_err) => {
+                        batch_translation_enabled = false;
+                        write_task_log(
+                            app,
+                            &app_config_dir,
+                            task_id,
+                            &format!("批量翻译失败，降级逐条翻译当前批次：{}", batch_err),
+                        )
+                        .await;
                     }
                 }
             }
 
-            if !success {
-                return Err(format!(
-                    "翻译失败（尝试 {} 次）：{}",
-                    retry_times + 1,
-                    last_err
-                ));
-            }
-
-            track.cues[i].text = translated_text;
-
-            let partial_track = SubtitleTrack {
-                cues: track.cues[0..=i].to_vec(),
+            let req = TranslateRequest {
+                text: track.cues[next_cue_index].text.clone(),
+                source_language: source_lang.clone(),
+                target_language: target_lang.clone(),
+                provider: provider.clone(),
+                api_key: api_key.clone(),
+                api_url: api_url.clone(),
+                model_name: model_name.clone(),
+                secret_fields: secret_fields_opt.clone(),
             };
-            let _ = std::fs::write(&temp_translated_path, partial_track.to_srt());
 
-            let progress = 0.80 + (0.95 - 0.80) * ((i + 1) as f32 / total_cues as f32);
-            let msg = format!("正在翻译字幕... ({}/{})", i + 1, total_cues);
+            let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await
+            {
+                TranslationAttemptResult::Success(text) => text,
+                TranslationAttemptResult::Cancelled => {
+                    handle_translation_stop(
+                        app,
+                        tasks.clone(),
+                        &app_config_dir,
+                        task_id,
+                        &temp_translated_path,
+                        &track,
+                        next_cue_index,
+                    )
+                    .await;
+                    return Ok(());
+                }
+                TranslationAttemptResult::Failed(last_err) => {
+                    return Err(format!(
+                        "翻译失败（尝试 {} 次）：{}",
+                        retry_times + 1,
+                        last_err
+                    ));
+                }
+            };
+
+            track.cues[next_cue_index].text = translated_text;
+            next_cue_index += 1;
+            save_translation_checkpoint(&temp_translated_path, &track, next_cue_index);
+
+            let progress = translation_progress(next_cue_index, total_cues);
+            let msg = format!("正在翻译字幕... ({}/{})", next_cue_index, total_cues);
             update_task_progress(app, tasks.clone(), task_id, progress, &msg).await;
         }
 
@@ -871,7 +892,10 @@ async fn update_task_progress(
             return;
         }
         task.status = TaskStatus::Running;
-        task.progress = progress.clamp(0.0, 1.0);
+        task.progress = task
+            .progress
+            .clamp(0.0, 1.0)
+            .max(progress.clamp(0.0, 1.0));
         task.status_message = message.into();
         task.updated_at = chrono::Utc::now().to_rfc3339();
         let task_clone = task.clone();
@@ -897,6 +921,31 @@ async fn update_task_cancelled(
     }
 }
 
+async fn handle_translation_stop(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    app_config_dir: &Path,
+    task_id: &str,
+    checkpoint_path: &Path,
+    track: &SubtitleTrack,
+    completed_cues: usize,
+) {
+    let current_status = {
+        let task_map = tasks.read().await;
+        task_map
+            .get(task_id)
+            .map(|t| t.status)
+            .unwrap_or(TaskStatus::Cancelled)
+    };
+
+    if current_status == TaskStatus::Paused {
+        save_translation_checkpoint(checkpoint_path, track, completed_cues);
+        write_task_log(app, app_config_dir, task_id, "翻译已暂停，已保存当前进度").await;
+    } else {
+        update_task_cancelled(app, tasks, task_id).await;
+    }
+}
+
 fn emit_task_update_internal(app: &AppHandle, task: &Task) {
     use tauri::{Emitter, Manager};
     app.emit("task-updated", task).ok();
@@ -915,6 +964,187 @@ fn configured_value(value: Option<&String>) -> Option<String> {
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn restore_translated_checkpoint(
+    track: &mut SubtitleTrack,
+    checkpoint: &SubtitleTrack,
+) -> usize {
+    let checkpoint_len = checkpoint.len();
+    if checkpoint_len == 0 || checkpoint_len > track.len() {
+        return 0;
+    }
+
+    for idx in 0..checkpoint_len {
+        track.cues[idx].text = checkpoint.cues[idx].text.clone();
+    }
+    checkpoint_len
+}
+
+fn translation_progress(completed_cues: usize, total_cues: usize) -> f32 {
+    if total_cues == 0 {
+        return TRANSLATION_PROGRESS_START;
+    }
+
+    let ratio = (completed_cues as f32 / total_cues as f32).clamp(0.0, 1.0);
+    TRANSLATION_PROGRESS_START + (TRANSLATION_PROGRESS_END - TRANSLATION_PROGRESS_START) * ratio
+}
+
+fn translation_supports_batch(provider_info: Option<&TranslationProvider>) -> bool {
+    provider_info.map(|item| item.is_ai).unwrap_or(false)
+}
+
+fn translation_batch_end(cues: &[Cue], start_index: usize) -> usize {
+    if start_index >= cues.len() {
+        return start_index;
+    }
+
+    let mut end_index = start_index;
+    let mut char_count = 0usize;
+    while end_index < cues.len() && end_index - start_index < AI_TRANSLATION_MAX_BATCH_CUES {
+        let cue_chars = cues[end_index].text.chars().count();
+        if end_index > start_index && char_count + cue_chars > AI_TRANSLATION_MAX_BATCH_CHARS {
+            break;
+        }
+        char_count += cue_chars;
+        end_index += 1;
+        if char_count >= AI_TRANSLATION_MAX_BATCH_CHARS {
+            break;
+        }
+    }
+
+    end_index
+}
+
+fn save_translation_checkpoint(path: &Path, track: &SubtitleTrack, completed_cues: usize) {
+    if completed_cues == 0 {
+        return;
+    }
+
+    let checkpoint = SubtitleTrack {
+        cues: track.cues[0..completed_cues.min(track.len())].to_vec(),
+    };
+    let _ = std::fs::write(path, checkpoint.to_srt());
+}
+
+fn build_batch_translation_prompt(
+    source_language: &str,
+    target_language: &str,
+    cues: &[Cue],
+) -> (String, Vec<String>) {
+    let mut input = serde_json::Map::new();
+    let mut keys = Vec::with_capacity(cues.len());
+    for (offset, cue) in cues.iter().enumerate() {
+        let key = (offset + 1).to_string();
+        keys.push(key.clone());
+        input.insert(key, serde_json::Value::String(cue.text.clone()));
+    }
+
+    let input_json = serde_json::to_string(&serde_json::Value::Object(input))
+        .unwrap_or_else(|_| "{}".to_string());
+    let prompt = format!(
+        "Translate each JSON value from {source_language} to {target_language}. \
+Return only a valid JSON object with exactly the same keys. \
+Do not add Markdown fences, comments, explanations, or extra keys. \
+Preserve line breaks inside each value.\n\nInput JSON:\n{input_json}"
+    );
+
+    (prompt, keys)
+}
+
+fn parse_batch_translation_response(
+    raw_text: &str,
+    expected_keys: &[String],
+) -> Result<Vec<String>, String> {
+    let cleaned = extract_json_object(raw_text)
+        .ok_or_else(|| "响应中没有 JSON 对象".to_string())?;
+    let value: serde_json::Value = serde_json::from_str(cleaned)
+        .map_err(|e| format!("JSON 解析失败：{e}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "响应不是 JSON 对象".to_string())?;
+
+    let mut translated = Vec::with_capacity(expected_keys.len());
+    for key in expected_keys {
+        let text = object
+            .get(key)
+            .and_then(|item| item.as_str())
+            .ok_or_else(|| format!("缺少键 {key} 的字符串译文"))?;
+        translated.push(text.trim().to_string());
+    }
+
+    Ok(translated)
+}
+
+fn extract_json_object(raw_text: &str) -> Option<&str> {
+    let trimmed = raw_text.trim();
+    let without_fence = if trimmed.starts_with("```") {
+        let after_first_line = trimmed.find('\n').map(|idx| &trimmed[idx + 1..])?;
+        after_first_line
+            .strip_suffix("```")
+            .unwrap_or(after_first_line)
+            .trim()
+    } else {
+        trimmed
+    };
+
+    let start = without_fence.find('{')?;
+    let end = without_fence.rfind('}')?;
+    (start <= end).then_some(&without_fence[start..=end])
+}
+
+async fn translate_with_retries(
+    req: &TranslateRequest,
+    retry_times: u32,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> TranslationAttemptResult {
+    let mut last_err = String::new();
+
+    for attempt in 0..=retry_times {
+        if check_cancelled(cancel_rx) {
+            return TranslationAttemptResult::Cancelled;
+        }
+
+        let translate_fut = translate_text(req);
+        tokio::pin!(translate_fut);
+        let translate_result = loop {
+            tokio::select! {
+                res = &mut translate_fut => break res,
+                change_res = cancel_rx.changed() => {
+                    if change_res.is_err() || *cancel_rx.borrow() {
+                        return TranslationAttemptResult::Cancelled;
+                    }
+                }
+            }
+        };
+
+        match translate_result {
+            Ok(resp) => {
+                if resp.success {
+                    return TranslationAttemptResult::Success(resp.translated_text);
+                }
+                last_err = resp.error.unwrap_or_else(|| "未知翻译错误".into());
+            }
+            Err(e) => {
+                last_err = e.to_string();
+            }
+        }
+
+        if attempt < retry_times {
+            let retry_delay = tokio::time::sleep(std::time::Duration::from_millis(500));
+            tokio::pin!(retry_delay);
+            tokio::select! {
+                _ = &mut retry_delay => {}
+                change_res = cancel_rx.changed() => {
+                    if change_res.is_err() || *cancel_rx.borrow() {
+                        return TranslationAttemptResult::Cancelled;
+                    }
+                }
+            }
+        }
+    }
+
+    TranslationAttemptResult::Failed(last_err)
 }
 
 fn build_translation_output_track(
@@ -1154,6 +1384,90 @@ mod tests {
 
         assert_eq!(source_first.cues[0].text, "Hello world\n你好世界");
         assert_eq!(target_first.cues[0].text, "你好世界\nHello world");
+    }
+
+    #[test]
+    fn translated_checkpoint_restores_completed_cues_and_progress() {
+        let mut track = SubtitleTrack::from_srt(
+            "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n\
+             2\n00:00:02,000 --> 00:00:03,000\nWorld\n\n\
+             3\n00:00:03,000 --> 00:00:04,000\nAgain\n\n",
+        )
+        .unwrap();
+        let checkpoint = SubtitleTrack::from_srt(
+            "1\n00:00:01,000 --> 00:00:02,000\n你好\n\n\
+             2\n00:00:02,000 --> 00:00:03,000\n世界\n\n",
+        )
+        .unwrap();
+
+        let restored = restore_translated_checkpoint(&mut track, &checkpoint);
+
+        assert_eq!(restored, 2);
+        assert_eq!(track.cues[0].text, "你好");
+        assert_eq!(track.cues[1].text, "世界");
+        assert_eq!(track.cues[2].text, "Again");
+        assert!((translation_progress(restored, track.len()) - 0.90).abs() < 0.0001);
+    }
+
+    #[test]
+    fn batch_translation_prompt_and_response_preserve_key_alignment() {
+        let cues = SubtitleTrack::from_srt(
+            "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n\
+             2\n00:00:02,000 --> 00:00:03,000\nWorld\n\n",
+        )
+        .unwrap()
+        .cues;
+
+        let (prompt, keys) = build_batch_translation_prompt("en", "zh", &cues);
+        let translated = parse_batch_translation_response(
+            "```json\n{\"1\":\"你好\",\"2\":\"世界\"}\n```",
+            &keys,
+        )
+        .unwrap();
+
+        assert!(prompt.contains("same keys"));
+        assert_eq!(keys, vec!["1".to_string(), "2".to_string()]);
+        assert_eq!(translated, vec!["你好".to_string(), "世界".to_string()]);
+    }
+
+    #[test]
+    fn batch_translation_response_rejects_missing_key() {
+        let keys = vec!["1".to_string(), "2".to_string()];
+        let err = parse_batch_translation_response("{\"1\":\"你好\"}", &keys).unwrap_err();
+        assert!(err.contains("缺少键 2"));
+    }
+
+    #[test]
+    fn translation_batching_only_enables_ai_providers() {
+        let providers = builtin_providers();
+        let ai_provider = providers.iter().find(|item| item.id == "deepseek");
+        let api_provider = providers.iter().find(|item| item.id == "google");
+
+        assert!(translation_supports_batch(ai_provider));
+        assert!(!translation_supports_batch(api_provider));
+    }
+
+    #[test]
+    fn translation_batch_end_uses_cue_and_character_limits() {
+        let short_cues = (0..30)
+            .map(|idx| Cue {
+                index: idx,
+                start_ms: idx as u64 * 1000,
+                end_ms: idx as u64 * 1000 + 500,
+                text: "短句".into(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(translation_batch_end(&short_cues, 0), AI_TRANSLATION_MAX_BATCH_CUES);
+
+        let long_cues = (0..4)
+            .map(|idx| Cue {
+                index: idx,
+                start_ms: idx as u64 * 1000,
+                end_ms: idx as u64 * 1000 + 500,
+                text: "长".repeat(2_500),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(translation_batch_end(&long_cues, 0), 1);
     }
 
     #[test]
