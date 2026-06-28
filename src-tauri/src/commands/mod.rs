@@ -65,6 +65,14 @@ fn task_status_label(status: TaskStatus) -> &'static str {
     }
 }
 
+fn prepare_task_for_retry(task: &mut Task) {
+    task.status = TaskStatus::Pending;
+    task.progress = task.progress.clamp(0.0, 1.0);
+    task.error = None;
+    task.status_message = "准备从上次进度继续...".into();
+    task.updated_at = chrono::Utc::now().to_rfc3339();
+}
+
 async fn persist_tasks_snapshot(app_config_dir: &Path, tasks: &TaskMap) -> Result<(), String> {
     let task_map = tasks.read().await;
     task_queue::save_tasks(app_config_dir, &task_map)
@@ -748,25 +756,9 @@ pub async fn retry_task(
     if !matches!(task.status, TaskStatus::Error | TaskStatus::Cancelled) {
         return Err("Only failed or cancelled tasks can be retried".to_string());
     }
-    task.status = TaskStatus::Pending;
-    task.progress = 0.0;
-    task.error = None;
-    task.status_message = "Preparing to restart...".into();
-    task.updated_at = chrono::Utc::now().to_rfc3339();
+    prepare_task_for_retry(task);
     let task_clone = task.clone();
     drop(tasks);
-
-    let work_dir = state.app_config_dir.join("tasks").join(&task_id);
-    if work_dir.exists() {
-        let _ = tokio::fs::remove_dir_all(&work_dir).await;
-    }
-    let log_path = state
-        .app_config_dir
-        .join("tasks")
-        .join(format!("{}.log", task_id));
-    if log_path.exists() {
-        let _ = tokio::fs::remove_file(&log_path).await;
-    }
 
     persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
@@ -2279,6 +2271,31 @@ mod tests {
         assert!(task_can_be_deleted(TaskStatus::Cancelled));
         assert!(task_can_be_deleted(TaskStatus::Done));
         assert!(task_can_be_deleted(TaskStatus::Error));
+    }
+
+    #[test]
+    fn prepare_task_for_retry_preserves_checkpoint_progress() {
+        let mut task = task_queue::create_task(CreateTaskParams {
+            task_type: TaskType::GenerateAndTranslate,
+            media_path: "/tmp/video.mp4".into(),
+            media_name: "video.mp4".into(),
+            engine_id: "parakeet-mlx".into(),
+            model_id: "parakeet-tdt-0.6b-v2".into(),
+            source_language: Some("auto".into()),
+            target_language: Some("zh".into()),
+            translation_content_mode: TranslationContentMode::TargetOnly,
+            output_format: Some("srt".into()),
+        });
+        task.status = TaskStatus::Error;
+        task.progress = 0.87;
+        task.error = Some("network error".into());
+
+        prepare_task_for_retry(&mut task);
+
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.progress, 0.87);
+        assert!(task.error.is_none());
+        assert!(task.status_message.contains("上次进度"));
     }
 
     #[test]

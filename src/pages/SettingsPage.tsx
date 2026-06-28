@@ -28,6 +28,30 @@ const outputFormats = [
   { value: "txt", label: "TXT" },
 ];
 
+function clampInteger(value: unknown, min: number, max: number): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.trunc(numeric)));
+}
+
+function normalizeMaxContext(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return -1;
+  }
+  return clampInteger(numeric, 0, 65_536);
+}
+
+function normalizeSettings(settings: Settings): Settings {
+  return {
+    ...settings,
+    max_concurrent_tasks: clampInteger(settings.max_concurrent_tasks, 1, 8),
+    max_context: normalizeMaxContext(settings.max_context),
+  };
+}
+
 const SettingRow = ({
   label,
   description,
@@ -92,7 +116,9 @@ export default function SettingsPage() {
     if (!settings) return;
     setSaving(true);
     try {
-      await saveSettingsCmd(settings);
+      const normalized = normalizeSettings(settings);
+      const savedSettings = await saveSettingsCmd(normalized);
+      setSettings(savedSettings);
       showMsg("ok", t("settings.saved"));
       window.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (err) {
@@ -236,7 +262,9 @@ export default function SettingsPage() {
                 min={1}
                 max={8}
                 value={settings.max_concurrent_tasks}
-                onChange={(e) => update("max_concurrent_tasks", Number(e.target.value))}
+                onChange={(e) =>
+                  update("max_concurrent_tasks", clampInteger(e.target.value, 1, 8))
+                }
                 className="w-20 text-right h-9"
               />
             </SettingRow>
@@ -419,11 +447,18 @@ export default function SettingsPage() {
             >
               <Input
                 type="number"
-                min={-1}
+                min={0}
                 max={65536}
-                value={settings.max_context}
-                onChange={(e) => update("max_context", Number(e.target.value))}
-                className="w-24 text-right h-9"
+                placeholder={t("settings.maxContextPlaceholder")}
+                value={settings.max_context === -1 ? "" : settings.max_context}
+                onChange={(e) => {
+                  const rawValue = e.target.value.trim();
+                  update(
+                    "max_context",
+                    rawValue === "" ? -1 : normalizeMaxContext(rawValue)
+                  );
+                }}
+                className="w-28 text-right h-9"
               />
             </SettingRow>
           </div>

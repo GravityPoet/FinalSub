@@ -1,7 +1,7 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, Sun, Moon, Laptop } from "lucide-react";
-import { useI18n } from "../lib/i18n";
-import { useTheme } from "../lib/theme";
+import { type TranslationKey, useI18n } from "../lib/i18n";
+import { type Theme, useTheme } from "../lib/theme";
 
 const navItems = [
   { to: "/", key: "nav.tasks", icon: FileVideo2 },
@@ -12,6 +12,16 @@ const navItems = [
   { to: "/subtitle-merge", key: "nav.merge", icon: Film },
   { to: "/settings", key: "nav.settings", icon: Settings },
 ] as const;
+
+const themeOptions: Array<{
+  value: Theme;
+  labelKey: TranslationKey;
+  icon: typeof Sun;
+}> = [
+  { value: "light", labelKey: "settings.themeLight", icon: Sun },
+  { value: "dark", labelKey: "settings.themeDark", icon: Moon },
+  { value: "system", labelKey: "settings.themeSystem", icon: Laptop },
+];
 
 const Logo = () => (
   <svg className="size-5 text-brand" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -27,7 +37,7 @@ export default function Layout() {
   const { theme, setTheme } = useTheme();
 
   return (
-    <div className="flex min-h-screen flex-col bg-app-bg text-text-primary sm:flex-row">
+    <div className="flex min-h-screen flex-col bg-app-bg text-text-primary sm:h-screen sm:overflow-hidden sm:flex-row">
       <aside className="w-full shrink-0 border-b border-border-subtle bg-surface sm:flex sm:h-screen sm:w-60 sm:flex-col sm:border-b-0 sm:border-r">
         <div className="flex items-center gap-3 border-b border-border-subtle p-4">
           <Logo />
@@ -52,35 +62,39 @@ export default function Layout() {
             );
           })}
         </nav>
-        
-        <div className="mt-auto border-t border-border-subtle p-3 flex items-center justify-between">
-          <span className="text-xs text-text-secondary">{t("settings.theme") || "Theme"}</span>
-          <div className="flex bg-surface-raised border border-border-default rounded-lg p-0.5">
-            <button
-              onClick={() => setTheme("light")}
-              className={`p-1.5 rounded-md transition ${theme === "light" ? "bg-surface text-brand shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
-              title="Light Theme"
-            >
-              <Sun size={14} />
-            </button>
-            <button
-              onClick={() => setTheme("dark")}
-              className={`p-1.5 rounded-md transition ${theme === "dark" ? "bg-surface text-brand shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
-              title="Dark Theme"
-            >
-              <Moon size={14} />
-            </button>
-            <button
-              onClick={() => setTheme("system")}
-              className={`p-1.5 rounded-md transition ${theme === "system" ? "bg-surface text-brand shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
-              title="System Theme"
-            >
-              <Laptop size={14} />
-            </button>
+        <div className="mt-auto space-y-2 border-t border-border-subtle p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-text-secondary">{t("settings.theme")}</span>
+            <span className="truncate text-xs font-semibold text-text-primary">
+              {t(themeOptions.find((option) => option.value === theme)?.labelKey ?? "settings.themeDark")}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 rounded-lg border border-border-default bg-surface-raised p-0.5">
+            {themeOptions.map(({ value, labelKey, icon: Icon }) => {
+              const isActive = theme === value;
+              const label = t(labelKey);
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => setTheme(value)}
+                  className={`flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-medium transition ${
+                    isActive
+                      ? "bg-surface text-brand shadow-sm"
+                      : "text-text-tertiary hover:text-text-secondary"
+                  }`}
+                  title={label}
+                >
+                  <Icon size={14} className="shrink-0" />
+                  <span className="truncate">{label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </aside>
-      <main className="flex-1 overflow-auto p-4 sm:p-6">
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
         <Outlet />
       </main>
     </div>
