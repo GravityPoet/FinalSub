@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
+use std::process::Stdio;
+use tokio::io::AsyncBufReadExt;
 
 use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
 use crate::core::subtitle::SubtitleTrack;
@@ -60,6 +62,13 @@ impl WhisperCppEngine {
     }
 }
 
+fn parse_whisper_progress_ratio(line: &str) -> Option<f32> {
+    let (_, value) = line.split_once("progress =")?;
+    let raw_percent = value.trim().trim_end_matches('%').trim();
+    let percent = raw_percent.parse::<f32>().ok()?;
+    Some((percent / 100.0).clamp(0.0, 1.0))
+}
+
 #[async_trait]
 impl AsrEngine for WhisperCppEngine {
     fn id(&self) -> &'static str {
@@ -114,7 +123,7 @@ impl AsrEngine for WhisperCppEngine {
         &self,
         job: TranscribeJob,
         progress: ProgressSink,
-        cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+        mut cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<SubtitleTrack> {
         let model_path = self.model_path(&job.model.model_id);
         if !model_path.exists() {
@@ -126,7 +135,7 @@ impl AsrEngine for WhisperCppEngine {
 
         progress
             .send(ProgressUpdate {
-                progress: 0.1,
+                progress: 0.01,
                 message: "正在启动 whisper-cli...".into(),
             })
             .await
@@ -146,6 +155,7 @@ impl AsrEngine for WhisperCppEngine {
             "-osrt".to_string(),
             "-of".to_string(),
             output_prefix.clone(),
+            "-pp".to_string(),
         ];
 
         if let Some(ref lang) = job.language {
@@ -160,24 +170,24 @@ impl AsrEngine for WhisperCppEngine {
                 args.push("--vad".to_string());
                 args.push("-vm".to_string());
                 args.push(vad_model.to_string_lossy().to_string());
-                
+
                 args.push("-vt".to_string());
                 args.push(self.options.vad_threshold.to_string());
-                
+
                 args.push("-vspd".to_string());
                 args.push(self.options.vad_min_speech_duration_ms.to_string());
-                
+
                 args.push("-vsd".to_string());
                 args.push(self.options.vad_min_silence_duration_ms.to_string());
-                
+
                 if self.options.vad_max_speech_duration_s > 0 {
                     args.push("-vmsd".to_string());
                     args.push(self.options.vad_max_speech_duration_s.to_string());
                 }
-                
+
                 args.push("-vp".to_string());
                 args.push(self.options.vad_speech_pad_ms.to_string());
-                
+
                 args.push("-vo".to_string());
                 args.push(self.options.vad_samples_overlap.to_string());
             }
@@ -195,7 +205,7 @@ impl AsrEngine for WhisperCppEngine {
                 bin_path = custom_path;
                 progress
                     .send(ProgressUpdate {
-                        progress: 0.2,
+                        progress: 0.02,
                         message: format!("正在启动自定义 whisper-cli：{}...", bin_path.display()),
                     })
                     .await
@@ -203,7 +213,7 @@ impl AsrEngine for WhisperCppEngine {
             } else {
                 progress
                     .send(ProgressUpdate {
-                        progress: 0.2,
+                        progress: 0.02,
                         message: format!(
                             "自定义 whisper-cli 路径不存在：{}，回退到默认路径",
                             self.options.whisper_command
@@ -215,7 +225,7 @@ impl AsrEngine for WhisperCppEngine {
         } else {
             progress
                 .send(ProgressUpdate {
-                    progress: 0.2,
+                    progress: 0.02,
                     message: "正在转录...".into(),
                 })
                 .await
@@ -224,50 +234,74 @@ impl AsrEngine for WhisperCppEngine {
 
         let mut cmd = tokio::process::Command::new(&bin_path);
         cmd.args(&args);
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::piped());
         cmd.kill_on_drop(true);
 
-        let output_fut = cmd.output();
-        tokio::pin!(output_fut);
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| FinalSubError::Validation("无法读取 whisper-cli 进度输出".into()))?;
+        let mut stderr_lines = tokio::io::BufReader::new(stderr).lines();
+        let mut stderr_buf = String::new();
+        let mut stderr_done = false;
+        let wait_fut = child.wait();
+        tokio::pin!(wait_fut);
 
-        let output = if let Some(mut rx) = cancel_rx {
+        let status = loop {
             tokio::select! {
-                res = &mut output_fut => {
-                    res.map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?
-                }
-                _ = rx.changed() => {
-                    if *rx.borrow() {
-                        return Err(FinalSubError::Validation("任务已取消".into()));
-                    }
-                    loop {
-                        tokio::select! {
-                            res = &mut output_fut => {
-                                break res.map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?;
+                line_res = stderr_lines.next_line(), if !stderr_done => {
+                    match line_res {
+                        Ok(Some(line)) => {
+                            if let Some(ratio) = parse_whisper_progress_ratio(&line) {
+                                progress
+                                    .send(ProgressUpdate {
+                                        progress: 0.05 + 0.90 * ratio,
+                                        message: format!("正在转录... {:.0}%", ratio * 100.0),
+                                    })
+                                    .await
+                                    .ok();
                             }
-                            change_res = rx.changed() => {
-                                if change_res.is_err() || *rx.borrow() {
-                                    return Err(FinalSubError::Validation("任务已取消".into()));
-                                }
-                            }
+                            stderr_buf.push_str(&line);
+                            stderr_buf.push('\n');
+                        }
+                        Ok(None) => {
+                            stderr_done = true;
+                        }
+                        Err(e) => {
+                            return Err(FinalSubError::Validation(format!(
+                                "读取 whisper-cli 进度输出失败：{e}"
+                            )));
                         }
                     }
                 }
+                status_res = &mut wait_fut => {
+                    break status_res
+                        .map_err(|e| FinalSubError::Validation(format!("等待 whisper-cli 结束失败：{e}")))?;
+                }
+                change_res = async {
+                    let rx = cancel_rx.as_mut().expect("cancel receiver exists");
+                    rx.changed().await.map(|_| *rx.borrow()).unwrap_or(true)
+                }, if cancel_rx.is_some() => {
+                    if change_res {
+                        return Err(FinalSubError::Validation("任务已取消".into()));
+                    }
+                }
             }
-        } else {
-            output_fut
-                .await
-                .map_err(|e| FinalSubError::Validation(format!("运行 whisper-cli 失败：{e}")))?
         };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
             return Err(FinalSubError::Validation(format!(
-                "whisper-cli 转录失败：{stderr}"
+                "whisper-cli 转录失败：{stderr_buf}"
             )));
         }
 
         progress
             .send(ProgressUpdate {
-                progress: 0.9,
+                progress: 0.98,
                 message: "正在解析字幕...".into(),
             })
             .await
@@ -277,6 +311,12 @@ impl AsrEngine for WhisperCppEngine {
         let srt_content = tokio::fs::read_to_string(&srt_path)
             .await
             .map_err(|e| FinalSubError::Validation(format!("读取 SRT 输出失败：{e}")))?;
+
+        if srt_content.trim().is_empty() {
+            return Err(FinalSubError::Validation(
+                "Whisper 未识别到任何字幕内容，请确认音频中有人声，或尝试切换语言/模型。".into(),
+            ));
+        }
 
         let track = SubtitleTrack::from_srt(&srt_content)?;
 
@@ -355,5 +395,18 @@ mod tests {
         );
         assert!(!engine.capabilities().supports_streaming);
         assert!(engine.capabilities().requires_model_download);
+    }
+
+    #[test]
+    fn parse_whisper_progress_callback() {
+        assert_eq!(
+            parse_whisper_progress_ratio("whisper_print_progress_callback: progress =  61%"),
+            Some(0.61)
+        );
+        assert_eq!(
+            parse_whisper_progress_ratio("whisper_print_progress_callback: progress = 100%"),
+            Some(1.0)
+        );
+        assert_eq!(parse_whisper_progress_ratio("not a progress line"), None);
     }
 }

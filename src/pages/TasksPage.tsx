@@ -299,13 +299,13 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="page-shell space-y-7">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("tasks.title")}</h2>
+        <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("tasks.title")}</h2>
         <div className="flex flex-wrap items-center gap-3">
           {tasks.length > 0 && (
             <>
-              <label className="inline-flex h-8 items-center gap-2 rounded-lg border border-border-default bg-surface px-3 text-xs font-medium text-text-secondary shadow-sm cursor-pointer hover:bg-surface-overlay select-none transition">
+              <label className="glass-control inline-flex h-9 cursor-pointer select-none items-center gap-2 rounded-xl px-3.5 text-sm font-semibold text-text-secondary transition hover:bg-surface-overlay">
                 <input
                   type="checkbox"
                   checked={allDeletableSelected}
@@ -319,10 +319,10 @@ export default function TasksPage() {
                 type="button"
                 onClick={() => openDeleteDialog(selectedDeletableIds)}
                 disabled={selectedDeletableIds.length === 0}
-                className="h-8 py-0 px-3 text-xs"
+                size="sm"
                 variant="danger"
               >
-                <Trash2 size={12} />
+                <Trash2 size={14} />
                 <span>{t("tasks.deleteSelected") + (selectedDeletableIds.length > 0 ? ` (${selectedDeletableIds.length})` : "")}</span>
               </Button>
             </>
@@ -330,9 +330,9 @@ export default function TasksPage() {
           <Button
             onClick={refresh}
             variant="secondary"
-            className="h-8 py-0 px-3 text-xs"
+            size="sm"
           >
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
             <span>{t("tasks.refresh")}</span>
           </Button>
         </div>
@@ -342,8 +342,8 @@ export default function TasksPage() {
         <div className="text-text-tertiary py-16 text-center text-sm">{t("tasks.loading")}</div>
       ) : tasks.length === 0 ? (
         <Card className="py-16 px-6 text-center border-dashed">
-          <p className="text-base font-semibold text-text-primary">{t("tasks.noTasks")}</p>
-          <p className="text-xs text-text-tertiary mt-1.5 leading-5">
+          <p className="text-lg font-semibold text-text-primary">{t("tasks.noTasks")}</p>
+          <p className="mt-2 text-sm leading-6 text-text-tertiary">
             {t("tasks.noTasksDesc")}
           </p>
         </Card>
@@ -373,14 +373,14 @@ export default function TasksPage() {
                     />
                   </div>
                   <div className="min-w-0">
-                    <h4 className="font-semibold text-text-primary truncate text-base">{task.media_name}</h4>
-                    <p className="mt-1.5 truncate font-mono text-xs text-text-tertiary" title={task.media_path}>
+                    <h4 className="truncate font-display text-lg font-semibold tracking-tight text-text-primary">{task.media_name}</h4>
+                    <p className="mt-1.5 truncate font-mono text-sm text-text-tertiary" title={task.media_path}>
                       {task.media_path}
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <TaskTypeLabel type={task.task_type} />
                       <span className="text-[10px] text-border-strong">|</span>
-                      <span className="text-xs text-text-secondary">
+                      <span className="text-sm text-text-secondary">
                         {task.engine_id} · {task.model_id}
                         {task.source_language && ` · ${task.source_language}`}
                         {task.target_language && ` → ${task.target_language}`}
@@ -392,15 +392,15 @@ export default function TasksPage() {
                   <div className="col-span-2 flex items-center justify-between gap-4 border-t border-border-subtle pt-3 sm:col-span-1 sm:justify-end sm:border-0 sm:pt-0">
                     <StatusPill status={task.status} />
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2">
                       {/* Log button */}
                       <button
                         type="button"
                         title={t("tasks.viewLogs")}
                         onClick={() => setActiveLogTaskId(task.id)}
-                        className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-overlay transition"
+                        className="rounded-lg p-2 text-text-secondary transition hover:bg-surface-overlay hover:text-text-primary"
                       >
-                        <FileText size={15} />
+                        <FileText size={16} />
                       </button>
 
                       {/* Pause button */}
@@ -409,9 +409,9 @@ export default function TasksPage() {
                           type="button"
                           title={t("tasks.pauseTask")}
                           onClick={() => handlePause(task.id)}
-                          className="p-1.5 rounded-lg text-warning hover:bg-warning/10 transition"
+                          className="rounded-lg p-2 text-warning transition hover:bg-warning/10"
                         >
-                          <Pause size={15} />
+                          <Pause size={16} />
                         </button>
                       )}
 
@@ -421,9 +421,9 @@ export default function TasksPage() {
                           type="button"
                           title={t("tasks.resumeTask")}
                           onClick={() => handleResume(task.id)}
-                          className="p-1.5 rounded-lg text-success hover:bg-success/10 transition"
+                          className="rounded-lg p-2 text-success transition hover:bg-success/10"
                         >
-                          <Play size={15} />
+                          <Play size={16} />
                         </button>
                       )}
 
@@ -433,9 +433,9 @@ export default function TasksPage() {
                           type="button"
                           title={t("tasks.retryTask")}
                           onClick={() => handleRetry(task.id)}
-                          className="p-1.5 rounded-lg text-brand hover:bg-brand-subtle transition"
+                          className="rounded-lg p-2 text-brand transition hover:bg-brand-subtle"
                         >
-                          <RotateCcw size={15} />
+                          <RotateCcw size={16} />
                         </button>
                       )}
 
@@ -445,9 +445,9 @@ export default function TasksPage() {
                           type="button"
                           title={t("tasks.cancelTask")}
                           onClick={() => handleCancel(task.id)}
-                          className="p-1.5 rounded-lg text-danger hover:bg-danger/10 transition"
+                          className="rounded-lg p-2 text-danger transition hover:bg-danger/10"
                         >
-                          <XCircle size={15} />
+                          <XCircle size={16} />
                         </button>
                       )}
                       {canDeleteTask(task) && (
@@ -456,9 +456,9 @@ export default function TasksPage() {
                           title={t("tasks.deleteTaskRecord")}
                           onClick={() => openDeleteDialog([task.id])}
                           disabled={deletingTaskIds.includes(task.id)}
-                          className="p-1.5 rounded-lg text-text-tertiary hover:text-danger hover:bg-danger/10 disabled:opacity-45 transition"
+                          className="rounded-lg p-2 text-text-tertiary transition hover:bg-danger/10 hover:text-danger disabled:opacity-45"
                         >
-                          <Trash2 size={15} />
+                          <Trash2 size={16} />
                         </button>
                       )}
                     </div>
@@ -468,7 +468,7 @@ export default function TasksPage() {
                 {task.status !== "pending" && (
                   <div className="mt-4 space-y-2">
                     <Progress value={Math.round(task.progress * 100)} />
-                    <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center justify-between text-sm">
                       <p className="text-text-secondary truncate max-w-[80%]">
                         {task.status_message}
                       </p>
@@ -480,7 +480,7 @@ export default function TasksPage() {
                 )}
 
                 {task.status === "done" && task.output_path && (
-                  <div className="mt-4 bg-surface-overlay border border-border-subtle p-3 rounded-lg text-xs space-y-2.5">
+                  <div className="mt-4 space-y-3 rounded-xl border border-border-subtle bg-surface-overlay p-3.5 text-sm">
                     <p className="font-semibold text-text-secondary truncate" title={task.output_path}>
                       {t("tasks.outputPath")}{task.output_path}
                     </p>
@@ -505,7 +505,7 @@ export default function TasksPage() {
                   </div>
                 )}
                 {task.error && (
-                  <div className="mt-3.5 p-3 rounded-lg bg-danger/10 border border-danger/20 text-xs text-danger font-mono break-all leading-5">
+                  <div className="mt-3.5 break-all rounded-xl border border-danger/20 bg-danger/10 p-3.5 font-mono text-sm leading-6 text-danger">
                     {t("tasks.errorLog")}{task.error}
                   </div>
                 )}
@@ -527,7 +527,7 @@ export default function TasksPage() {
                 <h3 className="font-semibold text-text-primary text-h2 mb-1.5">
                   {t("tasks.deleteModalTitle")}
                 </h3>
-                <p className="text-xs text-text-secondary leading-5">
+                <p className="text-sm leading-6 text-text-secondary">
                   {t("tasks.deleteModalDesc")}
                 </p>
                 {pendingDeleteTasks.length > 0 && (
@@ -537,7 +537,7 @@ export default function TasksPage() {
                   </p>
                 )}
                 {deleteError && (
-                  <p className="mt-3 rounded-lg bg-danger/10 border border-danger/20 px-3 py-2 text-xs text-danger">
+                  <p className="mt-3 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-2.5 text-sm text-danger">
                     {deleteError}
                   </p>
                 )}
@@ -586,7 +586,7 @@ export default function TasksPage() {
                   onClick={handleCopyLogs}
                   disabled={!logsText}
                   variant="secondary"
-                  className="h-8 py-0 px-3 text-xs"
+                  size="sm"
                 >
                   {copied ? (
                     <>
@@ -613,7 +613,7 @@ export default function TasksPage() {
             <div className="flex-1 p-6 overflow-hidden bg-black">
               <pre
                 ref={logContainerRef}
-                className="w-full h-full overflow-y-auto text-xs text-green-400 font-mono whitespace-pre-wrap select-text leading-relaxed scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent"
+                className="h-full w-full overflow-y-auto whitespace-pre-wrap font-mono text-sm leading-relaxed text-green-400 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-800"
               >
                 {logsText || t("tasks.logModalNoLogs")}
               </pre>

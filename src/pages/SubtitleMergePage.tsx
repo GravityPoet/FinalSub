@@ -229,49 +229,49 @@ export default function SubtitleMergePage() {
   };
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <h2 className="text-display font-bold tracking-tight text-text-primary">{t("merge.title")}</h2>
+    <div className="page-shell space-y-7">
+      <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("merge.title")}</h2>
 
       <div className="space-y-6">
         {/* 选择文件 */}
-        <Card className="p-5">
-          <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("merge.selectFiles")}</h3>
+        <Card className="p-6">
+          <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("merge.selectFiles")}</h3>
           <div className="space-y-3.5">
             <div className="flex items-center gap-3">
-              <Button onClick={handleSelectVideo} disabled={processing} variant="secondary" size="sm" className="h-8">
-                <FolderOpen size={12} />
+              <Button onClick={handleSelectVideo} disabled={processing} variant="secondary" size="sm">
+                <FolderOpen size={14} />
                 <span>{t("merge.selectVideo")}</span>
               </Button>
-              <span className="truncate text-xs text-text-secondary font-mono">{videoPath || t("merge.notSelected")}</span>
+              <span className="truncate font-mono text-sm text-text-secondary">{videoPath || t("merge.notSelected")}</span>
             </div>
             <div className="flex items-center gap-3">
-              <Button onClick={handleSelectSubtitle} disabled={processing} variant="secondary" size="sm" className="h-8">
-                <FolderOpen size={12} />
+              <Button onClick={handleSelectSubtitle} disabled={processing} variant="secondary" size="sm">
+                <FolderOpen size={14} />
                 <span>{t("merge.selectSubtitle")}</span>
               </Button>
-              <span className="truncate text-xs text-text-secondary font-mono">{subtitlePath || t("merge.notSelected")}</span>
+              <span className="truncate font-mono text-sm text-text-secondary">{subtitlePath || t("merge.notSelected")}</span>
             </div>
             <div className="flex items-center gap-3">
-              <Button onClick={handleSelectOutput} disabled={processing} variant="secondary" size="sm" className="h-8">
-                <FolderOpen size={12} />
+              <Button onClick={handleSelectOutput} disabled={processing} variant="secondary" size="sm">
+                <FolderOpen size={14} />
                 <span>{t("merge.selectOutput")}</span>
               </Button>
-              <span className="truncate text-xs text-text-secondary font-mono">{outputPath || t("merge.notSelected")}</span>
+              <span className="truncate font-mono text-sm text-text-secondary">{outputPath || t("merge.notSelected")}</span>
             </div>
           </div>
         </Card>
 
         {loadingMetadata && (
-          <div className="flex items-center gap-2 text-xs text-text-tertiary p-2">
+          <div className="flex items-center gap-2 p-2 text-sm text-text-tertiary">
             <Loader2 className="animate-spin h-3.5 w-3.5" />
             <span>{t("merge.analyzingMetadata")}</span>
           </div>
         )}
 
         {metadata && (
-          <Card className="p-5">
-            <h3 className="mb-3.5 font-semibold text-text-primary text-h3">{t("merge.metadataOutline")}</h3>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 text-xs font-mono">
+          <Card className="p-6">
+            <h3 className="mb-4 font-display text-h3 font-semibold text-text-primary">{t("merge.metadataOutline")}</h3>
+            <div className="grid grid-cols-2 gap-4 font-mono text-sm sm:grid-cols-4">
               <div className="p-3 bg-surface-overlay border border-border-subtle rounded-lg">
                 <span className="text-text-tertiary block mb-1 font-sans">{t("merge.resolution")}</span>
                 <span className="font-semibold text-text-primary">{metadata.width} x {metadata.height}</span>
@@ -315,8 +315,8 @@ export default function SubtitleMergePage() {
         )}
 
         {/* 字幕样式 */}
-        <Card className="p-5">
-          <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("merge.subtitleStyle")}</h3>
+        <Card className="p-6">
+          <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("merge.subtitleStyle")}</h3>
 
           <div className="mb-6 flex items-center gap-3.5 rounded-xl bg-brand-subtle border border-brand/10 p-4">
             <input
@@ -331,7 +331,7 @@ export default function SubtitleMergePage() {
               <label htmlFor="softSubtitle" className="text-sm font-semibold text-text-primary cursor-pointer select-none">
                 {t("merge.softSubtitleLabel")}
               </label>
-              <span className="text-xs text-text-secondary mt-1 leading-5">
+              <span className="mt-1 text-sm leading-6 text-text-secondary">
                 {t("merge.softSubtitleDesc")}
               </span>
             </div>
@@ -345,9 +345,9 @@ export default function SubtitleMergePage() {
                   key={p.key}
                   onClick={() => applyPreset(i)}
                   disabled={processing || softSubtitle}
-                  className={`rounded-lg border px-3 py-1.5 text-xs transition duration-150 ${
+                  className={`rounded-xl border px-3.5 py-2 text-sm transition duration-150 ${
                     preset === i
-                      ? "border-brand bg-brand-subtle text-brand-text font-semibold"
+                      ? "liquid-selected font-semibold text-brand-text"
                       : "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
@@ -359,26 +359,26 @@ export default function SubtitleMergePage() {
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("merge.fontSize")}</label>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontSize")}</label>
               <Input type="number" min={10} max={72} value={fontSize} disabled={processing || softSubtitle} onChange={(e) => setFontSize(Number(e.target.value))} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("merge.fontColor")}</label>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontColor")}</label>
               <Input type="text" value={fontColor} disabled={processing || softSubtitle} onChange={(e) => setFontColor(e.target.value)} className="h-9 font-mono" />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("merge.outlineColor")}</label>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.outlineColor")}</label>
               <Input type="text" value={outlineColor} disabled={processing || softSubtitle} onChange={(e) => setOutlineColor(e.target.value)} className="h-9 font-mono" />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("merge.marginV")}</label>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.marginV")}</label>
               <Input type="number" min={0} max={100} value={marginV} disabled={processing || softSubtitle} onChange={(e) => setMarginV(Number(e.target.value))} className="h-9" />
             </div>
           </div>
 
           <div className="mt-5">
-            <label className="mb-2 block text-xs font-medium text-text-secondary">{t("merge.previewStyle")}</label>
-            <div className="relative flex h-32 w-full items-center justify-center rounded-xl border border-border-subtle bg-black overflow-hidden shadow-inner">
+            <label className="mb-2 block text-sm font-medium text-text-secondary">{t("merge.previewStyle")}</label>
+            <div className="relative flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-border-subtle bg-black shadow-inner">
               <div className="absolute inset-0 bg-[linear-gradient(45deg,#1f2937_25%,transparent_25%),linear-gradient(-45deg,#1f2937_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#1f2937_75%),linear-gradient(-45deg,transparent_75%,#1f2937_75%)] bg-[size:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0] opacity-30"></div>
               <div
                 className="relative z-10 px-4 py-1 text-center select-none font-bold font-sans"
@@ -401,7 +401,7 @@ export default function SubtitleMergePage() {
                 {t("merge.previewPlaceholder")}
               </div>
               {softSubtitle && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 backdrop-blur-[1px] text-xs font-medium text-text-tertiary">
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 text-sm font-medium text-text-tertiary backdrop-blur-[1px]">
                   {t("merge.softSubtitlePlayerHint")}
                 </div>
               )}
@@ -410,30 +410,30 @@ export default function SubtitleMergePage() {
         </Card>
 
         {/* 烧录执行与状态 */}
-        <Card className="p-5">
+        <Card className="p-6">
           {error && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs text-danger leading-5">
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm leading-6 text-danger">
               <AlertCircle className="mt-0.5 shrink-0" size={14} />
               <span>{error}</span>
             </div>
           )}
 
           {result && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/20 bg-success/10 px-3 py-2.5 text-xs text-success leading-5">
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-success/20 bg-success/10 px-3.5 py-3 text-sm leading-6 text-success">
               <CheckCircle className="mt-0.5 shrink-0" size={14} />
               <span>{t("merge.burnCompleted").replace("{result}", result)}</span>
             </div>
           )}
 
           {notice && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning leading-5">
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm leading-6 text-warning">
               <AlertCircle className="mt-0.5 shrink-0" size={14} />
               <span>{notice}</span>
             </div>
           )}
 
           {prerequisiteHint && !error && !processing && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning leading-5">
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm leading-6 text-warning">
               <AlertCircle className="mt-0.5 shrink-0" size={14} />
               <span>{prerequisiteHint}</span>
             </div>
@@ -441,7 +441,7 @@ export default function SubtitleMergePage() {
 
           {processing && progress !== null && (
             <div className="mb-5 space-y-2">
-              <div className="flex items-center justify-between text-xs text-text-secondary">
+              <div className="flex items-center justify-between text-sm text-text-secondary">
                 <span className="flex items-center gap-1.5 font-semibold">
                   <Loader2 className="animate-spin h-3.5 w-3.5 text-brand" />
                   {t("merge.burning")}

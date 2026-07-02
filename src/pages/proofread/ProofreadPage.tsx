@@ -216,33 +216,33 @@ export default function ProofreadPage() {
 
   return (
     <ToastProvider>
-      <div className="h-full overflow-hidden flex flex-col">
-        <div className="flex-shrink-0 flex space-x-2 bg-surface-raised p-1.5 rounded-lg w-fit border border-border-subtle mb-4">
+      <div className="flex h-full flex-col overflow-hidden">
+        <div className="glass-control mb-5 flex w-fit flex-shrink-0 space-x-2 rounded-xl p-1.5">
           <button
             onClick={() => setActiveTab('new')}
-            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all duration-150 ${
+            className={`flex min-h-10 items-center rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-150 ${
               activeTab === 'new'
-                ? 'bg-brand text-white shadow-sm font-semibold'
+                ? 'bg-brand text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
             }`}
           >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            <Plus className="mr-1.5 h-4 w-4" />
             {t('proofread.newTask')}
           </button>
           <button
             onClick={() => setActiveTab('history')}
-            className={`flex items-center text-xs px-4 py-2 rounded-md font-medium transition-all duration-150 ${
+            className={`flex min-h-10 items-center rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-150 ${
               activeTab === 'history'
-                ? 'bg-brand text-white shadow-sm font-semibold'
+                ? 'bg-brand text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-surface-overlay'
             }`}
           >
-            <History className="w-3.5 h-3.5 mr-1.5" />
+            <History className="mr-1.5 h-4 w-4" />
             {t('proofread.historyTasks')}
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {activeTab === 'new' ? (
             <div className="flex-1 overflow-auto">{renderStage()}</div>
           ) : (

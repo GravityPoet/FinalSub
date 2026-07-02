@@ -38,40 +38,40 @@ function StatusBadge({
 
   if (currentStatus === "available")
     return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-brand">
-        <Download size={13} /> {t("models.notInstalled")}
+      <span className="flex items-center gap-1.5 text-sm font-semibold text-brand">
+        <Download size={15} /> {t("models.notInstalled")}
       </span>
     );
   if (currentStatus === "downloaded" || currentStatus === "done")
     return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-success">
-        <CheckCircle size={13} /> {t("models.downloaded")}
+      <span className="flex items-center gap-1.5 text-sm font-semibold text-success">
+        <CheckCircle size={15} /> {t("models.downloaded")}
       </span>
     );
   if (currentStatus === "downloading") {
     const pct = downloadInfo ? Math.round(downloadInfo.progress * 100) : 0;
     return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-warning">
-        <Clock size={13} className="animate-spin" /> {t("models.downloading")} ({pct}%)
+      <span className="flex items-center gap-1.5 text-sm font-semibold text-warning">
+        <Clock size={15} className="animate-spin" /> {t("models.downloading")} ({pct}%)
       </span>
     );
   }
   if (currentStatus === "cancelled")
     return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-text-tertiary">
-        <XCircle size={13} /> {t("models.cancelled")}
+      <span className="flex items-center gap-1.5 text-sm font-semibold text-text-tertiary">
+        <XCircle size={15} /> {t("models.cancelled")}
       </span>
     );
   if (currentStatus === "not-ready")
     return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-text-tertiary">
-        <Clock size={13} /> {t("models.lazyLoad")}
+      <span className="flex items-center gap-1.5 text-sm font-semibold text-text-tertiary">
+        <Clock size={15} /> {t("models.lazyLoad")}
       </span>
     );
   if (currentStatus === "error" || errorMsg)
     return (
-      <span className="flex items-center gap-1.5 text-xs font-medium text-danger" title={errorMsg || t("common.error")}>
-        <AlertCircle size={13} /> {t("models.error")}
+      <span className="flex items-center gap-1.5 text-sm font-semibold text-danger" title={errorMsg || t("common.error")}>
+        <AlertCircle size={15} /> {t("models.error")}
       </span>
     );
   return null;
@@ -241,22 +241,22 @@ export default function ModelsPage() {
   }, {});
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="page-shell space-y-7">
       <div className="flex items-center justify-between">
-        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("models.title")}</h2>
+        <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("models.title")}</h2>
         <Button
           onClick={refresh}
           variant="secondary"
-          className="h-8 py-0 px-3 text-xs"
+          size="sm"
         >
-          <RefreshCw size={12} />
+          <RefreshCw size={15} />
           <span>{t("models.refresh")}</span>
         </Button>
       </div>
 
       {message && (
         <div
-          className={`rounded-lg border px-3 py-2.5 text-xs font-semibold leading-5 ${
+          className={`rounded-xl border px-4 py-3 text-sm font-semibold leading-6 ${
             message.type === "ok"
               ? "border-success/20 bg-success/10 text-success"
               : "border-danger/20 bg-danger/10 text-danger"
@@ -267,8 +267,8 @@ export default function ModelsPage() {
       )}
 
       {Object.entries(engineGroups).map(([engineId, engineModels]) => (
-        <div key={engineId} className="space-y-3.5">
-          <h3 className="text-md font-semibold text-text-secondary">
+        <div key={engineId} className="space-y-4">
+          <h3 className="font-display text-h3 font-semibold text-text-secondary">
             {engineLabel(engineId)}
           </h3>
           <div className="grid gap-3.5">
@@ -282,10 +282,10 @@ export default function ModelsPage() {
                   key={model.id}
                   className="p-4"
                 >
-                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_12rem]">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
                     <div className="min-w-0">
-                      <h4 className="font-semibold text-text-primary text-base">{model.name}</h4>
-                      <p className="text-xs text-text-secondary mt-1 leading-5">{model.description}</p>
+                      <h4 className="font-display text-base font-semibold tracking-tight text-text-primary">{model.name}</h4>
+                      <p className="mt-1.5 text-sm leading-6 text-text-secondary">{model.description}</p>
                       <div className="flex flex-wrap gap-1.5 mt-3">
                         {model.languages.map((lang) => (
                           <Badge
@@ -298,22 +298,23 @@ export default function ModelsPage() {
                         ))}
                       </div>
                     </div>
-                    <div className="flex flex-col items-end justify-between gap-3 sm:pt-1">
+                    <div className="flex flex-col items-start justify-between gap-3 lg:items-end lg:pt-1">
                       <StatusBadge status={model.status} downloadInfo={downloadInfo} />
-                      <div className="flex items-center gap-2">
+                      <div className="flex w-full flex-wrap items-center justify-start gap-2 lg:justify-end">
                         {model.size_mb && (
-                          <span className="text-xs text-text-tertiary font-mono mr-1.5">{model.size_mb} MB</span>
+                          <span className="mr-1.5 shrink-0 font-mono text-sm text-text-tertiary">{model.size_mb} MB</span>
                         )}
                         {model.status === "available" && !isDownloading && (
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
                             {model.engine_id !== "sensevoice" && model.download_url && (
                               <Button
                                 type="button"
                                 onClick={() => handleDownload(model.id)}
                                 variant="primary"
-                                className="h-7 py-0 px-2.5 text-xs font-semibold"
+                                size="sm"
+                                className="min-w-[7rem]"
                               >
-                                <Download size={11} />
+                                <Download size={14} />
                                 <span>{t("models.downloadAction")}</span>
                               </Button>
                             )}
@@ -322,9 +323,10 @@ export default function ModelsPage() {
                                 type="button"
                                 onClick={() => handleImportModel(model.id)}
                                 variant="secondary"
-                                className="h-7 py-0 px-2.5 text-xs font-semibold"
+                                size="sm"
+                                className="min-w-[7.5rem]"
                               >
-                                <FileInput size={11} />
+                                <FileInput size={14} />
                                 <span>{t("models.importLocalAction")}</span>
                               </Button>
                             )}
@@ -333,9 +335,10 @@ export default function ModelsPage() {
                                 type="button"
                                 onClick={handleImportSensevoice}
                                 variant="secondary"
-                                className="h-7 py-0 px-2.5 text-xs font-semibold"
+                                size="sm"
+                                className="min-w-[7.5rem]"
                               >
-                                <FileInput size={11} />
+                                <FileInput size={14} />
                                 <span>{t("models.importAction")}</span>
                               </Button>
                             )}
@@ -346,7 +349,7 @@ export default function ModelsPage() {
                             type="button"
                             onClick={() => handleCancelDownload(model.id)}
                             variant="danger"
-                            className="h-7 py-0 px-2.5 text-xs font-semibold"
+                            size="sm"
                           >
                             <span>{t("models.cancelAction")}</span>
                           </Button>
@@ -355,7 +358,8 @@ export default function ModelsPage() {
                           <Button
                             type="button"
                             onClick={() => handleDownload(model.id)}
-                            className="h-7 py-0 px-2.5 text-xs font-semibold text-warning border-warning/20 bg-warning/10 hover:bg-warning/20"
+                            size="sm"
+                            className="border-warning/20 bg-warning/10 text-warning hover:bg-warning/20"
                           >
                             <span>{t("models.retryAction")}</span>
                           </Button>
@@ -365,10 +369,10 @@ export default function ModelsPage() {
                             type="button"
                             onClick={() => setPendingDelete(model)}
                             disabled={deleting === model.id}
-                            className="text-text-tertiary hover:text-danger disabled:opacity-50 transition p-1 rounded hover:bg-surface-overlay"
+                            className="rounded-lg p-2 text-text-tertiary transition hover:bg-surface-overlay hover:text-danger disabled:opacity-50"
                             title={t("models.deleteAction")}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={16} />
                           </button>
                         )}
                       </div>
@@ -378,7 +382,7 @@ export default function ModelsPage() {
                   {showProgress && (
                     <div className="mt-4 w-full space-y-1.5">
                       <Progress value={Number((downloadInfo.progress * 100).toFixed(1))} />
-                      <div className="flex justify-between items-center text-[10px] text-text-tertiary font-mono">
+                      <div className="flex items-center justify-between font-mono text-xs text-text-tertiary">
                         <span>{(downloadInfo.progress * 100).toFixed(0)}%</span>
                         {downloadInfo.total_bytes > 0 && (
                           <span>
@@ -405,7 +409,7 @@ export default function ModelsPage() {
               </div>
               <div className="min-w-0">
                 <h3 className="font-semibold text-text-primary text-h2 mb-1.5">{t("models.deleteModalTitle")}</h3>
-                <p className="text-xs text-text-secondary leading-5">
+                <p className="text-sm leading-6 text-text-secondary">
                   {t("models.deleteModalDesc").replace("{name}", pendingDelete.name)}
                 </p>
               </div>
@@ -434,7 +438,7 @@ export default function ModelsPage() {
         </div>
       )}
 
-      <div className="mt-8 text-xs text-text-tertiary space-y-1.5 leading-5">
+      <div className="mt-8 space-y-1.5 text-sm leading-6 text-text-tertiary">
         <p>{t("models.pathInfo")}{modelsPath}</p>
         <p>{t("models.pathDesc")}</p>
         <p>{t("models.parakeetDesc")}</p>

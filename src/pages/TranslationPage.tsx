@@ -342,10 +342,10 @@ export default function TranslationPage() {
           setVisibleSecrets({});
           setError("");
         }}
-        className={`rounded-lg border p-3.5 text-left text-sm transition-all duration-150 flex flex-col justify-between h-20 ${
+        className={`flex min-h-24 flex-col justify-between rounded-xl border p-4 text-left text-sm transition-all duration-150 ${
           isSelected
             ? provider.implemented
-              ? "border-brand bg-brand-subtle text-brand-text font-semibold shadow-sm"
+              ? "liquid-selected font-semibold text-brand-text"
               : "border-warning/35 bg-warning/10 text-warning"
             : provider.implemented
             ? "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
@@ -366,27 +366,27 @@ export default function TranslationPage() {
   };
 
   return (
-    <div className="max-w-4xl pb-10 space-y-6">
-      <h2 className="text-display font-bold tracking-tight text-text-primary">{t("translation.title")}</h2>
+    <div className="page-shell space-y-7 pb-10">
+      <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("translation.title")}</h2>
 
       {/* Provider 选择 */}
-      <Card className="p-5">
-        <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("translation.providers")}</h3>
+      <Card className="p-6">
+        <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("translation.providers")}</h3>
 
         <div className="mb-5">
-          <label className="mb-2 block text-xs font-semibold text-text-secondary tracking-wider uppercase">
+          <label className="mb-2 block text-sm font-semibold text-text-secondary">
             {t("translation.apiProvider")}
           </label>
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {apiProviders.map(renderProviderButton)}
           </div>
         </div>
 
         <div className="mb-5">
-          <label className="mb-2 block text-xs font-semibold text-text-secondary tracking-wider uppercase">
+          <label className="mb-2 block text-sm font-semibold text-text-secondary">
             {t("translation.aiProvider")}
           </label>
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {aiProviders.map(renderProviderButton)}
           </div>
         </div>
@@ -400,7 +400,7 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.requires_endpoint && (
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("translation.endpointUrl")}</label>
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.endpointUrl")}</label>
                 <Input
                   type="text"
                   value={apiUrl}
@@ -416,7 +416,7 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.requires_model && (
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-text-secondary">{t("translation.modelName")}</label>
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.modelName")}</label>
                 <Input
                   type="text"
                   value={modelName}
@@ -432,7 +432,7 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.secret_fields?.map((field) => (
               <div key={field}>
-                <label className="mb-1.5 block text-xs font-medium text-text-secondary">
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
                   {secretFieldLabel(field)}
                 </label>
                 <div className="relative">
@@ -470,7 +470,7 @@ export default function TranslationPage() {
         )}
 
         {selectedProviderUnavailable && (
-          <div className="mb-5 flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+          <div className="mb-5 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning">
             <AlertCircle className="mt-0.5 shrink-0" size={14} />
             <span className="leading-5">{t("translation.notImplementedSelect").replace("{name}", selectedProviderInfo?.name ?? "").replace("{available}", availableProviderNames)}</span>
           </div>
@@ -486,16 +486,16 @@ export default function TranslationPage() {
             {t("translation.saveBtn")}
           </Button>
           {successMsg && (
-            <span className="text-xs text-success flex items-center gap-1.5 font-medium">
-              <CheckCircle size={13} /> {successMsg}
+            <span className="flex items-center gap-1.5 text-sm font-medium text-success">
+              <CheckCircle size={15} /> {successMsg}
             </span>
           )}
         </div>
       </Card>
 
       {/* 测试翻译 */}
-      <Card className="p-5">
-        <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("translation.testTitle")}</h3>
+      <Card className="p-6">
+        <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("translation.testTitle")}</h3>
 
         <div className="mb-4">
           <label className="mb-1.5 block text-sm font-medium text-text-secondary">
@@ -509,16 +509,16 @@ export default function TranslationPage() {
         </div>
 
         {error && (
-          <div className="mb-4 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs text-danger">
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm text-danger">
             <AlertCircle className="mt-0.5 shrink-0" size={14} />
             <span>{error}</span>
           </div>
         )}
 
         {testResult && (
-          <div className="mb-4 rounded-lg border border-success/20 bg-success/10 px-3.5 py-3">
-            <div className="flex items-center gap-1.5 text-xs text-success font-semibold mb-1.5">
-              <CheckCircle size={13} /> {t("translation.testResult")}
+          <div className="mb-4 rounded-xl border border-success/20 bg-success/10 px-3.5 py-3">
+            <div className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-success">
+              <CheckCircle size={15} /> {t("translation.testResult")}
             </div>
             <p className="text-sm text-text-primary leading-relaxed">{testResult}</p>
           </div>
@@ -536,7 +536,7 @@ export default function TranslationPage() {
           </Button>
         </div>
 
-        <p className="mt-3.5 text-[11px] text-text-tertiary leading-4">
+        <p className="mt-3.5 text-sm leading-5 text-text-tertiary">
           {t("translation.testNotice")}
         </p>
       </Card>

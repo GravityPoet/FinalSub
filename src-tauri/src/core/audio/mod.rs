@@ -161,6 +161,19 @@ pub fn parse_current_time_ms(line: &str) -> Option<u64> {
     None
 }
 
+pub fn parse_progress_time_ms(line: &str) -> Option<u64> {
+    if let Some(raw) = line.strip_prefix("out_time_us=") {
+        return raw.trim().parse::<u64>().ok().map(|us| us / 1000);
+    }
+    if let Some(raw) = line.strip_prefix("out_time_ms=") {
+        return raw.trim().parse::<u64>().ok().map(|us| us / 1000);
+    }
+    if let Some(raw) = line.strip_prefix("out_time=") {
+        return parse_ffmpeg_time(raw.trim());
+    }
+    parse_current_time_ms(line)
+}
+
 fn parse_ffmpeg_time(time: &str) -> Option<u64> {
     let parts: Vec<&str> = time.split(':').collect();
     if parts.len() != 3 {
@@ -256,6 +269,22 @@ mod tests {
         assert_eq!(
             parse_current_time_ms("frame= 100 fps=30 time=00:01:05.20 bitrate=1000kbits/s"),
             Some(65200)
+        );
+    }
+
+    #[test]
+    fn parse_ffmpeg_progress_time() {
+        assert_eq!(
+            parse_progress_time_ms("out_time_us=219939438"),
+            Some(219939)
+        );
+        assert_eq!(
+            parse_progress_time_ms("out_time_ms=219939438"),
+            Some(219939)
+        );
+        assert_eq!(
+            parse_progress_time_ms("out_time=00:03:39.939438"),
+            Some(219939)
         );
     }
 

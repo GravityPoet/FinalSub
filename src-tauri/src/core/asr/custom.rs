@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
 use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
 use crate::core::subtitle::SubtitleTrack;
 use crate::error::{FinalSubError, Result};
+use async_trait::async_trait;
+use std::path::PathBuf;
 
 pub struct CustomCommandEngine {
     whisper_command: String,
@@ -24,7 +24,7 @@ fn split_arguments(cmd: &str) -> Vec<String> {
     let mut in_double_quote = false;
     let mut in_single_quote = false;
     let mut escaped = false;
-    
+
     for c in cmd.chars() {
         if escaped {
             current.push(c);
@@ -69,7 +69,7 @@ impl AsrEngine for CustomCommandEngine {
     async fn prepare(&self, _model: &AsrModelRef) -> Result<()> {
         if self.whisper_command.trim().is_empty() {
             return Err(FinalSubError::Validation(
-                "自定义命令为空，请先在设置中配置自定义 ASR 命令。".into()
+                "自定义命令为空，请先在设置中配置自定义 ASR 命令。".into(),
             ));
         }
         Ok(())
@@ -86,18 +86,26 @@ impl AsrEngine for CustomCommandEngine {
             return Err(FinalSubError::Validation("自定义命令为空".into()));
         }
 
-        progress.send(ProgressUpdate {
-            progress: 0.1,
-            message: "正在准备自定义转录命令...".into(),
-        }).await.ok();
+        progress
+            .send(ProgressUpdate {
+                progress: 0.02,
+                message: "正在准备自定义转录命令...".into(),
+            })
+            .await
+            .ok();
 
         let raw_args = split_arguments(raw_cmd);
         if raw_args.is_empty() {
-            return Err(FinalSubError::Validation("解析自定义命令得到的参数列表为空".into()));
+            return Err(FinalSubError::Validation(
+                "解析自定义命令得到的参数列表为空".into(),
+            ));
         }
 
         let model_path = self.models_dir.join(&job.model.model_id);
-        let output_prefix = job.output_path.strip_suffix(".srt").unwrap_or(&job.output_path);
+        let output_prefix = job
+            .output_path
+            .strip_suffix(".srt")
+            .unwrap_or(&job.output_path);
 
         let mut processed_args = Vec::new();
         for arg in raw_args {
@@ -106,7 +114,7 @@ impl AsrEngine for CustomCommandEngine {
                 .replace("{output}", &job.output_path)
                 .replace("{output_prefix}", output_prefix)
                 .replace("{model}", &model_path.to_string_lossy());
-            
+
             if let Some(ref lang) = job.language {
                 new_arg = new_arg.replace("{language}", lang);
             } else {
@@ -115,19 +123,23 @@ impl AsrEngine for CustomCommandEngine {
             processed_args.push(new_arg);
         }
 
-        progress.send(ProgressUpdate {
-            progress: 0.3,
-            message: format!("正在执行自定义命令: {}...", processed_args[0]),
-        }).await.ok();
+        progress
+            .send(ProgressUpdate {
+                progress: 0.05,
+                message: format!("正在执行自定义命令: {}...", processed_args[0]),
+            })
+            .await
+            .ok();
 
         let mut cmd = tokio::process::Command::new(&processed_args[0]);
         if processed_args.len() > 1 {
             cmd.args(&processed_args[1..]);
         }
 
-        let output = cmd.output().await.map_err(|e| {
-            FinalSubError::Validation(format!("执行自定义命令失败: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| FinalSubError::Validation(format!("执行自定义命令失败: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -138,10 +150,13 @@ impl AsrEngine for CustomCommandEngine {
             )));
         }
 
-        progress.send(ProgressUpdate {
-            progress: 0.9,
-            message: "自定义命令执行成功，正在读取字幕...".into(),
-        }).await.ok();
+        progress
+            .send(ProgressUpdate {
+                progress: 0.98,
+                message: "自定义命令执行成功，正在读取字幕...".into(),
+            })
+            .await
+            .ok();
 
         let srt_path = std::path::Path::new(&job.output_path);
         if !srt_path.exists() {
@@ -151,9 +166,15 @@ impl AsrEngine for CustomCommandEngine {
             )));
         }
 
-        let srt_content = tokio::fs::read_to_string(srt_path).await.map_err(|e| {
-            FinalSubError::Validation(format!("读取输出字幕文件失败: {}", e))
-        })?;
+        let srt_content = tokio::fs::read_to_string(srt_path)
+            .await
+            .map_err(|e| FinalSubError::Validation(format!("读取输出字幕文件失败: {}", e)))?;
+
+        if srt_content.trim().is_empty() {
+            return Err(FinalSubError::Validation(
+                "自定义命令未生成任何字幕内容，请检查命令模板、输入音频和输出路径。".into(),
+            ));
+        }
 
         SubtitleTrack::from_srt(&srt_content)
     }
@@ -167,11 +188,23 @@ mod tests {
     fn test_split_arguments() {
         // Simple arguments
         let args = split_arguments("whisper-cli -m model.bin -f input.wav");
-        assert_eq!(args, vec!["whisper-cli", "-m", "model.bin", "-f", "input.wav"]);
+        assert_eq!(
+            args,
+            vec!["whisper-cli", "-m", "model.bin", "-f", "input.wav"]
+        );
 
         // Quoted arguments
         let args = split_arguments("whisper-cli -m \"my model path.bin\" -f 'my input.wav'");
-        assert_eq!(args, vec!["whisper-cli", "-m", "my model path.bin", "-f", "my input.wav"]);
+        assert_eq!(
+            args,
+            vec![
+                "whisper-cli",
+                "-m",
+                "my model path.bin",
+                "-f",
+                "my input.wav"
+            ]
+        );
 
         // Escaped whitespace
         let args = split_arguments("whisper-cli -m my\\ model\\ path.bin");

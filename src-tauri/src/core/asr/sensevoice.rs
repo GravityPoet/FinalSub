@@ -1,8 +1,8 @@
+use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
+use crate::core::subtitle::{Cue, SubtitleTrack};
+use crate::error::{FinalSubError, Result};
 use async_trait::async_trait;
 use std::path::PathBuf;
-use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
-use crate::core::subtitle::{SubtitleTrack, Cue};
-use crate::error::{FinalSubError, Result};
 
 pub struct SenseVoiceEngine {
     models_dir: PathBuf,
@@ -221,12 +221,16 @@ impl AsrEngine for SenseVoiceEngine {
         let tokens_path = model_dir.join("tokens.txt");
         let audio_path = job.audio_path.clone();
 
-        progress.send(ProgressUpdate {
-            progress: 0.2,
-            message: "正在初始化 SenseVoice 引擎...".into(),
-        }).await.ok();
+        progress
+            .send(ProgressUpdate {
+                progress: 0.05,
+                message: "正在初始化 SenseVoice 引擎...".into(),
+            })
+            .await
+            .ok();
 
-        type DecodeResult = std::result::Result<(String, Vec<String>, Option<Vec<f32>>, u64), String>;
+        type DecodeResult =
+            std::result::Result<(String, Vec<String>, Option<Vec<f32>>, u64), String>;
         let handle = tokio::task::spawn_blocking(move || -> DecodeResult {
             let mut recognizer_config = sherpa_onnx::OfflineRecognizerConfig::default();
 
@@ -251,7 +255,9 @@ impl AsrEngine for SenseVoiceEngine {
             stream.accept_waveform(wave.sample_rate(), wave.samples());
             recognizer.decode_multiple_streams(&[&stream]);
 
-            let res = stream.get_result().ok_or_else(|| "识别结果为空".to_string())?;
+            let res = stream
+                .get_result()
+                .ok_or_else(|| "识别结果为空".to_string())?;
             let sample_rate = wave.sample_rate().max(1) as u64;
             let duration = (wave.samples().len() as u64 * 1000) / sample_rate;
 
@@ -285,12 +291,20 @@ impl AsrEngine for SenseVoiceEngine {
                 .map_err(FinalSubError::Validation)?,
         };
 
-        progress.send(ProgressUpdate {
-            progress: 0.9,
-            message: "SenseVoice 识别完成，正在格式化字幕...".into(),
-        }).await.ok();
+        progress
+            .send(ProgressUpdate {
+                progress: 0.98,
+                message: "SenseVoice 识别完成，正在格式化字幕...".into(),
+            })
+            .await
+            .ok();
 
         let cues = build_cues(&raw_text, &tokens, timestamps.as_deref(), duration_ms);
+        if cues.is_empty() {
+            return Err(FinalSubError::Validation(
+                "SenseVoice 未识别到任何字幕内容，请确认音频中有人声，或尝试切换语言/模型。".into(),
+            ));
+        }
         Ok(SubtitleTrack { cues })
     }
 }
@@ -303,7 +317,7 @@ mod tests {
     fn test_clean_sensevoice_text() {
         let text = "<|zh|>你好！<|EMO_HAPPY|>今天天气真好。";
         assert_eq!(clean_sensevoice_text(text), "你好！今天天气真好。");
-        
+
         let text_no_tag = "普通文本无标签";
         assert_eq!(clean_sensevoice_text(text_no_tag), "普通文本无标签");
     }
@@ -312,8 +326,11 @@ mod tests {
     fn test_split_sentences() {
         let text = "你好！今天天气真好。我们要去公园吗？";
         let sentences = split_sentences(text);
-        assert_eq!(sentences, vec!["你好！", "今天天气真好。", "我们要去公园吗？"]);
-        
+        assert_eq!(
+            sentences,
+            vec!["你好！", "今天天气真好。", "我们要去公园吗？"]
+        );
+
         let text_newline = "第一行\n第二行！";
         let sentences_nl = split_sentences(text_newline);
         assert_eq!(sentences_nl, vec!["第一行", "第二行！"]);

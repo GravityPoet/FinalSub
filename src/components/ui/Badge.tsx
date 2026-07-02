@@ -8,7 +8,7 @@ export function Badge({
   children,
   ...props
 }: BadgeProps) {
-  const base = "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium border transition-colors";
+  const base = "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold leading-none transition-colors";
   
   const variants = {
     default: "bg-surface-overlay border-border-default text-text-secondary",

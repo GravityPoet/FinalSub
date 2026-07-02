@@ -154,11 +154,10 @@ export default function HomePage() {
     ? t("home.subFile")
     : t("home.mediaFile");
     
-  const prerequisiteHint = !selectedPath
+  const missingFileHint = !selectedPath
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
-    : !canStartTask
-      ? t("home.prereqModel")
-      : "";
+    : "";
+  const modelPrerequisiteHint = selectedPath && !canStartTask ? t("home.prereqModel") : "";
 
   const getTaskTypeLabel = (val: string) => {
     switch (val) {
@@ -185,11 +184,11 @@ export default function HomePage() {
 
   const handleCreate = async () => {
     if (!selectedPath) {
-      setError(prerequisiteHint || (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia")));
+      setError(missingFileHint || (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia")));
       return;
     }
     if (!canStartTask) {
-      setError(prerequisiteHint || t("home.prereqModel"));
+      setError(modelPrerequisiteHint || t("home.prereqModel"));
       return;
     }
     setCreating(true);
@@ -236,11 +235,11 @@ export default function HomePage() {
   };
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <h2 className="text-display font-bold tracking-tight text-text-primary">{t("home.title")}</h2>
+    <div className="page-shell space-y-7">
+      <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("home.title")}</h2>
 
       {updateInfo && (
-        <div className="flex items-center justify-between rounded-xl bg-info/10 border border-info/20 p-4">
+        <div className="flex items-center justify-between rounded-xl border border-info/20 bg-info/10 p-4">
           <div className="flex items-center gap-3">
             <AlertCircle className="text-info shrink-0" size={18} />
             <div className="text-sm text-text-secondary">
@@ -260,17 +259,17 @@ export default function HomePage() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_21rem]">
         <div className="space-y-6">
           {/* 文件选择 */}
           <Card className="p-5">
             <div className="mb-4 flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-subtle text-brand">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-subtle text-brand">
                 <FileVideo size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-text-primary text-h2">{t("home.newTask")}</h3>
-                <p className="truncate text-xs text-text-secondary mt-0.5">
+                <h3 className="font-display text-h2 font-semibold text-text-primary">{t("home.newTask")}</h3>
+                <p className="mt-1 truncate text-sm text-text-secondary">
                   {selectedPath ? fileNameFromPath(selectedPath) : `${t("home.noFileSelected")} (${selectedFileKind})`}
                 </p>
               </div>
@@ -278,13 +277,13 @@ export default function HomePage() {
 
             {selectedPath && (
               <div className="mb-4 rounded-lg border border-border-subtle bg-surface-overlay px-3 py-2.5">
-                <p className="truncate font-mono text-xs text-text-secondary" title={selectedPath}>
+                <p className="truncate font-mono text-sm text-text-secondary" title={selectedPath}>
                   {selectedPath}
                 </p>
                 {mediaMetadata && (
-                  <div className="mt-2.5 border-t border-border-default pt-2.5 text-xs text-text-secondary space-y-1">
+                  <div className="mt-2.5 space-y-1 border-t border-border-default pt-2.5 text-sm text-text-secondary">
                     <div className="font-semibold text-text-primary mb-1">{t("home.mediaInfo")}:</div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                       <div>{t("home.miDuration")}: {mediaMetadata.duration_string} ({mediaMetadata.duration_seconds.toFixed(1)}s)</div>
                       {mediaMetadata.width > 0 && <div>{t("home.miResolution")}: {mediaMetadata.width}x{mediaMetadata.height}</div>}
                       {mediaMetadata.fps > 0 && <div>{t("home.miFps")}: {mediaMetadata.fps.toFixed(2)} fps</div>}
@@ -323,12 +322,12 @@ export default function HomePage() {
 
           {/* 任务配置 */}
           <Card className="p-5">
-            <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("home.taskConfig")}</h3>
+            <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("home.taskConfig")}</h3>
 
             {/* 任务类型 */}
             <div className="mb-4">
               <label className="mb-2 block text-sm font-medium text-text-secondary">{t("home.taskType")}</label>
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-3 gap-3">
                 {taskTypes.map((t) => {
                   const Icon = t.icon;
                   return (
@@ -342,13 +341,13 @@ export default function HomePage() {
                         setTaskType(nextTaskType);
                         setError("");
                       }}
-                      className={`flex flex-col items-center gap-1.5 rounded-lg border p-3.5 text-xs transition-all duration-150 ${
+                      className={`flex min-h-16 flex-col items-center justify-center gap-1.5 rounded-xl border p-3 text-sm transition-all duration-150 ${
                         taskType === t.value
-                          ? "border-brand bg-brand-subtle text-brand-text shadow-sm font-semibold"
+                          ? "liquid-selected font-semibold text-brand-text"
                           : "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
                       }`}
                     >
-                      <Icon size={16} />
+                      <Icon size={18} />
                       <span>{getTaskTypeLabel(t.value)}</span>
                     </button>
                   );
@@ -387,7 +386,7 @@ export default function HomePage() {
             </div>
 
             {taskType === "translate-only" && (
-              <div className="mb-4 rounded-lg bg-surface-overlay border border-border-subtle p-3 text-xs text-text-secondary leading-5">
+              <div className="mb-4 rounded-xl border border-border-subtle bg-surface-overlay p-3.5 text-sm leading-6 text-text-secondary">
                 {t("home.transOnlyInfo")}
               </div>
             )}
@@ -433,9 +432,9 @@ export default function HomePage() {
                       type="button"
                       aria-pressed={translationContentMode === mode.value}
                       onClick={() => setTranslationContentMode(mode.value)}
-                      className={`min-h-[4.75rem] rounded-lg border px-3 py-2.5 text-left text-xs transition-all duration-150 ${
+                      className={`min-h-20 rounded-xl border px-3 py-2.5 text-left text-sm transition-all duration-150 ${
                         translationContentMode === mode.value
-                          ? "border-brand bg-brand-subtle text-brand-text shadow-sm"
+                          ? "liquid-selected text-brand-text"
                           : "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
                       }`}
                     >
@@ -462,41 +461,25 @@ export default function HomePage() {
               </Select>
             </div>
 
-            {engineId === "parakeet-mlx" && (
-              <div className="mb-4 text-xs text-brand-text bg-brand-subtle/40 border border-brand/10 p-3 rounded-lg leading-5">
-                {t("home.parakeetNotice")}
-              </div>
-            )}
-
-            {prerequisiteHint && (
+            {modelPrerequisiteHint && (
               <div
                 id="task-prerequisite-hint"
-                className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning"
+                className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning"
               >
                 <AlertCircle size={14} className="shrink-0" />
-                <span>{prerequisiteHint}</span>
-                {!selectedPath ? (
-                  <button
-                    type="button"
-                    onClick={handleSelectMedia}
-                    className="font-medium underline hover:text-warning/80"
-                  >
-                    {t("home.selectModelNow")}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => navigate("/models")}
-                    className="font-medium underline hover:text-warning/80"
-                  >
-                    {t("home.openModelManage")}
-                  </button>
-                )}
+                <span>{modelPrerequisiteHint}</span>
+                <button
+                  type="button"
+                  onClick={() => navigate("/models")}
+                  className="font-medium underline hover:text-warning/80"
+                >
+                  {t("home.openModelManage")}
+                </button>
               </div>
             )}
 
             {taskNeedsAsr && mediaMetadata && mediaMetadata.audio_sample_rate && mediaMetadata.audio_sample_rate !== 16000 && (
-              <div className="mb-4 flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs text-warning">
+              <div className="mb-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning">
                 <AlertCircle className="mt-0.5 shrink-0" size={14} />
                 <span>
                   {t("home.resampleHint", { rate: mediaMetadata.audio_sample_rate })}
@@ -510,8 +493,8 @@ export default function HomePage() {
                 type="button"
                 onClick={handleCreate}
                 disabled={creating}
-                aria-describedby={prerequisiteHint ? "task-prerequisite-hint" : undefined}
-                title={prerequisiteHint || undefined}
+                aria-describedby={modelPrerequisiteHint ? "task-prerequisite-hint" : undefined}
+                title={modelPrerequisiteHint || undefined}
                 variant="primary"
               >
                 <Play size={14} />
@@ -531,24 +514,24 @@ export default function HomePage() {
         </div>
 
         {/* 系统信息 */}
-        <Card className="p-5 h-fit">
-          <h3 className="mb-4 font-semibold text-text-primary text-h2">{t("home.appInfo")}</h3>
+        <Card className="h-fit p-5">
+          <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("home.appInfo")}</h3>
           <dl className="space-y-3.5">
             <div className="flex justify-between items-center gap-3">
-              <dt className="text-xs text-text-secondary">{t("home.appName")}</dt>
-              <dd className="min-w-0 break-all text-right font-mono text-xs text-text-primary">
+              <dt className="text-sm text-text-secondary">{t("home.appName")}</dt>
+              <dd className="min-w-0 break-all text-right font-mono text-sm text-text-primary">
                 {appInfo?.name ?? t("home.loading")}
               </dd>
             </div>
             <div className="flex justify-between items-center gap-3">
-              <dt className="text-xs text-text-secondary">{t("home.version")}</dt>
-              <dd className="min-w-0 text-right font-mono text-xs text-text-primary">
+              <dt className="text-sm text-text-secondary">{t("home.version")}</dt>
+              <dd className="min-w-0 text-right font-mono text-sm text-text-primary">
                 {appInfo?.version ?? t("home.loading")}
               </dd>
             </div>
             <div className="flex justify-between items-center gap-3">
-              <dt className="text-xs text-text-secondary">FFmpeg</dt>
-              <dd className="min-w-0 text-right text-xs text-text-primary">
+              <dt className="text-sm text-text-secondary">FFmpeg</dt>
+              <dd className="min-w-0 text-right text-sm text-text-primary">
                 {ffmpegVersion === "detecting" ? (
                   <span className="text-text-tertiary">{t("home.detecting")}</span>
                 ) : ffmpegVersion === "unavailable" ? (
