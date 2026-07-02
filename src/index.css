@@ -3,50 +3,37 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* 5.1 品牌色阶 */
-  --color-violet-50: #f5f3ff;
-  --color-violet-100: #ede9fe;
-  --color-violet-200: #ddd6fe;
-  --color-violet-300: #c4b5fd;
-  --color-violet-400: #a78bfa;
-  --color-violet-500: #8b5cf6;
-  --color-violet-600: #7c3aed;
-  --color-violet-700: #6d28d9;
-  --color-violet-800: #5b21b6;
-  --color-violet-900: #4c1d95;
-  --color-violet-950: #2e1065;
-
-  /* 亮色语义变量 */
-  --color-app-bg: #fafafb;
-  --color-surface: #ffffff;
-  --color-surface-raised: #ffffff;
-  --color-surface-overlay: #ffffff;
-  --color-border-subtle: #eef0f3;
-  --color-border-default: #e1e4e9;
-  --color-border-strong: #cfd4dc;
-  --color-text-primary: #0f1115;
-  --color-text-secondary: #5a6473;
-  --color-text-tertiary: #8b94a3;
-  --color-brand: #7c3aed;
-  --color-brand-hover: #6d28d9;
-  --color-brand-subtle: rgba(124, 58, 237, 0.10);
-  --color-brand-text: #6d28d9;
-  --color-success: #059669;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
-  --color-info: #2563eb;
+  /* macOS / Liquid Glass inspired semantic variables */
+  --color-app-bg: #f5f5f7;
+  --color-surface: rgba(255, 255, 255, 0.78);
+  --color-surface-raised: rgba(255, 255, 255, 0.92);
+  --color-surface-overlay: rgba(255, 255, 255, 0.64);
+  --color-border-subtle: rgba(29, 29, 31, 0.08);
+  --color-border-default: rgba(29, 29, 31, 0.13);
+  --color-border-strong: rgba(29, 29, 31, 0.22);
+  --color-text-primary: #1d1d1f;
+  --color-text-secondary: rgba(29, 29, 31, 0.68);
+  --color-text-tertiary: rgba(29, 29, 31, 0.46);
+  --color-brand: #0071e3;
+  --color-brand-hover: #0066cc;
+  --color-brand-subtle: rgba(0, 113, 227, 0.12);
+  --color-brand-text: #0066cc;
+  --color-success: #1d9a68;
+  --color-warning: #b76e00;
+  --color-danger: #d70015;
+  --color-info: #0071e3;
 
   /* 圆角 */
-  --radius-sm: 6px;
+  --radius-sm: 8px;
   --radius-md: 10px;
   --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-xl: 18px;
 
   /* 阴影 */
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-  --shadow-lg: 0 12px 32px rgba(0,0,0,0.12);
-  --shadow-brand-glow: 0 0 0 1px rgba(124, 58, 237, 0.2), 0 4px 12px rgba(124, 58, 237, 0.1);
+  --shadow-sm: 0 1px 1px rgba(0,0,0,0.04), 0 6px 18px rgba(0,0,0,0.05);
+  --shadow-md: 0 1px 2px rgba(0,0,0,0.06), 0 12px 34px rgba(0,0,0,0.08);
+  --shadow-lg: 0 18px 54px rgba(0,0,0,0.16);
+  --shadow-brand-glow: 0 0 0 1px rgba(0, 113, 227, 0.22), 0 10px 28px rgba(0, 113, 227, 0.18);
 
   /* 动效 */
   --duration-fast: 120ms;
@@ -58,30 +45,30 @@
 
 .dark {
   /* 暗色语义变量 */
-  --color-app-bg: #0b0c0f;
-  --color-surface: #131519;
-  --color-surface-raised: #1a1d23;
-  --color-surface-overlay: #21252c;
-  --color-border-subtle: #23272e;
-  --color-border-default: #2c313a;
-  --color-border-strong: #3a4150;
-  --color-text-primary: #f2f4f7;
-  --color-text-secondary: #aab3c0;
-  --color-text-tertiary: #6b7480;
-  --color-brand: #7c3aed;
-  --color-brand-hover: #8b5cf6;
-  --color-brand-subtle: rgba(124, 58, 237, 0.14);
-  --color-brand-text: #c4b5fd;
+  --color-app-bg: #111113;
+  --color-surface: rgba(38, 38, 41, 0.68);
+  --color-surface-raised: rgba(48, 48, 52, 0.82);
+  --color-surface-overlay: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255,255,255,0.09);
+  --color-border-default: rgba(255,255,255,0.14);
+  --color-border-strong: rgba(255,255,255,0.24);
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: rgba(245,245,247,0.72);
+  --color-text-tertiary: rgba(245,245,247,0.46);
+  --color-brand: #0a84ff;
+  --color-brand-hover: #409cff;
+  --color-brand-subtle: rgba(10, 132, 255, 0.18);
+  --color-brand-text: #7dc1ff;
   --color-success: #10b981;
   --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --color-info: #3b82f6;
+  --color-danger: #ff453a;
+  --color-info: #0a84ff;
 
   /* 阴影（暗色用深投影 + 品牌微光） */
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.30);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.35);
-  --shadow-lg: 0 12px 32px rgba(0,0,0,0.45);
-  --shadow-brand-glow: 0 0 0 1px rgba(124,58,237,.40), 0 4px 16px rgba(124,58,237,.25);
+  --shadow-sm: 0 1px 1px rgba(0,0,0,0.35), 0 10px 24px rgba(0,0,0,0.30);
+  --shadow-md: 0 1px 2px rgba(0,0,0,0.45), 0 18px 42px rgba(0,0,0,0.40);
+  --shadow-lg: 0 24px 64px rgba(0,0,0,0.55);
+  --shadow-brand-glow: 0 0 0 1px rgba(10,132,255,.36), 0 12px 32px rgba(10,132,255,.28);
 }
 
 @theme {
@@ -109,14 +96,28 @@
   --radius-lg: var(--radius-lg);
   --radius-xl: var(--radius-xl);
 
-  --font-sans: "SF Pro Text", "SF Pro Display", "Inter var", system-ui, -apple-system, sans-serif;
+  --font-sans: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+  --font-display: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+
+  --text-display: 1.6rem;
+  --text-display--line-height: 1.95rem;
+  --text-display--letter-spacing: -0.018em;
+  --text-display--font-weight: 700;
+  --text-h2: 1.16rem;
+  --text-h2--line-height: 1.45rem;
+  --text-h2--letter-spacing: -0.012em;
+  --text-h2--font-weight: 650;
+  --text-h3: 1.06rem;
+  --text-h3--line-height: 1.38rem;
+  --text-h3--letter-spacing: -0.01em;
+  --text-h3--font-weight: 650;
 }
 
 :root {
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 21px;
+  font-size: 15px;
+  line-height: 1.45;
   font-weight: 400;
   color: var(--color-text-primary);
   background-color: var(--color-app-bg);
@@ -132,4 +133,46 @@ body {
   color: var(--color-text-primary);
   margin: 0;
   min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(0, 113, 227, 0.22);
+}
+
+@layer components {
+  .page-shell {
+    width: 100%;
+    max-width: 80rem;
+    margin-inline: auto;
+    padding-bottom: 3rem;
+  }
+
+  .glass-panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: var(--shadow-sm);
+    backdrop-filter: saturate(180%) blur(28px);
+    -webkit-backdrop-filter: saturate(180%) blur(28px);
+  }
+
+  .glass-control {
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border-default);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 1px 1px rgba(0,0,0,0.04);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+  }
+
+  .liquid-selected {
+    background: color-mix(in srgb, var(--color-brand) 13%, transparent);
+    border-color: color-mix(in srgb, var(--color-brand) 38%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 8px 22px rgba(0,113,227,0.10);
+  }
 }

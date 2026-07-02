@@ -1,9 +1,11 @@
 use keyring::Entry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tauri::Manager;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, RwLock};
 
 use crate::commands::{default_local_llm_dir, resolve_sidecar, whisper_models_dir};
@@ -17,7 +19,12 @@ use crate::core::translation::{
 };
 
 const MAX_OUTPUT_FILE_NAME_BYTES: usize = 240;
+const AUDIO_PROGRESS_END: f32 = 0.15;
+const ASR_PROGRESS_START: f32 = AUDIO_PROGRESS_END;
+const ASR_PROGRESS_END_WITH_TRANSLATION: f32 = 0.80;
+const ASR_PROGRESS_END_GENERATE_ONLY: f32 = 0.95;
 const TRANSLATION_PROGRESS_START: f32 = 0.80;
+const TRANSLATION_ONLY_PROGRESS_START: f32 = 0.05;
 const TRANSLATION_PROGRESS_END: f32 = 0.95;
 const AI_TRANSLATION_MAX_BATCH_CUES: usize = 24;
 const AI_TRANSLATION_MAX_BATCH_CHARS: usize = 4_000;
@@ -119,8 +126,21 @@ async fn run_task_impl(
     }
 
     // 2. 并发限流队列等待
-    update_task_progress(app, tasks.clone(), task_id, 0.0, "排队中，等待空闲并发槽...").await;
-    write_task_log(app, &app_config_dir, task_id, "任务进入队列，等待并发通道...").await;
+    update_task_progress(
+        app,
+        tasks.clone(),
+        task_id,
+        0.0,
+        "排队中，等待空闲并发槽...",
+    )
+    .await;
+    write_task_log(
+        app,
+        &app_config_dir,
+        task_id,
+        "任务进入队列，等待并发通道...",
+    )
+    .await;
 
     let state = app.state::<crate::state::AppState>();
     let sem = {
@@ -161,7 +181,13 @@ async fn run_task_impl(
             emit_task_update_internal(app, &t_clone);
         }
     }
-    write_task_log(app, &app_config_dir, task_id, "已获得并发通道，任务开始运行").await;
+    write_task_log(
+        app,
+        &app_config_dir,
+        task_id,
+        "已获得并发通道，任务开始运行",
+    )
+    .await;
 
     let mut current_track: Option<SubtitleTrack> = None;
 
@@ -217,76 +243,115 @@ async fn run_task_impl(
                     "发现已提取的音频文件，跳过音频提取阶段",
                 )
                 .await;
-                update_task_progress(app, tasks.clone(), task_id, 0.15, "音频提取已跳过").await;
+                update_task_progress(
+                    app,
+                    tasks.clone(),
+                    task_id,
+                    AUDIO_PROGRESS_END,
+                    "音频提取已跳过",
+                )
+                .await;
             }
 
             if !audio_extracted {
                 update_task_progress(app, tasks.clone(), task_id, 0.0, "正在提取音频...").await;
 
                 let ffmpeg_path = resolve_sidecar(app, "ffmpeg")?;
-                let extract_args = crate::core::audio::extract_audio_args(
+                let mut extract_args = crate::core::audio::extract_audio_args(
                     &task.media_path,
                     &audio_output_path.to_string_lossy(),
+                );
+                extract_args.splice(
+                    0..0,
+                    [
+                        "-nostats".to_string(),
+                        "-progress".to_string(),
+                        "pipe:2".to_string(),
+                    ],
                 );
 
                 let mut ffmpeg_cmd = tokio::process::Command::new(&ffmpeg_path);
                 ffmpeg_cmd.args(&extract_args);
+                ffmpeg_cmd.stdout(Stdio::null());
+                ffmpeg_cmd.stderr(Stdio::piped());
                 ffmpeg_cmd.kill_on_drop(true);
 
-                let ffmpeg_fut = ffmpeg_cmd.output();
-                tokio::pin!(ffmpeg_fut);
+                let mut ffmpeg_child = ffmpeg_cmd
+                    .spawn()
+                    .map_err(|e| format!("运行 FFmpeg 提取音频失败：{}", e))?;
+                let stderr = ffmpeg_child
+                    .stderr
+                    .take()
+                    .ok_or_else(|| "无法读取 FFmpeg 进度输出".to_string())?;
+                let mut stderr_lines = tokio::io::BufReader::new(stderr).lines();
+                let mut stderr_buf = String::new();
+                let mut stderr_done = false;
+                let mut total_duration_ms: Option<u64> = None;
+                let wait_fut = ffmpeg_child.wait();
+                tokio::pin!(wait_fut);
 
-                let ffmpeg_res = tokio::select! {
-                    res = &mut ffmpeg_fut => {
-                        res.map_err(|e| format!("运行 FFmpeg 提取音频失败：{}", e))?
-                    }
-                    _ = cancel_rx.changed() => {
-                        if *cancel_rx.borrow() {
-                            let current_status = {
-                                let task_map = tasks.read().await;
-                                task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-                            };
-                            if current_status == TaskStatus::Paused {
-                                write_task_log(app, &app_config_dir, task_id, "音频提取已暂停").await;
-                                return Ok(());
-                            }
-                            update_task_cancelled(app, tasks, task_id).await;
-                            return Ok(());
-                        }
-                        loop {
-                            tokio::select! {
-                                res = &mut ffmpeg_fut => {
-                                    break res.map_err(|e| format!("运行 FFmpeg 提取音频失败：{}", e))?;
-                                }
-                                change_res = cancel_rx.changed() => {
-                                    if change_res.is_err() || *cancel_rx.borrow() {
-                                        let current_status = {
-                                            let task_map = tasks.read().await;
-                                            task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-                                        };
-                                        if current_status == TaskStatus::Paused {
-                                            write_task_log(app, &app_config_dir, task_id, "音频提取已暂停").await;
-                                            return Ok(());
-                                        }
-                                        update_task_cancelled(app, tasks, task_id).await;
-                                        return Ok(());
+                let ffmpeg_status = loop {
+                    tokio::select! {
+                        line_res = stderr_lines.next_line(), if !stderr_done => {
+                            match line_res {
+                                Ok(Some(line)) => {
+                                    if let Some(duration_ms) = crate::core::audio::parse_duration_ms(&line) {
+                                        total_duration_ms = Some(duration_ms);
                                     }
+                                    if let (Some(time_ms), Some(total_ms)) = (
+                                        crate::core::audio::parse_progress_time_ms(&line),
+                                        total_duration_ms,
+                                    ) {
+                                        if total_ms > 0 {
+                                            let ratio = (time_ms as f32 / total_ms as f32).clamp(0.0, 1.0);
+                                            update_task_progress(
+                                                app,
+                                                tasks.clone(),
+                                                task_id,
+                                                AUDIO_PROGRESS_END * ratio,
+                                                &format!("正在提取音频... {:.0}%", ratio * 100.0),
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                    stderr_buf.push_str(&line);
+                                    stderr_buf.push('\n');
                                 }
+                                Ok(None) => {
+                                    stderr_done = true;
+                                }
+                                Err(e) => return Err(format!("读取 FFmpeg 进度输出失败：{}", e)),
+                            }
+                        }
+                        status_res = &mut wait_fut => {
+                            break status_res.map_err(|e| format!("等待 FFmpeg 提取音频结束失败：{}", e))?;
+                        }
+                        change_res = cancel_rx.changed() => {
+                            if change_res.is_err() || *cancel_rx.borrow() {
+                                let current_status = {
+                                    let task_map = tasks.read().await;
+                                    task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
+                                };
+                                if current_status == TaskStatus::Paused {
+                                    write_task_log(app, &app_config_dir, task_id, "音频提取已暂停").await;
+                                    return Ok(());
+                                }
+                                update_task_cancelled(app, tasks, task_id).await;
+                                return Ok(());
                             }
                         }
                     }
                 };
 
-                if !ffmpeg_res.status.success() {
-                    let stderr = String::from_utf8_lossy(&ffmpeg_res.stderr);
-                    return Err(format!("FFmpeg 音频提取失败：{}", stderr));
+                if !ffmpeg_status.success() {
+                    return Err(format!("FFmpeg 音频提取失败：{}", stderr_buf));
                 }
 
                 update_task_progress(
                     app,
                     tasks.clone(),
                     task_id,
-                    0.15,
+                    AUDIO_PROGRESS_END,
                     "音频提取完成，准备 ASR 模型...",
                 )
                 .await;
@@ -315,7 +380,7 @@ async fn run_task_impl(
                     let models_dir = whisper_models_dir(&app_config_dir)?;
                     let settings = crate::core::settings::load_settings(&app_config_dir)
                         .map_err(|e| format!("加载设置失败：{}", e))?;
-                    
+
                     #[cfg(debug_assertions)]
                     let vad_model_path = {
                         let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -331,7 +396,11 @@ async fn run_task_impl(
                                 .join("resources")
                                 .join("vad")
                                 .join("ggml-silero-v5.1.2.bin");
-                            if p2.exists() { Some(p2) } else { None }
+                            if p2.exists() {
+                                Some(p2)
+                            } else {
+                                None
+                            }
                         }
                     };
                     #[cfg(not(debug_assertions))]
@@ -355,7 +424,7 @@ async fn run_task_impl(
                         max_context: settings.max_context,
                         vad_model_path,
                     };
-                    
+
                     Box::new(WhisperCppEngine::new(whisper_bin, models_dir, options))
                 }
                 "parakeet-mlx" => {
@@ -398,7 +467,9 @@ async fn run_task_impl(
                 }
                 "sensevoice" => {
                     let models_dir = whisper_models_dir(&app_config_dir)?;
-                    Box::new(crate::core::asr::sensevoice::SenseVoiceEngine::new(models_dir))
+                    Box::new(crate::core::asr::sensevoice::SenseVoiceEngine::new(
+                        models_dir,
+                    ))
                 }
                 "custom-command" => {
                     let settings = crate::core::settings::load_settings(&app_config_dir)
@@ -426,7 +497,7 @@ async fn run_task_impl(
                 app,
                 tasks.clone(),
                 task_id,
-                0.25,
+                ASR_PROGRESS_START,
                 "正在进行 ASR 语音识别...",
             )
             .await;
@@ -462,7 +533,8 @@ async fn run_task_impl(
                 tokio::select! {
                     update_opt = progress_rx.recv() => {
                         if let Some(update) = update_opt {
-                            let mapped_progress = 0.25 + (0.80 - 0.25) * update.progress;
+                            let mapped_progress =
+                                map_asr_progress(task.task_type, update.progress);
                             update_task_progress(app, tasks.clone(), task_id, mapped_progress, &update.message).await;
                         }
                     }
@@ -495,7 +567,7 @@ async fn run_task_impl(
         }
     } else {
         // TranslateOnly 模式直接读取原字幕文件，按扩展名解析 SRT/VTT/ASS/LRC。
-        update_task_progress(app, tasks.clone(), task_id, 0.0, "正在读取源字幕文件...").await;
+        update_task_progress(app, tasks.clone(), task_id, 0.02, "正在读取源字幕文件...").await;
         let sub_content = tokio::fs::read_to_string(&media_path)
             .await
             .map_err(|e| format!("读取源字幕文件失败：{}", e))?;
@@ -546,7 +618,7 @@ async fn run_task_impl(
             app,
             tasks.clone(),
             task_id,
-            0.80,
+            translation_progress_start(task.task_type),
             &format!("准备通过 {} 翻译字幕...", provider),
         )
         .await;
@@ -622,7 +694,7 @@ async fn run_task_impl(
                             app,
                             tasks.clone(),
                             task_id,
-                            translation_progress(start_cue_index, total_cues),
+                            translation_progress_for(task.task_type, start_cue_index, total_cues),
                             &msg,
                         )
                         .await;
@@ -684,7 +756,11 @@ async fn run_task_impl(
                                     &track,
                                     next_cue_index,
                                 );
-                                let progress = translation_progress(next_cue_index, total_cues);
+                                let progress = translation_progress_for(
+                                    task.task_type,
+                                    next_cue_index,
+                                    total_cues,
+                                );
                                 let msg = format!(
                                     "正在批量翻译字幕... ({}/{})",
                                     next_cue_index, total_cues
@@ -745,8 +821,7 @@ async fn run_task_impl(
                 secret_fields: secret_fields_opt.clone(),
             };
 
-            let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await
-            {
+            let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await {
                 TranslationAttemptResult::Success(text) => text,
                 TranslationAttemptResult::Cancelled => {
                     handle_translation_stop(
@@ -774,7 +849,7 @@ async fn run_task_impl(
             next_cue_index += 1;
             save_translation_checkpoint(&temp_translated_path, &track, next_cue_index);
 
-            let progress = translation_progress(next_cue_index, total_cues);
+            let progress = translation_progress_for(task.task_type, next_cue_index, total_cues);
             let msg = format!("正在翻译字幕... ({}/{})", next_cue_index, total_cues);
             update_task_progress(app, tasks.clone(), task_id, progress, &msg).await;
         }
@@ -892,10 +967,7 @@ async fn update_task_progress(
             return;
         }
         task.status = TaskStatus::Running;
-        task.progress = task
-            .progress
-            .clamp(0.0, 1.0)
-            .max(progress.clamp(0.0, 1.0));
+        task.progress = task.progress.clamp(0.0, 1.0).max(progress.clamp(0.0, 1.0));
         task.status_message = message.into();
         task.updated_at = chrono::Utc::now().to_rfc3339();
         let task_clone = task.clone();
@@ -966,10 +1038,7 @@ fn configured_value(value: Option<&String>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn restore_translated_checkpoint(
-    track: &mut SubtitleTrack,
-    checkpoint: &SubtitleTrack,
-) -> usize {
+fn restore_translated_checkpoint(track: &mut SubtitleTrack, checkpoint: &SubtitleTrack) -> usize {
     let checkpoint_len = checkpoint.len();
     if checkpoint_len == 0 || checkpoint_len > track.len() {
         return 0;
@@ -981,13 +1050,35 @@ fn restore_translated_checkpoint(
     checkpoint_len
 }
 
-fn translation_progress(completed_cues: usize, total_cues: usize) -> f32 {
+fn translation_progress_start(task_type: TaskType) -> f32 {
+    match task_type {
+        TaskType::TranslateOnly => TRANSLATION_ONLY_PROGRESS_START,
+        TaskType::GenerateAndTranslate | TaskType::GenerateOnly => TRANSLATION_PROGRESS_START,
+    }
+}
+
+fn translation_progress_for(task_type: TaskType, completed_cues: usize, total_cues: usize) -> f32 {
     if total_cues == 0 {
-        return TRANSLATION_PROGRESS_START;
+        return translation_progress_start(task_type);
     }
 
     let ratio = (completed_cues as f32 / total_cues as f32).clamp(0.0, 1.0);
-    TRANSLATION_PROGRESS_START + (TRANSLATION_PROGRESS_END - TRANSLATION_PROGRESS_START) * ratio
+    let start = translation_progress_start(task_type);
+    start + (TRANSLATION_PROGRESS_END - start) * ratio
+}
+
+fn asr_progress_end(task_type: TaskType) -> f32 {
+    match task_type {
+        TaskType::GenerateAndTranslate => ASR_PROGRESS_END_WITH_TRANSLATION,
+        TaskType::GenerateOnly => ASR_PROGRESS_END_GENERATE_ONLY,
+        TaskType::TranslateOnly => ASR_PROGRESS_START,
+    }
+}
+
+fn map_asr_progress(task_type: TaskType, engine_progress: f32) -> f32 {
+    let end = asr_progress_end(task_type);
+    let ratio = engine_progress.clamp(0.0, 1.0);
+    ASR_PROGRESS_START + (end - ASR_PROGRESS_START) * ratio
 }
 
 fn translation_supports_batch(provider_info: Option<&TranslationProvider>) -> bool {
@@ -1056,10 +1147,10 @@ fn parse_batch_translation_response(
     raw_text: &str,
     expected_keys: &[String],
 ) -> Result<Vec<String>, String> {
-    let cleaned = extract_json_object(raw_text)
-        .ok_or_else(|| "响应中没有 JSON 对象".to_string())?;
-    let value: serde_json::Value = serde_json::from_str(cleaned)
-        .map_err(|e| format!("JSON 解析失败：{e}"))?;
+    let cleaned =
+        extract_json_object(raw_text).ok_or_else(|| "响应中没有 JSON 对象".to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_str(cleaned).map_err(|e| format!("JSON 解析失败：{e}"))?;
     let object = value
         .as_object()
         .ok_or_else(|| "响应不是 JSON 对象".to_string())?;
@@ -1406,7 +1497,27 @@ mod tests {
         assert_eq!(track.cues[0].text, "你好");
         assert_eq!(track.cues[1].text, "世界");
         assert_eq!(track.cues[2].text, "Again");
-        assert!((translation_progress(restored, track.len()) - 0.90).abs() < 0.0001);
+        assert!(
+            (translation_progress_for(TaskType::GenerateAndTranslate, restored, track.len())
+                - 0.90)
+                .abs()
+                < 0.0001
+        );
+    }
+
+    #[test]
+    fn asr_progress_uses_task_specific_endpoints() {
+        assert!((map_asr_progress(TaskType::GenerateAndTranslate, 1.0) - 0.80).abs() < 0.0001);
+        assert!((map_asr_progress(TaskType::GenerateOnly, 1.0) - 0.95).abs() < 0.0001);
+        assert!(
+            (map_asr_progress(TaskType::GenerateOnly, 0.0) - ASR_PROGRESS_START).abs() < 0.0001
+        );
+    }
+
+    #[test]
+    fn translate_only_progress_starts_near_beginning() {
+        assert!((translation_progress_start(TaskType::TranslateOnly) - 0.05).abs() < 0.0001);
+        assert!((translation_progress_for(TaskType::TranslateOnly, 1, 2) - 0.50).abs() < 0.0001);
     }
 
     #[test]
@@ -1457,7 +1568,10 @@ mod tests {
                 text: "短句".into(),
             })
             .collect::<Vec<_>>();
-        assert_eq!(translation_batch_end(&short_cues, 0), AI_TRANSLATION_MAX_BATCH_CUES);
+        assert_eq!(
+            translation_batch_end(&short_cues, 0),
+            AI_TRANSLATION_MAX_BATCH_CUES
+        );
 
         let long_cues = (0..4)
             .map(|idx| Cue {

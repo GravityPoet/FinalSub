@@ -72,7 +72,7 @@ impl AsrEngine for ParakeetMlxEngine {
 
         progress
             .send(ProgressUpdate {
-                progress: 0.1,
+                progress: 0.02,
                 message: "正在准备 Parakeet 环境...".into(),
             })
             .await
@@ -130,7 +130,7 @@ impl AsrEngine for ParakeetMlxEngine {
 
         progress
             .send(ProgressUpdate {
-                progress: 0.2,
+                progress: 0.05,
                 message: "正在转录（首次运行可能需要下载模型）...".into(),
             })
             .await
@@ -185,7 +185,7 @@ impl AsrEngine for ParakeetMlxEngine {
 
         progress
             .send(ProgressUpdate {
-                progress: 0.9,
+                progress: 0.98,
                 message: "正在解析字幕...".into(),
             })
             .await
@@ -194,6 +194,12 @@ impl AsrEngine for ParakeetMlxEngine {
         let srt_content = tokio::fs::read_to_string(&job.output_path)
             .await
             .map_err(|e| FinalSubError::Validation(format!("读取 SRT 输出失败：{e}")))?;
+
+        if srt_content.trim().is_empty() {
+            return Err(FinalSubError::Validation(
+                "Parakeet 未识别到任何字幕内容。该模型主要适合英文语音；如果当前音频是中文或其他语言，请切换到 Whisper.cpp 或 SenseVoice。".into(),
+            ));
+        }
 
         let track = SubtitleTrack::from_srt(&srt_content)?;
 

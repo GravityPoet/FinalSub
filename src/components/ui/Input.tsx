@@ -7,7 +7,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <input
         ref={ref}
-        className={`w-full bg-surface border border-border-default rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/35 transition disabled:opacity-50 ${className}`}
+        className={`glass-control h-10 w-full rounded-xl px-3.5 py-2 text-sm text-text-primary placeholder:text-text-tertiary transition focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/35 disabled:opacity-50 ${className}`}
         {...props}
       />
     );
@@ -22,7 +22,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <select
         ref={ref}
-        className={`w-full bg-surface border border-border-default rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/35 transition disabled:opacity-50 ${className}`}
+        className={`glass-control h-10 w-full rounded-xl px-3.5 py-2 text-sm text-text-primary transition focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/35 disabled:opacity-50 ${className}`}
         {...props}
       >
         {children}
@@ -39,7 +39,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     return (
       <textarea
         ref={ref}
-        className={`w-full bg-surface border border-border-default rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-brand focus:ring-2 focus:ring-brand/35 transition disabled:opacity-50 ${className}`}
+        className={`glass-control w-full rounded-xl px-3.5 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary transition focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/35 disabled:opacity-50 ${className}`}
         {...props}
       />
     );

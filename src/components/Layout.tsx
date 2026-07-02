@@ -38,38 +38,38 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen flex-col bg-app-bg text-text-primary sm:h-screen sm:overflow-hidden sm:flex-row">
-      <aside className="w-full shrink-0 border-b border-border-subtle bg-surface sm:flex sm:h-screen sm:w-60 sm:flex-col sm:border-b-0 sm:border-r">
-        <div className="flex items-center gap-3 border-b border-border-subtle p-4">
+      <aside className="glass-panel w-full shrink-0 rounded-none border-x-0 border-t-0 sm:flex sm:h-screen sm:w-[16rem] sm:flex-col sm:border-b-0 sm:border-l-0">
+        <div className="flex min-h-14 items-center gap-3 border-b border-border-subtle px-4 py-3">
           <Logo />
-          <h1 className="text-md font-bold tracking-tight text-text-primary">FinalSub</h1>
+          <h1 className="font-display text-base font-bold tracking-tight text-text-primary">FinalSub</h1>
         </div>
-        <nav className="flex gap-1 overflow-x-auto p-2 sm:block sm:flex-1 sm:space-y-1">
+        <nav className="flex gap-1 overflow-x-auto p-2.5 sm:block sm:flex-1 sm:space-y-1 sm:p-3">
           {navItems.map(({ to, key, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
               <Link
                 key={to}
                 to={to}
-                className={`relative flex shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                className={`relative flex min-h-10 shrink-0 items-center gap-3 rounded-xl px-3 py-2 text-[14px] font-semibold transition-all duration-150 ${
                   isActive
-                    ? "bg-brand-subtle text-brand-text font-semibold before:absolute before:left-0 before:top-1/4 before:h-1/2 before:w-0.5 before:bg-brand before:rounded-full"
+                    ? "liquid-selected text-brand-text before:absolute before:left-0 before:top-1/4 before:h-1/2 before:w-1 before:rounded-full before:bg-brand"
                     : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
                 }`}
               >
-                <Icon size={16} className={isActive ? "text-brand" : "text-text-tertiary"} />
+                <Icon size={18} className={isActive ? "text-brand" : "text-text-tertiary"} />
                 <span>{t(key)}</span>
               </Link>
             );
           })}
         </nav>
-        <div className="mt-auto space-y-2 border-t border-border-subtle p-3">
+        <div className="mt-auto space-y-2.5 border-t border-border-subtle p-3.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-text-secondary">{t("settings.theme")}</span>
-            <span className="truncate text-xs font-semibold text-text-primary">
+            <span className="text-sm text-text-secondary">{t("settings.theme")}</span>
+            <span className="truncate text-sm font-semibold text-text-primary">
               {t(themeOptions.find((option) => option.value === theme)?.labelKey ?? "settings.themeDark")}
             </span>
           </div>
-          <div className="grid grid-cols-3 rounded-lg border border-border-default bg-surface-raised p-0.5">
+          <div className="glass-control grid grid-cols-3 rounded-xl p-1">
             {themeOptions.map(({ value, labelKey, icon: Icon }) => {
               const isActive = theme === value;
               const label = t(labelKey);
@@ -79,9 +79,9 @@ export default function Layout() {
                   type="button"
                   aria-pressed={isActive}
                   onClick={() => setTheme(value)}
-                  className={`flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-medium transition ${
+                  className={`flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-semibold transition ${
                     isActive
-                      ? "bg-surface text-brand shadow-sm"
+                      ? "bg-surface-raised text-brand shadow-sm"
                       : "text-text-tertiary hover:text-text-secondary"
                   }`}
                   title={label}
@@ -94,7 +94,7 @@ export default function Layout() {
           </div>
         </div>
       </aside>
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5 sm:px-7 sm:py-6">
         <Outlet />
       </main>
     </div>

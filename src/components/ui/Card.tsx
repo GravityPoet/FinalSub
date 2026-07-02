@@ -10,8 +10,8 @@ export function Card({
 }: CardProps) {
   return (
     <div
-      className={`bg-surface border border-border-subtle rounded-xl p-5 shadow-sm transition-all duration-150 ${
-        interactive ? "hover:border-border-default hover:shadow-md cursor-pointer" : ""
+      className={`glass-panel rounded-xl p-5 transition-all duration-150 ${
+        interactive ? "cursor-pointer hover:border-border-default hover:bg-surface-raised hover:shadow-md" : ""
       } ${className}`}
       {...props}
     >

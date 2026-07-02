@@ -61,11 +61,11 @@ const SettingRow = ({
   description?: string;
   children: React.ReactNode;
 }) => (
-  <div className="flex items-center justify-between gap-4 py-3.5">
+  <div className="flex items-center justify-between gap-5 py-4">
     <div className="min-w-0">
-      <div className="text-sm font-semibold text-text-primary">{label}</div>
+      <div className="text-base font-semibold text-text-primary">{label}</div>
       {description && (
-        <div className="mt-1 text-xs text-text-tertiary leading-4">{description}</div>
+        <div className="mt-1 text-sm leading-5 text-text-tertiary">{description}</div>
       )}
     </div>
     <div className="shrink-0">{children}</div>
@@ -81,12 +81,12 @@ const SettingGroup = ({
   title: string;
   children: React.ReactNode;
 }) => (
-  <div className="space-y-2">
-    <div className="flex items-center gap-2 mb-2 px-1">
-      <Icon className="size-4 text-text-secondary" />
-      <span className="text-sm font-semibold text-text-secondary">{title}</span>
+  <div className="space-y-2.5">
+    <div className="mb-2 flex items-center gap-2 px-1">
+      <Icon className="size-5 text-text-secondary" />
+      <span className="font-display text-h3 font-semibold text-text-secondary">{title}</span>
     </div>
-    <Card className="p-0 bg-surface divide-y divide-border-subtle overflow-hidden">
+    <Card className="divide-y divide-border-subtle overflow-hidden bg-surface p-0">
       {children}
     </Card>
   </div>
@@ -181,21 +181,21 @@ export default function SettingsPage() {
 
   if (!settings) {
     return (
-      <div className="max-w-4xl space-y-6">
-        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
+      <div className="page-shell space-y-6">
+        <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
         <p className="text-text-tertiary text-sm">{t("home.loading")}</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl space-y-6 pb-12">
+    <div className="page-shell space-y-7 pb-12">
       <div className="flex items-center justify-between">
-        <h2 className="text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
+        <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
         <div className="flex items-center gap-3.5">
           {message && (
             <span
-              className={`text-xs font-semibold ${message.type === "ok" ? "text-success" : "text-danger"}`}
+              className={`text-sm font-semibold ${message.type === "ok" ? "text-success" : "text-danger"}`}
             >
               {message.text}
             </span>
@@ -237,14 +237,13 @@ export default function SettingsPage() {
           <div className="px-5">
             <SettingRow label={t("settings.modelStorageLabel")} description={t("settings.modelStorageDesc")}>
               <div className="flex items-center gap-3">
-                <span className="max-w-[300px] truncate text-xs text-text-secondary font-mono bg-surface-overlay px-2.5 py-1.5 rounded-lg border border-border-subtle">
+                <span className="max-w-[420px] truncate rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2 font-mono text-sm text-text-secondary">
                   {settings.models_path}
                 </span>
                 <Button
                   onClick={handleSelectModelsPath}
                   variant="secondary"
                   size="sm"
-                  className="h-8 py-0"
                 >
                   {t("settings.change")}
                 </Button>
@@ -299,7 +298,7 @@ export default function SettingsPage() {
         {(settings.asr_engine === "whisper-cpp" || settings.asr_engine === "custom-command") && (
           <SettingGroup icon={SettingsIcon} title={t("settings.vadGroup")}>
             <div className="px-5 py-2 space-y-1">
-              <div className="my-3 rounded-lg bg-brand-subtle border border-brand/10 p-3 text-xs text-brand-text leading-5">
+              <div className="my-3 rounded-xl border border-brand/10 bg-brand-subtle p-3.5 text-sm leading-6 text-brand-text">
                 {t("settings.vadGroupDesc")}
               </div>
               <SettingRow label={t("settings.useVadLabel")} description={t("settings.useVadDesc")}>
@@ -435,7 +434,7 @@ export default function SettingsPage() {
                     }
                   }}
                   variant="secondary"
-                  className="h-9 px-3 text-xs"
+                  size="sm"
                 >
                   {t("common.browse")}
                 </Button>
@@ -511,7 +510,7 @@ export default function SettingsPage() {
               </div>
               <div className="min-w-0">
                 <h3 className="font-semibold text-text-primary text-h2 mb-1.5">{t("settings.resetConfirmTitle")}</h3>
-                <p className="text-xs text-text-secondary leading-5">
+                <p className="text-sm leading-6 text-text-secondary">
                   {t("settings.resetConfirmDesc")}
                 </p>
               </div>
