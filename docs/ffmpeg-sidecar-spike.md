@@ -1,6 +1,6 @@
 # FFmpeg Sidecar Spike
 
-> **状态（2026-06-20）**：本 spike 已落地方案 A / C —— ffmpeg 现为静态 Universal 自包含 sidecar（x86_64 + arm64，零 Homebrew 依赖）。下文「当前状态 / 当前决策」为 spike 当时（Homebrew 动态版阶段）的记录，保留作决策溯源；最终现状见 README「FFmpeg 与 ASR Sidecar 说明」与 `walkthrough.md`。
+> **状态（2026-07-15）**：本 spike 已落地为 GPL 自包含 Universal sidecar（x86_64 + arm64，零 Homebrew 依赖），并补齐固定来源、许可证、Windows/Linux 安装脚本和发布矩阵。下文「当前状态 / 当前决策」是早期 Homebrew 动态版记录，仅保留作决策溯源；最终现状见 README 与 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)。
 
 ## 当前状态
 

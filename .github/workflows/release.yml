@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Create the shared draft release once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            test "$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)" = "true"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --draft \
+              --generate-notes \
+              --title "FinalSub ${GITHUB_REF_NAME}"
+          fi
+
+  build:
+    needs: prepare-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --bundles nsis
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - name: Install Linux desktop and keyring dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils \
+            libdbus-1-dev \
+            libkeyutils-dev \
+            pkg-config
+      - run: npm ci
+      - name: Build pinned macOS sidecars
+        if: runner.os == 'macOS'
+        run: |
+          bash scripts/build-whisper-sidecars-macos.sh
+          npm run binaries:universal
+      - name: Build pinned Linux sidecars
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/install-ffmpeg-sidecar-linux.sh
+          bash scripts/build-whisper-sidecar-linux.sh
+      - name: Build pinned Windows sidecars
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/install-ffmpeg-sidecar-windows.ps1
+          ./scripts/build-whisper-sidecar-windows.ps1
+      - name: Validate Apple release prerequisites
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_SIGNING_IDENTITY"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+      - name: Validate updater signing prerequisites
+        shell: bash
+        env:
+          FINALSUB_UPDATER_PUBLIC_KEY: ${{ secrets.FINALSUB_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          test -n "$FINALSUB_UPDATER_PUBLIC_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+      - name: Prepare updater release config
+        env:
+          FINALSUB_UPDATER_PUBLIC_KEY: ${{ secrets.FINALSUB_UPDATER_PUBLIC_KEY }}
+        run: npm run prepare:release-updater-config
+      # Pinned after auditing updater JSON merge behavior; do not expose signing secrets to a moving tag.
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FINALSUB_UPDATER_PUBLIC_KEY: ${{ secrets.FINALSUB_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} --config src-tauri/target/tauri.release.generated.conf.json
+          retryAttempts: 3
+          releaseAssetNamePattern: "FinalSub-[version]-[platform]-[arch].[ext]"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Generate and upload SHA-256 files for every asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release-assets
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir release-assets
+          test -f release-assets/latest.json
+          version="${GITHUB_REF_NAME#v}"
+          asset_prefix="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/"
+          jq -e --arg version "$version" --arg asset_prefix "$asset_prefix" '
+            .version == $version and
+            (.platforms["darwin-aarch64-app"].url | startswith($asset_prefix)) and
+            (.platforms["darwin-aarch64-app"].signature | length > 0) and
+            (.platforms["darwin-x86_64-app"].url | startswith($asset_prefix)) and
+            (.platforms["darwin-x86_64-app"].signature | length > 0) and
+            (.platforms["linux-x86_64-appimage"].url | startswith($asset_prefix)) and
+            (.platforms["linux-x86_64-appimage"].signature | length > 0) and
+            (.platforms["linux-x86_64-deb"].url | startswith($asset_prefix)) and
+            (.platforms["linux-x86_64-deb"].signature | length > 0) and
+            (.platforms["windows-x86_64-nsis"].url | startswith($asset_prefix)) and
+            (.platforms["windows-x86_64-nsis"].signature | length > 0)
+          ' release-assets/latest.json >/dev/null
+          for asset in release-assets/*; do
+            test -f "$asset" || continue
+            case "$asset" in
+              *.sha256) continue ;;
+            esac
+            name="$(basename "$asset")"
+            (cd release-assets && sha256sum "$name" > "$name.sha256")
+          done
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.sha256' -print -quit)"
+          gh release upload "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            release-assets/*.sha256
+      - name: Publish the complete multi-platform release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --repo "${GITHUB_REPOSITORY}"

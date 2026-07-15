@@ -1,6 +1,5 @@
 import { useMemo, useState, useCallback } from 'react';
 import { ArrowLeft, Check, Save, Loader2, AlertTriangle, Download, Languages } from 'lucide-react';
-import { save } from "@tauri-apps/plugin-dialog";
 import { useToast } from './Toast';
 import { Button } from '../../components/ui/Button';
 
@@ -13,7 +12,7 @@ import SubtitleList from './subtitle/SubtitleList';
 import SubtitleEditToolbar from './subtitle/SubtitleEditToolbar';
 import { PendingFile } from './proofreadUtils';
 import { useI18n } from '../../lib/i18n';
-import { convertStringsOpencc } from '../../lib/tauri';
+import { convertStringsOpencc, saveDialog } from '../../lib/tauri';
 
 interface ProofreadEditorProps {
   file: PendingFile;
@@ -54,6 +53,8 @@ export default function ProofreadEditor({
     shouldShowTranslation,
     subtitleTracksForPlayer,
     isLoading,
+    loadError,
+    retryLoad,
     handleSubtitleChange,
     handleSave,
     handleExport,
@@ -108,12 +109,13 @@ export default function ProofreadEditor({
 
   // 冲突挽救确认框状态
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
 
   const { showToast } = useToast();
 
   const handleExportClick = async (format: 'srt' | 'vtt' | 'ass' | 'lrc' | 'txt') => {
     try {
-      const selected = await save({
+      const selected = await saveDialog({
         filters: [{ name: format.toUpperCase(), extensions: [format] }],
         defaultPath: `subtitle.${format}`,
       });
@@ -209,6 +211,18 @@ export default function ProofreadEditor({
     onBack();
   }, [onBack, setIsDirty]);
 
+  const handleMarkCompleteClick = useCallback(async () => {
+    setIsCompleting(true);
+    try {
+      const success = await handleSave();
+      if (success) {
+        onMarkComplete();
+      }
+    } finally {
+      setIsCompleting(false);
+    }
+  }, [handleSave, onMarkComplete]);
+
   // 处理从字幕列表点击 AI 优化按钮
   const handleAiOptimizeClick = useCallback(
     (index: number) => {
@@ -241,6 +255,26 @@ export default function ProofreadEditor({
     return (
       <div className="h-full flex items-center justify-center bg-app-bg">
         <Loader2 className="w-8 h-8 animate-spin text-brand" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex h-full items-center justify-center bg-app-bg p-6 text-text-primary">
+        <div className="w-full max-w-lg rounded-xl border border-danger/25 bg-danger/10 p-6 text-center">
+          <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-danger" />
+          <h2 className="mb-2 text-base font-semibold">{t('proofread.standalone.loadFailed')}</h2>
+          <p className="mb-5 break-words text-xs leading-5 text-text-secondary">{loadError}</p>
+          <div className="flex justify-center gap-2.5">
+            <Button variant="secondary" onClick={onBack}>
+              {t('proofread.editor.backToList')}
+            </Button>
+            <Button variant="primary" onClick={retryLoad}>
+              {t('proofread.standalone.retry')}
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -347,10 +381,11 @@ export default function ProofreadEditor({
 
           <Button
             variant="primary"
-            onClick={onMarkComplete}
+            onClick={handleMarkCompleteClick}
+            disabled={isCompleting}
             size="sm"
           >
-            <Check className="w-4 h-4" />
+            {isCompleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="w-4 h-4" />}
             {t('proofread.editor.markComplete')}
           </Button>
         </div>

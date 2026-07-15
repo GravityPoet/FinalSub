@@ -10,13 +10,13 @@ export function Button({
   children,
   ...props
 }: ButtonProps) {
-  const base = "inline-flex min-h-9 items-center justify-center gap-2 whitespace-nowrap rounded-xl font-semibold transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-brand/35 disabled:pointer-events-none disabled:opacity-50";
+  const base = "inline-flex min-h-9 items-center justify-center gap-2 whitespace-nowrap rounded-full font-semibold transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-brand/35 disabled:pointer-events-none disabled:opacity-50";
   
   const variants = {
-    primary: "bg-brand text-white shadow-sm hover:bg-brand-hover hover:shadow-brand-glow active:scale-[0.98]",
-    secondary: "glass-control text-text-primary hover:bg-surface-raised active:scale-[0.98]",
+    primary: "liquid-primary hover:-translate-y-0.5 hover:shadow-brand-glow active:translate-y-0 active:scale-[0.98]",
+    secondary: "liquid-control text-text-primary hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface-raised active:translate-y-0 active:scale-[0.98]",
     ghost: "text-text-secondary hover:bg-surface-overlay hover:text-text-primary active:scale-[0.98]",
-    danger: "bg-danger text-white shadow-sm hover:bg-danger/90 active:scale-[0.98]",
+    danger: "border border-white/20 bg-danger text-white shadow-sm hover:-translate-y-0.5 hover:bg-danger/90 active:translate-y-0 active:scale-[0.98]",
   };
   
   const sizes = {

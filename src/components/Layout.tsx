@@ -1,7 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, Sun, Moon, Laptop } from "lucide-react";
-import { type TranslationKey, useI18n } from "../lib/i18n";
-import { type Theme, useTheme } from "../lib/theme";
+import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { useI18n } from "../lib/i18n";
+import { ActivityCenter, CommandPalette, WorkspaceOverlays } from "./WorkspaceOverlays";
+import brandIcon from "../../src-tauri/icons/icon.png";
 
 const navItems = [
   { to: "/", key: "nav.tasks", icon: FileVideo2 },
@@ -13,90 +15,117 @@ const navItems = [
   { to: "/settings", key: "nav.settings", icon: Settings },
 ] as const;
 
-const themeOptions: Array<{
-  value: Theme;
-  labelKey: TranslationKey;
-  icon: typeof Sun;
-}> = [
-  { value: "light", labelKey: "settings.themeLight", icon: Sun },
-  { value: "dark", labelKey: "settings.themeDark", icon: Moon },
-  { value: "system", labelKey: "settings.themeSystem", icon: Laptop },
-];
-
-const Logo = () => (
-  <svg className="size-5 text-brand" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="currentColor" opacity="0.85" />
-    <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
+const Logo = () => <img className="brand-logo" src={brandIcon} alt="" aria-hidden="true" />;
 
 export default function Layout() {
   const location = useLocation();
   const { t } = useI18n();
-  const { theme, setTheme } = useTheme();
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finalsub:nav-collapsed") === "true");
+  const mobileNavRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const activeItem = mobileNavRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    activeItem?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [location.pathname]);
+
+  const toggleCollapsed = () => {
+    setCollapsed((value) => {
+      const next = !value;
+      localStorage.setItem("finalsub:nav-collapsed", String(next));
+      return next;
+    });
+  };
 
   return (
-    <div className="flex min-h-screen flex-col bg-app-bg text-text-primary sm:h-screen sm:overflow-hidden sm:flex-row">
-      <aside className="glass-panel w-full shrink-0 rounded-none border-x-0 border-t-0 sm:flex sm:h-screen sm:w-[16rem] sm:flex-col sm:border-b-0 sm:border-l-0">
-        <div className="flex min-h-14 items-center gap-3 border-b border-border-subtle px-4 py-3">
+    <div className="app-frame flex min-h-screen flex-col text-text-primary sm:h-screen sm:overflow-hidden sm:flex-row sm:gap-3 sm:p-3">
+      <div className="app-atmosphere" aria-hidden="true">
+        <span className="ambient-orb ambient-orb-one" />
+        <span className="ambient-orb ambient-orb-two" />
+        <span className="ambient-orb ambient-orb-three" />
+      </div>
+
+      <aside
+        className={`liquid-shell relative z-20 w-full shrink-0 border-x-0 border-t-0 sm:flex sm:h-[calc(100vh-1.5rem)] sm:flex-col sm:rounded-[1.75rem] sm:border ${collapsed ? "sm:w-[5.25rem]" : "sm:w-[16rem]"}`}
+        data-sidebar-collapsed={collapsed}
+      >
+        <div
+          className={`flex min-h-[4.5rem] items-center gap-3 border-b border-border-subtle px-4 py-3.5 sm:px-4.5 ${
+            collapsed ? "sm:min-h-[6.75rem] sm:flex-col sm:justify-center sm:gap-1 sm:px-0 sm:py-2" : ""
+          }`}
+        >
           <Logo />
-          <h1 className="font-display text-base font-bold tracking-tight text-text-primary">FinalSub</h1>
+          <div className={`min-w-0 flex-1 ${collapsed ? "sm:hidden" : ""}`}>
+            <h1 className="font-display text-[1.05rem] font-bold tracking-[-0.025em] text-text-primary">FinalSub</h1>
+            <p className="mt-1 whitespace-nowrap text-[8.5px] font-semibold uppercase leading-none tracking-[0.11em] text-text-tertiary">
+              Subtitle Studio
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            className={`sidebar-collapse-toggle hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary sm:flex ${collapsed ? "sm:mx-auto" : ""}`}
+            aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}
+            title={collapsed ? t("nav.expand") : t("nav.collapse")}
+          >
+            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
         </div>
-        <nav className="flex gap-1 overflow-x-auto p-2.5 sm:block sm:flex-1 sm:space-y-1 sm:p-3">
+        <div className={`absolute right-4 top-[1.1rem] z-[55] sm:static sm:block sm:border-b sm:border-border-subtle ${collapsed ? "sm:px-0 sm:py-2.5" : "sm:p-3"}`}>
+          <ActivityCenter compact={collapsed} />
+        </div>
+        <nav className={`hidden gap-1 overflow-x-hidden overflow-y-auto p-2.5 sm:block sm:flex-1 sm:space-y-1.5 ${collapsed ? "sm:px-0 sm:py-3" : "sm:p-3"}`}>
           {navItems.map(({ to, key, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
               <Link
                 key={to}
                 to={to}
-                className={`relative flex min-h-10 shrink-0 items-center gap-3 rounded-xl px-3 py-2 text-[14px] font-semibold transition-all duration-150 ${
+                aria-current={isActive ? "page" : undefined}
+                className={`nav-item group relative flex min-h-11 shrink-0 items-center rounded-[0.9rem] text-[13px] font-semibold transition-all duration-200 ${collapsed ? "mx-auto h-11 w-11 justify-center p-0" : "gap-3 px-2.5 py-2"} ${
                   isActive
-                    ? "liquid-selected text-brand-text before:absolute before:left-0 before:top-1/4 before:h-1/2 before:w-1 before:rounded-full before:bg-brand"
+                    ? "liquid-selected text-text-primary"
                     : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
                 }`}
               >
-                <Icon size={18} className={isActive ? "text-brand" : "text-text-tertiary"} />
-                <span>{t(key)}</span>
+                <span className={`nav-icon ${isActive ? "nav-icon-active" : ""}`}>
+                  <Icon size={16} />
+                </span>
+                <span className={collapsed ? "sr-only" : ""}>{t(key)}</span>
+                {isActive && <span className="nav-active-rail" aria-hidden="true" />}
               </Link>
             );
           })}
         </nav>
-        <div className="mt-auto space-y-2.5 border-t border-border-subtle p-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-text-secondary">{t("settings.theme")}</span>
-            <span className="truncate text-sm font-semibold text-text-primary">
-              {t(themeOptions.find((option) => option.value === theme)?.labelKey ?? "settings.themeDark")}
-            </span>
-          </div>
-          <div className="glass-control grid grid-cols-3 rounded-xl p-1">
-            {themeOptions.map(({ value, labelKey, icon: Icon }) => {
-              const isActive = theme === value;
-              const label = t(labelKey);
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={isActive}
-                  onClick={() => setTheme(value)}
-                  className={`flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-semibold transition ${
-                    isActive
-                      ? "bg-surface-raised text-brand shadow-sm"
-                      : "text-text-tertiary hover:text-text-secondary"
-                  }`}
-                  title={label}
-                >
-                  <Icon size={14} className="shrink-0" />
-                  <span className="truncate">{label}</span>
-                </button>
-              );
-            })}
-          </div>
+        <div className={`mt-auto hidden border-t border-border-subtle sm:block ${collapsed ? "sm:px-0 sm:py-3.5" : "sm:p-3.5"}`}>
+          <CommandPalette compact={collapsed} />
         </div>
       </aside>
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5 sm:px-7 sm:py-6">
-        <Outlet />
+      <main className="content-scroll relative z-10 min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24 pt-5 sm:rounded-[1.75rem] sm:px-7 sm:py-6 lg:px-9">
+        <div className="content-stage">
+          <Outlet />
+        </div>
       </main>
+      <nav ref={mobileNavRef} className="liquid-shell liquid-dock fixed inset-x-3 bottom-3 z-50 flex snap-x gap-1 overflow-x-auto rounded-[1.4rem] p-1.5 sm:hidden">
+        {navItems.map(({ to, key, icon: Icon }) => {
+          const isActive = location.pathname === to;
+          return (
+            <Link
+              key={to}
+              to={to}
+              aria-current={isActive ? "page" : undefined}
+              className={`flex min-h-14 min-w-[4.75rem] shrink-0 snap-center flex-col items-center justify-center gap-1 rounded-[1rem] px-2 text-[10px] font-semibold transition-all duration-200 ${
+                isActive
+                  ? "liquid-selected text-text-primary"
+                  : "text-text-tertiary hover:bg-surface-overlay hover:text-text-primary"
+              }`}
+            >
+              <Icon size={17} className={isActive ? "text-brand" : "text-text-tertiary"} />
+              <span className="max-w-full truncate">{t(key)}</span>
+            </Link>
+          );
+        })}
+      </nav>
+      <WorkspaceOverlays />
     </div>
   );
 }

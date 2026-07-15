@@ -28,16 +28,19 @@ export default function ProofreadTaskList({
   const { locale, t } = useI18n();
   const [tasks, setTasks] = useState<ProofreadTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ProofreadTask | null>(null);
   const { showToast } = useToast();
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const allTasks = await getProofreadTasks();
       setTasks(allTasks);
     } catch (error) {
       console.error('Failed to load tasks:', error);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -85,6 +88,18 @@ export default function ProofreadTaskList({
     return (
       <div className="flex items-center justify-center h-48">
         <Loader2 className="w-8 h-8 animate-spin text-brand" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="py-16 text-center text-text-tertiary">
+        <AlertCircle className="mx-auto mb-4 h-12 w-12 text-danger" />
+        <p className="mb-4 text-sm font-medium text-text-secondary">{t('proofread.tasks.loadFailed')}</p>
+        <Button type="button" variant="secondary" size="sm" onClick={loadTasks}>
+          {t('proofread.standalone.retry')}
+        </Button>
       </div>
     );
   }

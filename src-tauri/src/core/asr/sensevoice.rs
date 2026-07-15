@@ -1,25 +1,37 @@
+use super::vad::{detect_speech, SAMPLE_RATE};
 use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
 use crate::core::subtitle::{Cue, SubtitleTrack};
 use crate::error::{FinalSubError, Result};
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+pub const SENSEVOICE_MODEL_ID: &str = "sensevoice-small";
+pub const SENSEVOICE_ARCHIVE_DIR: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09";
+const MAX_SEGMENT_SECONDS: usize = 30;
 
 pub struct SenseVoiceEngine {
     models_dir: PathBuf,
+    vad_model_path: PathBuf,
 }
 
 impl SenseVoiceEngine {
-    pub fn new(models_dir: PathBuf) -> Self {
-        Self { models_dir }
+    pub fn new(models_dir: PathBuf, vad_model_path: PathBuf) -> Self {
+        Self {
+            models_dir,
+            vad_model_path,
+        }
     }
 
     fn model_dir(&self) -> PathBuf {
-        self.models_dir.join("sensevoice-small")
+        self.models_dir.join(SENSEVOICE_MODEL_ID)
     }
 
     fn is_model_installed(&self) -> bool {
-        let dir = self.model_dir();
-        dir.join("model.onnx").exists() && dir.join("tokens.txt").exists()
+        Self::is_model_installed_at(&self.model_dir())
+    }
+
+    pub fn is_model_installed_at(dir: &Path) -> bool {
+        dir.join("model.onnx").is_file() && dir.join("tokens.txt").is_file()
     }
 }
 
@@ -75,6 +87,27 @@ fn build_cues(
         }
     }
     build_cues_even(raw_text, duration_ms)
+}
+
+fn build_segment_cues(
+    raw_text: &str,
+    tokens: &[String],
+    timestamps: Option<&[f32]>,
+    segment_start_ms: u64,
+    segment_end_ms: u64,
+) -> Vec<Cue> {
+    if segment_end_ms <= segment_start_ms {
+        return Vec::new();
+    }
+    let duration_ms = segment_end_ms - segment_start_ms;
+    let mut cues = build_cues(raw_text, tokens, timestamps, duration_ms);
+    for cue in &mut cues {
+        let start = segment_start_ms.saturating_add(cue.start_ms);
+        let end = segment_start_ms.saturating_add(cue.end_ms);
+        cue.start_ms = start.min(segment_end_ms - 1);
+        cue.end_ms = end.min(segment_end_ms).max(cue.start_ms + 1);
+    }
+    cues
 }
 
 /// SenseVoice token 用 sentencepiece 风格的 `▁` 表词边界；中文为单字 token。
@@ -194,11 +227,22 @@ impl AsrEngine for SenseVoiceEngine {
         }
     }
 
-    async fn prepare(&self, _model: &AsrModelRef) -> Result<()> {
+    async fn prepare(&self, model: &AsrModelRef) -> Result<()> {
+        if model.engine_id != self.id() || model.model_id != SENSEVOICE_MODEL_ID {
+            return Err(FinalSubError::Validation(format!(
+                "SenseVoice 模型引用不匹配：期望 sensevoice/{SENSEVOICE_MODEL_ID}"
+            )));
+        }
         if !self.is_model_installed() {
             return Err(FinalSubError::Validation(
-                "SenseVoice 模型未安装。请在 models 目录下放置 sensevoice-small (包含 model.onnx 和 tokens.txt)。".into()
+                "SenseVoice 模型未安装。请先在模型管理中应用内下载，或导入 model.onnx 与 tokens.txt。".into()
             ));
+        }
+        if !self.vad_model_path.is_file() {
+            return Err(FinalSubError::Validation(format!(
+                "SenseVoice 的内置 Silero VAD 资源缺失：{}",
+                self.vad_model_path.display()
+            )));
         }
         Ok(())
     }
@@ -209,6 +253,7 @@ impl AsrEngine for SenseVoiceEngine {
         progress: ProgressSink,
         cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<SubtitleTrack> {
+        self.prepare(&job.model).await?;
         // 解码前先看一眼取消信号，避免白启动识别器。
         if let Some(rx) = &cancel_rx {
             if *rx.borrow() {
@@ -220,54 +265,106 @@ impl AsrEngine for SenseVoiceEngine {
         let model_path = model_dir.join("model.onnx");
         let tokens_path = model_dir.join("tokens.txt");
         let audio_path = job.audio_path.clone();
+        let vad_model_path = self.vad_model_path.clone();
+        let language = job.language.clone().unwrap_or_else(|| "auto".to_string());
+        let worker_progress = progress.clone();
+        let worker_cancel = cancel_rx.clone();
 
         progress
             .send(ProgressUpdate {
                 progress: 0.05,
-                message: "正在初始化 SenseVoice 引擎...".into(),
+                message: "正在加载 SenseVoice 与 Silero VAD...".into(),
             })
             .await
             .ok();
 
-        type DecodeResult =
-            std::result::Result<(String, Vec<String>, Option<Vec<f32>>, u64), String>;
-        let handle = tokio::task::spawn_blocking(move || -> DecodeResult {
-            let mut recognizer_config = sherpa_onnx::OfflineRecognizerConfig::default();
+        let handle =
+            tokio::task::spawn_blocking(move || -> std::result::Result<Vec<Cue>, String> {
+                let wave = sherpa_onnx::Wave::read(&audio_path)
+                    .ok_or_else(|| "读取音频文件失败".to_string())?;
+                if wave.sample_rate() != SAMPLE_RATE {
+                    return Err(format!(
+                        "SenseVoice 需要 16 kHz 单声道 WAV，当前采样率为 {} Hz",
+                        wave.sample_rate()
+                    ));
+                }
+                let segments = detect_speech(wave.samples(), &vad_model_path, MAX_SEGMENT_SECONDS)?;
+                if segments.is_empty() {
+                    return Err("Silero VAD 未检测到可识别的人声".into());
+                }
+                if worker_cancel
+                    .as_ref()
+                    .is_some_and(|receiver| *receiver.borrow())
+                {
+                    return Err("任务已取消".into());
+                }
 
-            let sense_voice_config = sherpa_onnx::OfflineSenseVoiceModelConfig {
-                model: Some(model_path.to_string_lossy().to_string()),
-                language: Some(job.language.clone().unwrap_or_else(|| "auto".to_string())),
-                use_itn: true,
-            };
+                let mut recognizer_config = sherpa_onnx::OfflineRecognizerConfig::default();
 
-            recognizer_config.model_config.sense_voice = sense_voice_config;
-            recognizer_config.model_config.tokens = Some(tokens_path.to_string_lossy().to_string());
-            recognizer_config.model_config.num_threads = 2;
-            recognizer_config.model_config.provider = Some("cpu".to_string());
+                let sense_voice_config = sherpa_onnx::OfflineSenseVoiceModelConfig {
+                    model: Some(model_path.to_string_lossy().to_string()),
+                    language: Some(language),
+                    use_itn: true,
+                };
 
-            let recognizer = sherpa_onnx::OfflineRecognizer::create(&recognizer_config)
-                .ok_or_else(|| "创建 SenseVoice 识别器失败".to_string())?;
+                recognizer_config.model_config.sense_voice = sense_voice_config;
+                recognizer_config.model_config.tokens =
+                    Some(tokens_path.to_string_lossy().to_string());
+                recognizer_config.model_config.num_threads = 2;
+                recognizer_config.model_config.provider = Some("cpu".to_string());
 
-            let wave = sherpa_onnx::Wave::read(&audio_path)
-                .ok_or_else(|| "读取音频文件失败".to_string())?;
+                let recognizer = sherpa_onnx::OfflineRecognizer::create(&recognizer_config)
+                    .ok_or_else(|| "创建 SenseVoice 识别器失败".to_string())?;
 
-            let stream = recognizer.create_stream();
-            stream.accept_waveform(wave.sample_rate(), wave.samples());
-            recognizer.decode_multiple_streams(&[&stream]);
-
-            let res = stream
-                .get_result()
-                .ok_or_else(|| "识别结果为空".to_string())?;
-            let sample_rate = wave.sample_rate().max(1) as u64;
-            let duration = (wave.samples().len() as u64 * 1000) / sample_rate;
-
-            Ok((res.text, res.tokens, res.timestamps, duration))
-        });
+                let total = segments.len();
+                let mut cues = Vec::new();
+                for (segment_index, segment) in segments.into_iter().enumerate() {
+                    if worker_cancel
+                        .as_ref()
+                        .is_some_and(|receiver| *receiver.borrow())
+                    {
+                        return Err("任务已取消".into());
+                    }
+                    let stream = recognizer.create_stream();
+                    stream.accept_waveform(SAMPLE_RATE, &segment.samples);
+                    recognizer.decode(&stream);
+                    let result = stream.get_result().ok_or_else(|| {
+                        format!("SenseVoice 未返回第 {} 段识别结果", segment_index + 1)
+                    })?;
+                    let segment_start_ms = segment.start_sample as u64 * 1_000 / SAMPLE_RATE as u64;
+                    let segment_end_ms = (segment.start_sample + segment.samples.len()) as u64
+                        * 1_000
+                        / SAMPLE_RATE as u64;
+                    let mut segment_cues = build_segment_cues(
+                        &result.text,
+                        &result.tokens,
+                        result.timestamps.as_deref(),
+                        segment_start_ms,
+                        segment_end_ms,
+                    );
+                    cues.append(&mut segment_cues);
+                    let fraction = (segment_index + 1) as f32 / total as f32;
+                    worker_progress
+                        .blocking_send(ProgressUpdate {
+                            progress: 0.12 + fraction * 0.84,
+                            message: format!(
+                                "SenseVoice 正在识别语音片段 {}/{}...",
+                                segment_index + 1,
+                                total
+                            ),
+                        })
+                        .ok();
+                }
+                for (index, cue) in cues.iter_mut().enumerate() {
+                    cue.index = (index + 1) as u32;
+                }
+                Ok(cues)
+            });
 
         // sherpa 的 decode 是同步阻塞调用，无法像子进程那样中途 kill。
         // 取消只让此处的等待提前返回；后台 blocking 线程会跑完后自然结束
         // （SenseVoice 单次离线解码通常很快）。
-        let (raw_text, tokens, timestamps, duration_ms) = match cancel_rx {
+        let cues = match cancel_rx {
             Some(mut rx) => {
                 tokio::pin!(handle);
                 loop {
@@ -291,20 +388,18 @@ impl AsrEngine for SenseVoiceEngine {
                 .map_err(FinalSubError::Validation)?,
         };
 
-        progress
-            .send(ProgressUpdate {
-                progress: 0.98,
-                message: "SenseVoice 识别完成，正在格式化字幕...".into(),
-            })
-            .await
-            .ok();
-
-        let cues = build_cues(&raw_text, &tokens, timestamps.as_deref(), duration_ms);
         if cues.is_empty() {
             return Err(FinalSubError::Validation(
                 "SenseVoice 未识别到任何字幕内容，请确认音频中有人声，或尝试切换语言/模型。".into(),
             ));
         }
+        progress
+            .send(ProgressUpdate {
+                progress: 1.0,
+                message: format!("SenseVoice 转录完成，共 {} 条字幕", cues.len()),
+            })
+            .await
+            .ok();
         Ok(SubtitleTrack { cues })
     }
 }
@@ -359,6 +454,17 @@ mod tests {
         let cues = build_cues("<|zh|>你好。再见。", &[], None, 4000);
         assert_eq!(cues.len(), 2);
         assert!(cues.iter().all(|c| c.end_ms > c.start_ms));
+        assert_eq!(cues[0].text, "你好。");
+    }
+
+    #[test]
+    fn segmented_cues_preserve_vad_offset_and_clamp_to_segment() {
+        let tokens = vec!["你".into(), "好".into(), "。".into()];
+        let timestamps = [0.2, 0.5, 1.0];
+        let cues = build_segment_cues("你好。", &tokens, Some(&timestamps), 12_000, 14_000);
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].start_ms, 12_200);
+        assert_eq!(cues[0].end_ms, 14_000);
         assert_eq!(cues[0].text, "你好。");
     }
 

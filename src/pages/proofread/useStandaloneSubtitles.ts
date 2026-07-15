@@ -87,7 +87,8 @@ export const useStandaloneSubtitles = (
   const [subtitleTracksForPlayer, setSubtitleTracksForPlayer] = useState<
     PlayerSubtitleTrack[]
   >([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(Boolean(isOpen && config.sourceSubtitlePath));
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // 撤销/重做历史
   const [history, setHistory] = useState<Subtitle[][]>([]);
@@ -105,26 +106,24 @@ export const useStandaloneSubtitles = (
 
   // 读取字幕文件并解析为 Subtitle 格式
   const readSubtitleFile = async (filePath: string): Promise<Subtitle[]> => {
-    try {
-      const content = await readTextFile(filePath);
-      const format = detectSubtitleFormat(filePath);
-      const entries = parseSubtitleEntries(content, format);
-      return entries.map((e) => {
-        const { start, end } = parseTimeRange(e.startEndTime);
-        return {
-          id: e.id,
-          startEndTime: e.startEndTime,
-          content: e.content,
-          sourceContent: e.content.join('\n'),
-          targetContent: '',
-          startTimeInSeconds: start,
-          endTimeInSeconds: end,
-        };
-      });
-    } catch (error) {
-      console.error('Error reading subtitle file:', error);
-      return [];
+    const content = await readTextFile(filePath);
+    const format = detectSubtitleFormat(filePath);
+    const entries = parseSubtitleEntries(content, format);
+    if (content.trim() !== '' && entries.length === 0) {
+      throw new Error(`No valid subtitle entries found in ${filePath}`);
     }
+    return entries.map((e) => {
+      const { start, end } = parseTimeRange(e.startEndTime);
+      return {
+        id: e.id,
+        startEndTime: e.startEndTime,
+        content: e.content,
+        sourceContent: e.content.join('\n'),
+        targetContent: '',
+        startTimeInSeconds: start,
+        endTimeInSeconds: end,
+      };
+    });
   };
 
   // 创建播放器字幕轨道（VTT blob URL）
@@ -158,6 +157,12 @@ export const useStandaloneSubtitles = (
     if (!config.sourceSubtitlePath) return;
 
     setIsLoading(true);
+    setLoadError(null);
+    setMergedSubtitles([]);
+    setIsDirty(false);
+    setHistory([]);
+    setHistoryIndex(-1);
+    setEditSnapshot(null);
     try {
       if (config.videoPath) {
         setVideoPath(config.videoPath);
@@ -195,35 +200,34 @@ export const useStandaloneSubtitles = (
       setSubtitleTracksForPlayer(playerTracks);
 
       // 合并字幕
-      if (sourceSubtitles.length > 0) {
-        const translatedMap = new Map();
-        translatedSubtitles.forEach((sub) => {
-          translatedMap.set(sub.startEndTime, sub);
-        });
+      const translatedMap = new Map();
+      translatedSubtitles.forEach((sub) => {
+        translatedMap.set(sub.startEndTime, sub);
+      });
 
-        const merged = sourceSubtitles.map((sub, index) => {
-          const translated =
-            translatedMap.get(sub.startEndTime) ||
-            (index < translatedSubtitles.length
-              ? translatedSubtitles[index]
-              : null);
+      const merged = sourceSubtitles.map((sub, index) => {
+        const translated =
+          translatedMap.get(sub.startEndTime) ||
+          (index < translatedSubtitles.length
+            ? translatedSubtitles[index]
+            : null);
 
-          const { start, end } = parseTimeRange(sub.startEndTime);
+        const { start, end } = parseTimeRange(sub.startEndTime);
 
-          return {
-            ...sub,
-            sourceContent: sub.content.join('\n'),
-            targetContent: translated ? translated.sourceContent || translated.content.join('\n') : '',
-            isEditing: false,
-            startTimeInSeconds: start,
-            endTimeInSeconds: end,
-          };
-        });
+        return {
+          ...sub,
+          sourceContent: sub.content.join('\n'),
+          targetContent: translated ? translated.sourceContent || translated.content.join('\n') : '',
+          isEditing: false,
+          startTimeInSeconds: start,
+          endTimeInSeconds: end,
+        };
+      });
 
-        setMergedSubtitles(merged);
-      }
+      setMergedSubtitles(merged);
     } catch (error) {
       console.error('Error loading files:', error);
+      setLoadError(error instanceof Error ? error.message : String(error));
       showToast('error', t('proofread.standalone.loadFailed'));
     } finally {
       setIsLoading(false);
@@ -277,10 +281,15 @@ export const useStandaloneSubtitles = (
         ? value.split('\n')
         : newSubtitles[index].content;
     setMergedSubtitles(newSubtitles);
+    setIsDirty(true);
   };
 
   // 保存字幕文件
   const handleSave = async (): Promise<boolean> => {
+    if (isLoading || loadError !== null) {
+      showToast('error', t('proofread.standalone.loadFailed'));
+      return false;
+    }
     try {
       const buildText = (sub: Subtitle, contentType: string): string => {
         if (contentType === 'source') {
@@ -350,6 +359,10 @@ export const useStandaloneSubtitles = (
     format: 'srt' | 'vtt' | 'ass' | 'lrc' | 'txt',
     contentType: 'source' | 'onlyTranslate' | 'sourceAndTranslate' | 'translateAndSource',
   ): Promise<boolean> => {
+    if (isLoading || loadError !== null) {
+      showToast('error', t('proofread.standalone.loadFailed'));
+      return false;
+    }
     try {
       const buildText = (sub: Subtitle, type: string): string => {
         if (type === 'source') {
@@ -661,6 +674,8 @@ export const useStandaloneSubtitles = (
     shouldShowTranslation,
     subtitleTracksForPlayer,
     isLoading,
+    loadError,
+    retryLoad: loadFiles,
     handleSubtitleChange,
     handleSave,
     handleExport,

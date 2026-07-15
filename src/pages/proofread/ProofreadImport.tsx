@@ -1,6 +1,5 @@
 import { useCallback } from 'react';
 import { Video, FileText, FolderOpen } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-dialog';
 import { useToast } from './Toast';
 import {
   PendingFile,
@@ -14,6 +13,7 @@ import {
 } from './subtitleDetector';
 import { detectLanguageFromFilename } from './languageDetector';
 import { useI18n } from '../../lib/i18n';
+import { openDialog } from '../../lib/tauri';
 
 interface ProofreadImportProps {
   onImportComplete: (files: PendingFile[], type: 'video' | 'subtitle') => void;
@@ -28,7 +28,7 @@ export default function ProofreadImport({
   // 导入视频文件
   const handleImportVideos = useCallback(async () => {
     try {
-      const selected = await open({
+      const selected = await openDialog({
         multiple: true,
         directory: false,
         filters: [
@@ -59,7 +59,7 @@ export default function ProofreadImport({
   // 导入字幕文件
   const handleImportSubtitles = useCallback(async () => {
     try {
-      const selected = await open({
+      const selected = await openDialog({
         multiple: true,
         directory: false,
         filters: [
@@ -90,7 +90,7 @@ export default function ProofreadImport({
   // 导入文件夹（智能检测）
   const handleImportFolder = useCallback(async () => {
     try {
-      const selected = await open({
+      const selected = await openDialog({
         directory: true,
         multiple: false,
       });

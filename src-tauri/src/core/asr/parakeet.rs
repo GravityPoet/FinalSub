@@ -1,35 +1,50 @@
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
-use crate::core::subtitle::SubtitleTrack;
+use crate::core::subtitle::{Cue, SubtitleTrack};
 use crate::error::{FinalSubError, Result};
 
-pub struct ParakeetMlxEngine {
-    uv_bin: PathBuf,
-    transcribe_script: PathBuf,
-    cache_root: PathBuf,
-    ffmpeg_path: Option<PathBuf>,
+pub const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
+pub const PARAKEET_ARCHIVE_DIR: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+const REQUIRED_MODEL_FILES: &[&str] = &[
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
+    "tokens.txt",
+];
+
+/// In-process Parakeet engine backed by the Rust sherpa-onnx binding.
+///
+/// The persisted engine id remains `parakeet-mlx` for compatibility with saved
+/// settings and task history, but the runtime no longer invokes MLX, Python, or uv.
+pub struct ParakeetNativeEngine {
+    models_dir: PathBuf,
 }
 
-impl ParakeetMlxEngine {
-    pub fn new(
-        uv_bin: PathBuf,
-        transcribe_script: PathBuf,
-        cache_root: PathBuf,
-        ffmpeg_path: Option<PathBuf>,
-    ) -> Self {
-        Self {
-            uv_bin,
-            transcribe_script,
-            cache_root,
-            ffmpeg_path,
-        }
+impl ParakeetNativeEngine {
+    pub fn new(models_dir: PathBuf) -> Self {
+        Self { models_dir }
+    }
+
+    pub fn model_dir(&self, model: &AsrModelRef) -> PathBuf {
+        model
+            .model_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.models_dir.join(PARAKEET_MODEL_ID))
+    }
+
+    pub fn is_model_installed_at(model_dir: &Path) -> bool {
+        REQUIRED_MODEL_FILES
+            .iter()
+            .all(|name| model_dir.join(name).is_file())
     }
 }
 
 #[async_trait]
-impl AsrEngine for ParakeetMlxEngine {
+impl AsrEngine for ParakeetNativeEngine {
     fn id(&self) -> &'static str {
         "parakeet-mlx"
     }
@@ -38,20 +53,17 @@ impl AsrEngine for ParakeetMlxEngine {
         AsrCapabilities {
             supports_streaming: false,
             supported_languages: vec!["en".into(), "auto".into()],
-            requires_model_download: false,
+            requires_model_download: true,
         }
     }
 
-    async fn prepare(&self, _model: &AsrModelRef) -> Result<()> {
-        if !self.uv_bin.exists() {
-            return Err(FinalSubError::Validation(
-                "uv 未找到。请安装 uv：https://docs.astral.sh/uv/".into(),
-            ));
-        }
-        if !self.transcribe_script.exists() {
+    async fn prepare(&self, model: &AsrModelRef) -> Result<()> {
+        let model_dir = self.model_dir(model);
+        if !Self::is_model_installed_at(&model_dir) {
             return Err(FinalSubError::Validation(format!(
-                "Parakeet 转录脚本未找到：{}",
-                self.transcribe_script.display()
+                "Parakeet 原生模型尚未安装。请先在模型管理下载 {}（目录应包含 encoder.int8.onnx、decoder.int8.onnx、joiner.int8.onnx 和 tokens.txt）：{}",
+                PARAKEET_MODEL_ID,
+                model_dir.display()
             )));
         }
         Ok(())
@@ -63,207 +75,303 @@ impl AsrEngine for ParakeetMlxEngine {
         progress: ProgressSink,
         cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Result<SubtitleTrack> {
-        let lang = job.language.as_deref().unwrap_or("auto");
-        if !matches!(lang, "auto" | "en" | "english") {
+        let language = job.language.as_deref().unwrap_or("auto");
+        if !matches!(language, "auto" | "en" | "english") {
             return Err(FinalSubError::Validation(format!(
-                "Parakeet v2 仅支持英文转录，当前语言：{lang}"
+                "Parakeet v2 仅支持英文转录，当前语言：{language}"
+            )));
+        }
+        if cancel_rx.as_ref().is_some_and(|rx| *rx.borrow()) {
+            return Err(FinalSubError::Validation("任务已取消".into()));
+        }
+
+        let model_dir = self.model_dir(&job.model);
+        if !Self::is_model_installed_at(&model_dir) {
+            return Err(FinalSubError::Validation(format!(
+                "Parakeet 模型文件不完整：{}",
+                model_dir.display()
             )));
         }
 
         progress
             .send(ProgressUpdate {
-                progress: 0.02,
-                message: "正在准备 Parakeet 环境...".into(),
-            })
-            .await
-            .ok();
-
-        let mut cmd = tokio::process::Command::new(&self.uv_bin);
-        cmd.args([
-            "run",
-            "--python",
-            "3.11",
-            "--with",
-            "parakeet-mlx",
-            "--with",
-            "huggingface-hub",
-            "python",
-            self.transcribe_script.to_str().unwrap_or(""),
-            "--audio",
-            &job.audio_path,
-            "--output",
-            &job.output_path,
-            "--model",
-            "mlx-community/parakeet-tdt-0.6b-v2",
-            "--cache-root",
-            self.cache_root.to_str().unwrap_or(""),
-            "--source-language",
-            lang,
-        ]);
-
-        if let Some(ref ffmpeg) = self.ffmpeg_path {
-            let path_val = std::env::var("PATH").unwrap_or_default();
-            cmd.env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    ffmpeg.parent().unwrap_or(ffmpeg).display(),
-                    path_val
-                ),
-            );
-            cmd.env("FFMPEG_PATH", ffmpeg.to_string_lossy().to_string());
-        }
-
-        let hf_home = self.cache_root.join("huggingface");
-        cmd.env("HF_HOME", hf_home.to_string_lossy().to_string());
-        cmd.env(
-            "HF_HUB_CACHE",
-            self.cache_root
-                .join("huggingface/hub")
-                .to_string_lossy()
-                .to_string(),
-        );
-        cmd.env(
-            "PARAKEET_CACHE_ROOT",
-            self.cache_root.to_string_lossy().to_string(),
-        );
-
-        progress
-            .send(ProgressUpdate {
                 progress: 0.05,
-                message: "正在转录（首次运行可能需要下载模型）...".into(),
+                message: "正在加载 Parakeet 原生 ONNX 模型...".into(),
             })
             .await
             .ok();
 
-        cmd.kill_on_drop(true);
+        let audio_path = job.audio_path.clone();
+        type DecodeResult =
+            std::result::Result<(String, Vec<String>, Option<Vec<f32>>, u64), String>;
+        let handle = tokio::task::spawn_blocking(move || -> DecodeResult {
+            let path = |name: &str| model_dir.join(name).to_string_lossy().to_string();
+            let mut config = sherpa_onnx::OfflineRecognizerConfig::default();
+            config.model_config.transducer = sherpa_onnx::OfflineTransducerModelConfig {
+                encoder: Some(path("encoder.int8.onnx")),
+                decoder: Some(path("decoder.int8.onnx")),
+                joiner: Some(path("joiner.int8.onnx")),
+            };
+            config.model_config.tokens = Some(path("tokens.txt"));
+            config.model_config.model_type = Some("nemo_transducer".into());
+            config.model_config.num_threads = std::thread::available_parallelism()
+                .map(|count| count.get().clamp(2, 8) as i32)
+                .unwrap_or(2);
+            config.model_config.provider = Some("cpu".into());
+            config.decoding_method = Some("greedy_search".into());
 
-        let output_fut = cmd.output();
-        tokio::pin!(output_fut);
+            let recognizer = sherpa_onnx::OfflineRecognizer::create(&config)
+                .ok_or_else(|| "创建 Parakeet 原生识别器失败".to_string())?;
+            let wave = sherpa_onnx::Wave::read(&audio_path)
+                .ok_or_else(|| "读取 WAV 音频失败；请确认音频提取步骤已生成有效文件".to_string())?;
+            let sample_rate = wave.sample_rate().max(1) as u64;
+            let duration_ms = (wave.samples().len() as u64 * 1_000) / sample_rate;
 
-        let output = if let Some(mut rx) = cancel_rx {
-            tokio::select! {
-                res = &mut output_fut => {
-                    res.map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?
-                }
-                _ = rx.changed() => {
-                    if *rx.borrow() {
-                        return Err(FinalSubError::Validation("任务已取消".into()));
+            let stream = recognizer.create_stream();
+            stream.accept_waveform(wave.sample_rate(), wave.samples());
+            recognizer.decode(&stream);
+            let result = stream
+                .get_result()
+                .ok_or_else(|| "Parakeet 未返回识别结果".to_string())?;
+            Ok((result.text, result.tokens, result.timestamps, duration_ms))
+        });
+
+        let decoded = if let Some(mut cancel) = cancel_rx {
+            tokio::pin!(handle);
+            loop {
+                tokio::select! {
+                    result = &mut handle => {
+                        break result
+                            .map_err(|error| FinalSubError::Validation(format!("Parakeet 线程池异常：{error}")))?
+                            .map_err(FinalSubError::Validation)?;
                     }
-                    loop {
-                        tokio::select! {
-                            res = &mut output_fut => {
-                                break res.map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?;
-                            }
-                            change_res = rx.changed() => {
-                                if change_res.is_err() || *rx.borrow() {
-                                    return Err(FinalSubError::Validation("任务已取消".into()));
-                                }
-                            }
+                    changed = cancel.changed() => {
+                        if changed.is_err() || *cancel.borrow() {
+                            return Err(FinalSubError::Validation("任务已取消".into()));
                         }
                     }
                 }
             }
         } else {
-            output_fut
+            handle
                 .await
-                .map_err(|e| FinalSubError::Validation(format!("运行 Parakeet 失败：{e}")))?
+                .map_err(|error| {
+                    FinalSubError::Validation(format!("Parakeet 线程池异常：{error}"))
+                })?
+                .map_err(FinalSubError::Validation)?
         };
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let msg = if stderr.contains("error") {
-                stderr.to_string()
-            } else {
-                format!("{stdout}\n{stderr}")
-            };
-            return Err(FinalSubError::Validation(format!(
-                "Parakeet 转录失败：{msg}"
-            )));
-        }
 
         progress
             .send(ProgressUpdate {
                 progress: 0.98,
-                message: "正在解析字幕...".into(),
+                message: "Parakeet 识别完成，正在生成时间轴...".into(),
             })
             .await
             .ok();
 
-        let srt_content = tokio::fs::read_to_string(&job.output_path)
-            .await
-            .map_err(|e| FinalSubError::Validation(format!("读取 SRT 输出失败：{e}")))?;
-
-        if srt_content.trim().is_empty() {
+        let (text, tokens, timestamps, duration_ms) = decoded;
+        let cues = build_cues(&text, &tokens, timestamps.as_deref(), duration_ms);
+        if cues.is_empty() {
             return Err(FinalSubError::Validation(
-                "Parakeet 未识别到任何字幕内容。该模型主要适合英文语音；如果当前音频是中文或其他语言，请切换到 Whisper.cpp 或 SenseVoice。".into(),
+                "Parakeet 未识别到字幕内容。该模型仅适用于英文语音；其他语言请切换 Whisper.cpp 或 SenseVoice。".into(),
             ));
         }
-
-        let track = SubtitleTrack::from_srt(&srt_content)?;
 
         progress
             .send(ProgressUpdate {
                 progress: 1.0,
-                message: format!("Parakeet 转录完成，共 {} 条字幕", track.len()),
+                message: format!("Parakeet 转录完成，共 {} 条字幕", cues.len()),
             })
             .await
             .ok();
-
-        Ok(track)
+        Ok(SubtitleTrack { cues })
     }
 }
 
-pub fn default_uv_bin() -> PathBuf {
-    // 优先尊重用户 PATH 环境（brew / 官方安装器 / cargo / asdf 等任意来源）
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let cand = dir.join("uv");
-            if cand.exists() {
-                return cand;
+fn normalize_token(token: &str) -> String {
+    token.replace('\u{2581}', " ")
+}
+
+fn normalize_spaces(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn ends_sentence(text: &str) -> bool {
+    text.chars()
+        .last()
+        .is_some_and(|character| matches!(character, '.' | '?' | '!' | ';' | ':'))
+}
+
+fn push_cue(cues: &mut Vec<Cue>, text: &mut String, start_ms: u64, end_ms: u64) {
+    let normalized = normalize_spaces(text);
+    text.clear();
+    if normalized.is_empty() {
+        return;
+    }
+    let previous_end = cues.last().map(|cue| cue.end_ms).unwrap_or(0);
+    let start_ms = start_ms.max(previous_end);
+    let end_ms = end_ms.max(start_ms + 300);
+    cues.push(Cue {
+        index: (cues.len() + 1) as u32,
+        start_ms,
+        end_ms,
+        text: normalized,
+    });
+}
+
+fn build_cues(
+    full_text: &str,
+    tokens: &[String],
+    timestamps: Option<&[f32]>,
+    duration_ms: u64,
+) -> Vec<Cue> {
+    if let Some(timestamps) = timestamps {
+        if !timestamps.is_empty() && timestamps.len() == tokens.len() {
+            let mut cues = Vec::new();
+            let mut text = String::new();
+            let mut cue_start = 0;
+            let mut previous_token_ms = 0;
+
+            for (index, token) in tokens.iter().enumerate() {
+                let token = token.trim();
+                if token.is_empty() || (token.starts_with('<') && token.ends_with('>')) {
+                    continue;
+                }
+                let token_ms = (timestamps[index].max(0.0) * 1_000.0) as u64;
+                let gap_ms = token_ms.saturating_sub(previous_token_ms);
+                if !text.is_empty() && gap_ms >= 800 {
+                    push_cue(&mut cues, &mut text, cue_start, token_ms);
+                    cue_start = token_ms;
+                } else if text.is_empty() {
+                    cue_start = token_ms;
+                }
+
+                text.push_str(&normalize_token(token));
+                previous_token_ms = token_ms;
+                let next_ms = timestamps
+                    .get(index + 1)
+                    .map(|next| (next.max(0.0) * 1_000.0) as u64)
+                    .unwrap_or(duration_ms);
+                let too_long = token_ms.saturating_sub(cue_start) >= 6_000
+                    || normalize_spaces(&text).chars().count() >= 84;
+                if ends_sentence(token) || too_long {
+                    push_cue(&mut cues, &mut text, cue_start, next_ms);
+                }
+            }
+            if !text.trim().is_empty() {
+                push_cue(&mut cues, &mut text, cue_start, duration_ms);
+            }
+            if !cues.is_empty() {
+                return cues;
             }
         }
     }
-    // PATH 未命中时回退常见安装位置（不偏向某个包管理器）
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(&home).join(".local/bin/uv"));
-        candidates.push(PathBuf::from(&home).join(".cargo/bin/uv"));
+
+    build_even_cues(full_text, duration_ms)
+}
+
+fn build_even_cues(full_text: &str, duration_ms: u64) -> Vec<Cue> {
+    let normalized = normalize_spaces(full_text);
+    if normalized.is_empty() {
+        return Vec::new();
     }
-    candidates.push(PathBuf::from("/opt/homebrew/bin/uv"));
-    candidates.push(PathBuf::from("/usr/local/bin/uv"));
-    for p in &candidates {
-        if p.exists() {
-            return p.clone();
+    let mut blocks = Vec::new();
+    let mut current = String::new();
+    for word in normalized.split_whitespace() {
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+        if ends_sentence(word) || current.chars().count() >= 84 {
+            blocks.push(std::mem::take(&mut current));
         }
     }
-    // 最终回退，交由运行时 PATH 解析
-    PathBuf::from("uv")
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+
+    let total_chars = blocks
+        .iter()
+        .map(|block| block.chars().count())
+        .sum::<usize>();
+    let mut cursor = 0;
+    blocks
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let share = if total_chars == 0 {
+                1_000
+            } else {
+                (duration_ms * text.chars().count() as u64 / total_chars as u64).max(500)
+            };
+            let start_ms = cursor;
+            let end_ms = (cursor + share).min(duration_ms.max(cursor + 500));
+            cursor = end_ms;
+            Cue {
+                index: (index + 1) as u32,
+                start_ms,
+                end_ms,
+                text,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn capabilities_english_only() {
-        let engine = ParakeetMlxEngine::new(
-            PathBuf::from("/usr/bin/uv"),
-            PathBuf::from("/script.py"),
-            PathBuf::from("/cache"),
-            None,
-        );
-        let caps = engine.capabilities();
-        assert!(!caps.supports_streaming);
-        assert!(caps.supported_languages.contains(&"en".to_string()));
-        assert!(caps.supported_languages.contains(&"auto".to_string()));
-        assert!(!caps.requires_model_download);
+    fn model_ref() -> AsrModelRef {
+        AsrModelRef {
+            engine_id: "parakeet-mlx".into(),
+            model_id: PARAKEET_MODEL_ID.into(),
+            model_path: None,
+        }
     }
 
     #[test]
-    fn default_uv_bin_returns_uv_path() {
-        let bin = default_uv_bin();
-        assert!(bin.to_string_lossy().contains("uv"));
+    fn requires_all_native_model_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let model_dir = temp.path().join(PARAKEET_MODEL_ID);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        for name in REQUIRED_MODEL_FILES {
+            std::fs::write(model_dir.join(name), b"test").unwrap();
+        }
+        let engine = ParakeetNativeEngine::new(temp.path().to_path_buf());
+        assert!(ParakeetNativeEngine::is_model_installed_at(
+            &engine.model_dir(&model_ref())
+        ));
+    }
+
+    #[test]
+    fn capabilities_are_native_downloaded_and_english_only() {
+        let engine = ParakeetNativeEngine::new(PathBuf::from("/models"));
+        let capabilities = engine.capabilities();
+        assert!(capabilities.requires_model_download);
+        assert_eq!(capabilities.supported_languages, vec!["en", "auto"]);
+    }
+
+    #[test]
+    fn token_timestamps_create_non_overlapping_sentence_cues() {
+        let tokens = vec![
+            "\u{2581}Hello".into(),
+            "\u{2581}world.".into(),
+            "\u{2581}Next".into(),
+            "\u{2581}line!".into(),
+        ];
+        let timestamps = [0.0, 0.4, 1.2, 1.6];
+        let cues = build_cues("Hello world. Next line!", &tokens, Some(&timestamps), 2_200);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].text, "Hello world.");
+        assert_eq!(cues[1].text, "Next line!");
+        assert!(cues[0].end_ms <= cues[1].start_ms);
+    }
+
+    #[test]
+    fn text_fallback_still_produces_subtitles() {
+        let cues = build_cues("One sentence. Another sentence!", &[], None, 4_000);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].index, 1);
+        assert!(cues.iter().all(|cue| cue.end_ms > cue.start_ms));
     }
 }

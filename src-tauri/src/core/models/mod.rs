@@ -97,19 +97,21 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
         AsrModelInfo {
             id: "parakeet-tdt-0.6b-v2".into(),
             engine_id: "parakeet-mlx".into(),
-            name: "Parakeet TDT 0.6B V2".into(),
-            description: "英文识别优化，Apple Silicon 快速路径（自动缓存）".into(),
+            name: "Parakeet TDT 0.6B V2 (Native)".into(),
+            description: "英文识别优化，内置 sherpa-onnx 原生运行时，无需 Python 或 uv".into(),
             languages: vec!["en".into()],
             best_for: "english-fast".into(),
-            size_mb: Some(600),
-            download_url: None,
-            status: ModelStatus::NotReady,
+            size_mb: Some(650),
+            download_url: Some(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2".into(),
+            ),
+            status: ModelStatus::Available,
         },
         AsrModelInfo {
-            id: "sensevoice-small".into(),
+            id: crate::core::asr::sensevoice::SENSEVOICE_MODEL_ID.into(),
             engine_id: "sensevoice".into(),
             name: "SenseVoice Small".into(),
-            description: "中文和粤语高精度极速识别模型（原生 ONNX 运行时）".into(),
+            description: "中英日韩粤多语言识别，原生 sherpa-onnx int8 运行时".into(),
             languages: vec![
                 "zh".into(),
                 "yue".into(),
@@ -118,8 +120,69 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
                 "ko".into(),
             ],
             best_for: "chinese-cantonese".into(),
-            size_mb: Some(800),
-            download_url: Some("https://huggingface.co/FunAudioLLM/SenseVoiceSmall".into()),
+            size_mb: Some(158),
+            download_url: Some(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2".into(),
+            ),
+            status: ModelStatus::Available,
+        },
+        AsrModelInfo {
+            id: crate::core::asr::sherpa_native::PARAFORMER_MODEL_ID.into(),
+            engine_id: "paraformer".into(),
+            name: "Paraformer Zh Int8".into(),
+            description: "中文与川渝方言识别优化，Silero VAD 长音频分段，原生 sherpa-onnx 运行".into(),
+            languages: vec!["zh".into(), "四川话".into(), "重庆话".into()],
+            best_for: "chinese-dialects-fast".into(),
+            size_mb: Some(218),
+            download_url: Some(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2".into(),
+            ),
+            status: ModelStatus::Available,
+        },
+        AsrModelInfo {
+            id: crate::core::asr::sherpa_native::QWEN3_MODEL_ID.into(),
+            engine_id: "qwen3-asr".into(),
+            name: "Qwen3-ASR 0.6B Int8".into(),
+            description: "30 种语言、多种中文方言与歌声识别，Silero VAD 分段，原生 sherpa-onnx 运行".into(),
+            languages: vec![
+                "zh".into(),
+                "en".into(),
+                "yue".into(),
+                "ja".into(),
+                "ko".into(),
+                "30 languages".into(),
+            ],
+            best_for: "multilingual-dialects-music".into(),
+            size_mb: Some(838),
+            download_url: Some(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2".into(),
+            ),
+            status: ModelStatus::Available,
+        },
+        AsrModelInfo {
+            id: crate::core::asr::sherpa_native::FIRERED_MODEL_ID.into(),
+            engine_id: "firered-asr".into(),
+            name: "FireRedASR2 CTC Int8".into(),
+            description: "中英识别与 20 余种中文方言/口音优化，体积小于 AED 版，支持 VAD 长音频".into(),
+            languages: vec!["zh".into(), "en".into(), "yue".into(), "20+ dialects".into()],
+            best_for: "chinese-english-dialects".into(),
+            size_mb: Some(496),
+            download_url: Some(
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25.tar.bz2".into(),
+            ),
+            status: ModelStatus::Available,
+        },
+        AsrModelInfo {
+            id: crate::core::asr::cloud::CLOUD_ASR_MODEL_ID.into(),
+            engine_id: crate::core::asr::cloud::CLOUD_ASR_ENGINE_ID.into(),
+            name: "Cloud ASR".into(),
+            description:
+                "OpenAI-compatible speech-to-text endpoint with explicit media upload consent"
+                    .into(),
+            languages: vec!["auto".into(), "multilingual".into()],
+            best_for: "managed-cloud-accuracy".into(),
+            size_mb: None,
+            download_url: None,
             status: ModelStatus::NotReady,
         },
         AsrModelInfo {
@@ -179,15 +242,30 @@ pub fn scan_model_status(catalog: &mut [AsrModelInfo], whisper_dir: &Path, parak
             }
             "parakeet-mlx" => {
                 let path = parakeet_dir.join(&model.id);
-                if path.exists() {
+                if crate::core::asr::parakeet::ParakeetNativeEngine::is_model_installed_at(&path) {
                     model.status = ModelStatus::Downloaded;
                 } else {
-                    model.status = ModelStatus::NotReady;
+                    model.status = ModelStatus::Available;
                 }
             }
             "sensevoice" => {
-                let path = whisper_dir.join("sensevoice-small").join("model.onnx");
-                if path.exists() {
+                let path = whisper_dir.join(crate::core::asr::sensevoice::SENSEVOICE_MODEL_ID);
+                if crate::core::asr::sensevoice::SenseVoiceEngine::is_model_installed_at(&path) {
+                    model.status = ModelStatus::Downloaded;
+                } else {
+                    model.status = ModelStatus::Available;
+                }
+            }
+            "paraformer" | "qwen3-asr" | "firered-asr" => {
+                let kind = match model.engine_id.as_str() {
+                    "paraformer" => crate::core::asr::sherpa_native::SherpaNativeKind::Paraformer,
+                    "qwen3-asr" => crate::core::asr::sherpa_native::SherpaNativeKind::Qwen3,
+                    _ => crate::core::asr::sherpa_native::SherpaNativeKind::FireRedCtc,
+                };
+                let path = whisper_dir.join(&model.id);
+                if crate::core::asr::sherpa_native::SherpaNativeEngine::is_model_installed_at(
+                    kind, &path,
+                ) {
                     model.status = ModelStatus::Downloaded;
                 } else {
                     model.status = ModelStatus::Available;
@@ -220,14 +298,48 @@ pub fn delete_whisper_model(models_dir: &Path, model_id: &str) -> crate::error::
     Ok(())
 }
 
+pub fn delete_managed_model(models_dir: &Path, model_id: &str) -> crate::error::Result<()> {
+    let normalized = validate_whisper_model_id(model_id)?;
+    let model = builtin_model_catalog()
+        .into_iter()
+        .find(|model| model.id == normalized)
+        .ok_or_else(|| {
+            crate::error::FinalSubError::Validation(format!("未知模型 ID：{normalized}"))
+        })?;
+    match model.engine_id.as_str() {
+        "whisper-cpp" => delete_whisper_model(models_dir, &normalized),
+        "parakeet-mlx" | "sensevoice" | "paraformer" | "qwen3-asr" | "firered-asr" => {
+            let path = models_dir.join(&normalized);
+            if !path.exists() {
+                return Err(crate::error::FinalSubError::Validation(format!(
+                    "模型目录不存在：{}",
+                    path.display()
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                std::fs::remove_file(path)?;
+            } else if metadata.is_dir() {
+                std::fs::remove_dir_all(path)?;
+            } else {
+                std::fs::remove_file(path)?;
+            }
+            Ok(())
+        }
+        _ => Err(crate::error::FinalSubError::Validation(format!(
+            "模型 {normalized} 不由 FinalSub 管理，不能从此处删除"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
     #[test]
-    fn catalog_has_seven_models() {
-        assert_eq!(builtin_model_catalog().len(), 7);
+    fn catalog_has_eleven_models() {
+        assert_eq!(builtin_model_catalog().len(), 11);
     }
 
     #[test]
@@ -261,11 +373,20 @@ mod tests {
     }
 
     #[test]
-    fn scan_parakeet_auto_cache() {
+    fn scan_parakeet_native_model_requires_all_files() {
         let tmp = TempDir::new().unwrap();
         let parakeet_dir = tmp.path().join("parakeet");
         std::fs::create_dir_all(&parakeet_dir).unwrap();
-        std::fs::create_dir_all(parakeet_dir.join("parakeet-tdt-0.6b-v2")).unwrap();
+        let model_dir = parakeet_dir.join("parakeet-tdt-0.6b-v2");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        for name in [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ] {
+            std::fs::write(model_dir.join(name), b"test").unwrap();
+        }
 
         let mut catalog = builtin_model_catalog();
         scan_model_status(&mut catalog, &tmp.path().join("whisper"), &parakeet_dir);
