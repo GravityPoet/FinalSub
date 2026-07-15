@@ -19,10 +19,18 @@ pub struct BurnInPlan {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BurnInStyleOptions {
+    pub font_name: Option<String>,
     pub font_size: Option<u32>,
     pub font_color: Option<String>,
     pub outline_color: Option<String>,
+    pub outline_width: Option<f32>,
+    pub shadow: Option<f32>,
+    pub background_color: Option<String>,
+    pub opaque_background: Option<bool>,
+    pub alignment: Option<u8>,
     pub margin_v: Option<u32>,
+    pub crf: Option<u8>,
+    pub preset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,15 +72,9 @@ pub fn subtitle_burn_in_plan(
     output_path: &str,
     style: BurnInStyleOptions,
 ) -> BurnInPlan {
-    let fs = style.font_size.unwrap_or(24);
-    let fc = style.font_color.as_deref().unwrap_or("&H00FFFFFF");
-    let oc = style.outline_color.as_deref().unwrap_or("&H00000000");
-    let mv = style.margin_v.unwrap_or(30);
-
-    let subtitles_filter = format!(
-        "subtitles={}:force_style='FontSize={fs},PrimaryColour={fc},OutlineColour={oc},MarginV={mv}'",
-        escape_ass_path(subtitle_path),
-    );
+    let subtitles_filter = subtitles_filter(subtitle_path, &style);
+    let crf = style.crf.unwrap_or(20).to_string();
+    let preset = style.preset.as_deref().unwrap_or("medium");
 
     BurnInPlan {
         ffmpeg_bin: ffmpeg_bin.to_string(),
@@ -81,6 +83,12 @@ pub fn subtitle_burn_in_plan(
             video_path.to_string(),
             "-vf".into(),
             subtitles_filter,
+            "-c:v".into(),
+            "libx264".into(),
+            "-crf".into(),
+            crf,
+            "-preset".into(),
+            preset.into(),
             "-c:a".into(),
             "copy".into(),
             "-y".into(),
@@ -114,26 +122,79 @@ pub fn burn_in_args(
     output_path: &str,
     style: &BurnInStyleOptions,
 ) -> Vec<String> {
-    let fs = style.font_size.unwrap_or(24);
-    let fc = style.font_color.as_deref().unwrap_or("&H00FFFFFF");
-    let oc = style.outline_color.as_deref().unwrap_or("&H00000000");
-    let mv = style.margin_v.unwrap_or(30);
-
-    let subtitles_filter = format!(
-        "subtitles={}:force_style='FontSize={fs},PrimaryColour={fc},OutlineColour={oc},MarginV={mv}'",
-        escape_ass_path(subtitle_path),
-    );
+    let subtitles_filter = subtitles_filter(subtitle_path, style);
+    let crf = style.crf.unwrap_or(20).to_string();
+    let preset = style.preset.as_deref().unwrap_or("medium");
 
     vec![
         "-i".into(),
         video_path.into(),
         "-vf".into(),
         subtitles_filter,
+        "-c:v".into(),
+        "libx264".into(),
+        "-crf".into(),
+        crf,
+        "-preset".into(),
+        preset.into(),
         "-c:a".into(),
         "copy".into(),
         "-y".into(),
         output_path.into(),
     ]
+}
+
+fn subtitles_filter(subtitle_path: &str, style: &BurnInStyleOptions) -> String {
+    let mut fields = vec![
+        format!("FontSize={}", style.font_size.unwrap_or(24)),
+        format!(
+            "PrimaryColour={}",
+            style.font_color.as_deref().unwrap_or("&H00FFFFFF")
+        ),
+        format!(
+            "OutlineColour={}",
+            style.outline_color.as_deref().unwrap_or("&H00000000")
+        ),
+        format!("Outline={}", style.outline_width.unwrap_or(2.0)),
+        format!("Shadow={}", style.shadow.unwrap_or(0.0)),
+        format!(
+            "Alignment={}",
+            ffmpeg_force_style_alignment(style.alignment.unwrap_or(2))
+        ),
+        format!("MarginV={}", style.margin_v.unwrap_or(30)),
+    ];
+    if let Some(font_name) = style
+        .font_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        fields.push(format!("FontName={}", font_name.trim()));
+    }
+    if style.opaque_background.unwrap_or(false) {
+        fields.push("BorderStyle=3".into());
+        fields.push(format!(
+            "BackColour={}",
+            style.background_color.as_deref().unwrap_or("&H80000000")
+        ));
+    }
+    format!(
+        "subtitles={}:force_style='{}'",
+        escape_ass_path(subtitle_path),
+        fields.join(",")
+    )
+}
+
+fn ffmpeg_force_style_alignment(numpad_alignment: u8) -> u8 {
+    match numpad_alignment {
+        1..=3 => numpad_alignment,
+        4 => 9,
+        5 => 10,
+        6 => 11,
+        7 => 5,
+        8 => 6,
+        9 => 7,
+        _ => 2,
+    }
 }
 
 fn escape_ass_path(path: &str) -> String {
@@ -231,6 +292,7 @@ mod tests {
                 font_color: Some("&H0000FFFF".into()),
                 outline_color: Some("&H00FF0000".into()),
                 margin_v: Some(50),
+                ..Default::default()
             },
         );
         let vf = plan
@@ -241,6 +303,20 @@ mod tests {
         assert!(vf.contains("PrimaryColour=&H0000FFFF"));
         assert!(vf.contains("OutlineColour=&H00FF0000"));
         assert!(vf.contains("MarginV=50"));
+    }
+
+    #[test]
+    fn numpad_alignment_maps_to_ffmpeg_ssa_force_style_values() {
+        assert_eq!(ffmpeg_force_style_alignment(1), 1);
+        assert_eq!(ffmpeg_force_style_alignment(2), 2);
+        assert_eq!(ffmpeg_force_style_alignment(3), 3);
+        assert_eq!(ffmpeg_force_style_alignment(4), 9);
+        assert_eq!(ffmpeg_force_style_alignment(5), 10);
+        assert_eq!(ffmpeg_force_style_alignment(6), 11);
+        assert_eq!(ffmpeg_force_style_alignment(7), 5);
+        assert_eq!(ffmpeg_force_style_alignment(8), 6);
+        assert_eq!(ffmpeg_force_style_alignment(9), 7);
+        assert_eq!(ffmpeg_force_style_alignment(0), 2);
     }
 
     #[test]

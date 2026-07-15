@@ -40,11 +40,22 @@ pub fn run() {
         },
     ));
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    if let Some(public_key) =
+        option_env!("FINALSUB_UPDATER_PUBLIC_KEY").filter(|key| !key.trim().is_empty())
+    {
+        builder = builder.plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(public_key)
+                .build(),
+        );
+    }
+
+    builder
         .setup(|app| {
             let config_dir = app
                 .path()
@@ -62,6 +73,7 @@ pub fn run() {
             commands::get_app_info,
             commands::list_asr_models,
             commands::scan_models,
+            commands::discover_batch_inputs,
             commands::delete_model,
             commands::import_local_model,
             commands::import_sensevoice_model,
@@ -69,6 +81,7 @@ pub fn run() {
             commands::download_model,
             commands::cancel_model_download,
             commands::create_task,
+            commands::create_tasks,
             commands::create_preview_task,
             commands::list_tasks,
             commands::delete_task,
@@ -92,10 +105,11 @@ pub fn run() {
             commands::transcribe_audio,
             commands::transcribe_parakeet,
             commands::list_translation_providers,
+            commands::list_translation_models,
             commands::test_translation,
+            commands::test_translation_proxy,
             commands::set_provider_secret,
             commands::has_provider_secret,
-            commands::get_provider_secret,
             commands::delete_provider_secret,
             commands::get_ffmpeg_version,
             commands::get_settings,
@@ -105,10 +119,13 @@ pub fn run() {
             commands::import_config,
             commands::export_config_to_path,
             commands::import_config_from_path,
+            commands::export_encrypted_config_to_path,
+            commands::import_encrypted_config_from_path,
             commands::load_proofread_tasks,
             commands::save_proofread_tasks,
             commands::authorize_subtitle_directory,
             commands::check_for_update,
+            commands::download_and_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

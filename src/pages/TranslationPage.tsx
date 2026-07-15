@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../lib/i18n";
-import { Languages, AlertCircle, CheckCircle, Eye, EyeOff } from "lucide-react";
+import { Languages, AlertCircle, CheckCircle, Eye, EyeOff, RefreshCw, Braces, Network, Save } from "lucide-react";
 import {
   listTranslationProviders,
+  listTranslationModels,
   testTranslation,
+  testTranslationProxy,
   getSettings,
   saveSettingsCmd,
   hasProviderSecret,
@@ -88,6 +90,46 @@ function writeSecretDraft(providerId: string, field: string, value: string) {
   }
 }
 
+function parseJsonObject(
+  text: string,
+  label: string,
+  invalidJsonMessage: string,
+  objectRequiredMessage: string,
+): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`${label}: ${invalidJsonMessage}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label}: ${objectRequiredMessage}`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseHeaderObject(
+  text: string,
+  label: string,
+  invalidJsonMessage: string,
+  objectRequiredMessage: string,
+  stringRequiredMessage: string,
+): Record<string, string> {
+  const parsed = parseJsonObject(text, label, invalidJsonMessage, objectRequiredMessage);
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value !== "string") {
+      throw new Error(`${label}: ${stringRequiredMessage.replace("{key}", key)}`);
+    }
+  }
+  return parsed as Record<string, string>;
+}
+
+function formatJsonObject(value: Record<string, unknown> | undefined): string {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
 export default function TranslationPage() {
   const { t, locale } = useI18n();
   const [providers, setProviders] = useState<TranslationProvider[]>([]);
@@ -101,10 +143,19 @@ export default function TranslationPage() {
 
   const [apiUrl, setApiUrl] = useState("");
   const [modelName, setModelName] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [userPrompt, setUserPrompt] = useState("");
+  const [customHeadersJson, setCustomHeadersJson] = useState("{}");
+  const [customBodyJson, setCustomBodyJson] = useState("{}");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [secretConfigured, setSecretConfigured] = useState<Record<string, boolean>>({});
   const [secretDirty, setSecretDirty] = useState<Record<string, boolean>>({});
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [proxyStatus, setProxyStatus] = useState("");
+  const [runtimeSaved, setRuntimeSaved] = useState(false);
 
   useEffect(() => {
     listTranslationProviders().then(setProviders).catch(console.error);
@@ -120,6 +171,19 @@ export default function TranslationPage() {
     .filter((provider) => provider.implemented)
     .map((provider) => provider.name)
     .join(locale === "en" ? ", " : "、");
+  const parseCustomHeaders = () => parseHeaderObject(
+    customHeadersJson,
+    t("translation.customHeaders"),
+    t("translation.invalidJson"),
+    t("translation.jsonObjectRequired"),
+    t("translation.headerStringRequired"),
+  );
+  const parseCustomBody = () => parseJsonObject(
+    customBodyJson,
+    t("translation.customBody"),
+    t("translation.invalidJson"),
+    t("translation.jsonObjectRequired"),
+  );
 
   useEffect(() => {
     if (!selectedProvider || !settings) return;
@@ -127,6 +191,12 @@ export default function TranslationPage() {
     const md = settings.translate_models?.[selectedProvider] || "";
     setApiUrl(ep);
     setModelName(md);
+    setAvailableModels([]);
+    setSystemPrompt(settings.translate_system_prompts?.[selectedProvider] || "");
+    setUserPrompt(settings.translate_user_prompts?.[selectedProvider] || "");
+    setCustomHeadersJson(formatJsonObject(settings.translate_custom_headers?.[selectedProvider]));
+    setCustomBodyJson(formatJsonObject(settings.translate_custom_body?.[selectedProvider]));
+    setProxyStatus("");
 
     if (selectedProviderInfo?.secret_fields) {
       const loadSecrets = async () => {
@@ -135,7 +205,7 @@ export default function TranslationPage() {
         const loadedSecrets: Record<string, string> = {};
         for (const field of selectedProviderInfo.secret_fields) {
           try {
-            const hasSecret = await hasProviderSecret(selectedProvider, field);
+            const hasSecret = await hasProviderSecret(selectedProvider, ep, field);
             configured[field] = hasSecret;
             if (hasSecret) {
               loadedSecrets[field] = "••••••••";
@@ -200,21 +270,31 @@ export default function TranslationPage() {
     setSuccessMsg("");
     setError("");
     try {
+      const parsedCustomHeaders = selectedProviderInfo?.is_ai ? parseCustomHeaders() : {};
+      const parsedCustomBody = selectedProviderInfo?.is_ai ? parseCustomBody() : {};
       const updatedEndpoints = { ...(settings.translate_endpoints || {}), [selectedProvider]: apiUrl.trim() };
       const updatedModels = { ...(settings.translate_models || {}), [selectedProvider]: modelName.trim() };
+      const updatedSystemPrompts = { ...(settings.translate_system_prompts || {}), [selectedProvider]: systemPrompt.trim() };
+      const updatedUserPrompts = { ...(settings.translate_user_prompts || {}), [selectedProvider]: userPrompt.trim() };
+      const updatedCustomHeaders = { ...(settings.translate_custom_headers || {}), [selectedProvider]: parsedCustomHeaders };
+      const updatedCustomBody = { ...(settings.translate_custom_body || {}), [selectedProvider]: parsedCustomBody };
 
       const updated = {
         ...settings,
         translate_provider: selectedProvider,
         translate_endpoints: updatedEndpoints,
         translate_models: updatedModels,
+        translate_system_prompts: updatedSystemPrompts,
+        translate_user_prompts: updatedUserPrompts,
+        translate_custom_headers: updatedCustomHeaders,
+        translate_custom_body: updatedCustomBody,
       };
 
       if (selectedProviderInfo?.secret_fields) {
         for (const field of selectedProviderInfo.secret_fields) {
           const value = secrets[field]?.trim();
           if (secretDirty[field] && value && value !== "••••••••") {
-            await setProviderSecret(selectedProvider, field, value);
+            await setProviderSecret(selectedProvider, apiUrl.trim(), field, value);
           }
         }
       }
@@ -222,7 +302,7 @@ export default function TranslationPage() {
       const confirmedConfigured: Record<string, boolean> = {};
       const confirmedSecrets: Record<string, string> = {};
       for (const field of selectedProviderInfo?.secret_fields || []) {
-        const hasSecret = await hasProviderSecret(selectedProvider, field);
+        const hasSecret = await hasProviderSecret(selectedProvider, apiUrl.trim(), field);
         confirmedConfigured[field] = hasSecret;
         if (hasSecret) {
           confirmedSecrets[field] = "••••••••";
@@ -258,6 +338,8 @@ export default function TranslationPage() {
     setError("");
     setTestResult("");
     try {
+      const parsedCustomHeaders = selectedProviderInfo?.is_ai ? parseCustomHeaders() : {};
+      const parsedCustomBody = selectedProviderInfo?.is_ai ? parseCustomBody() : {};
       // 仅发送 dirty (用户本次输入) 的密钥，未修改的由 Rust 自动 fallback 去 Keychain 读取，避免暴露
       const testSecrets: Record<string, string> = {};
       for (const field of selectedProviderInfo?.secret_fields || []) {
@@ -275,6 +357,11 @@ export default function TranslationPage() {
         model_name: modelName.trim() || undefined,
         api_key: testSecrets["apiKey"] || undefined,
         secret_fields: Object.keys(testSecrets).length > 0 ? testSecrets : undefined,
+        system_prompt: systemPrompt.trim() || undefined,
+        user_prompt: userPrompt.trim() || undefined,
+        proxy_url: settings?.proxy_enabled ? settings.proxy_url.trim() || undefined : undefined,
+        custom_headers: Object.keys(parsedCustomHeaders).length > 0 ? parsedCustomHeaders : undefined,
+        custom_body: Object.keys(parsedCustomBody).length > 0 ? parsedCustomBody : undefined,
       });
 
       if (resp.success) {
@@ -286,6 +373,69 @@ export default function TranslationPage() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleFetchModels = async () => {
+    if (!selectedProviderInfo || !selectedProviderInfo.requires_model) return;
+    if (!apiUrl.trim()) {
+      setError(t("translation.endpointMissing").replace("{name}", selectedProviderInfo.name));
+      return;
+    }
+    setFetchingModels(true);
+    setError("");
+    try {
+      const parsedCustomHeaders = selectedProviderInfo.is_ai ? parseCustomHeaders() : {};
+      for (const field of selectedProviderInfo.secret_fields || []) {
+        const value = secrets[field]?.trim();
+        if (secretDirty[field] && value && value !== "••••••••") {
+          await setProviderSecret(selectedProvider, apiUrl.trim(), field, value);
+        }
+      }
+      const models = await listTranslationModels(
+        selectedProvider,
+        apiUrl.trim(),
+        Object.keys(parsedCustomHeaders).length > 0 ? parsedCustomHeaders : undefined,
+      );
+      setAvailableModels(models);
+      if (!modelName.trim() && models[0]) setModelName(models[0]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const handleSaveRuntime = async () => {
+    if (!settings) return;
+    setError("");
+    setRuntimeSaved(false);
+    try {
+      const saved = await saveSettingsCmd(settings);
+      setSettings(saved);
+      setRuntimeSaved(true);
+      window.setTimeout(() => setRuntimeSaved(false), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleProxyTest = async () => {
+    if (!settings?.proxy_url.trim()) {
+      setError(t("translation.proxyMissing"));
+      return;
+    }
+    setTestingProxy(true);
+    setProxyStatus("");
+    setError("");
+    try {
+      const targetUrl = apiUrl.trim() || selectedProviderInfo?.default_endpoint || "https://example.com/";
+      const status = await testTranslationProxy(settings.proxy_url.trim(), targetUrl);
+      setProxyStatus(t("translation.proxySuccess", { status }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTestingProxy(false);
     }
   };
 
@@ -417,16 +567,95 @@ export default function TranslationPage() {
             {selectedProviderInfo.requires_model && (
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.modelName")}</label>
-                <Input
-                  type="text"
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  placeholder={
-                    selectedProvider === CUSTOM_OPENAI_PROVIDER_ID
-                      ? t("translation.modelPlaceholderOp")
-                      : t("translation.modelPlaceholder")
-                  }
-                />
+                <div className="flex gap-2">
+                  <Input
+                    type="text"
+                    list="translation-model-options"
+                    value={modelName}
+                    onChange={(e) => setModelName(e.target.value)}
+                    placeholder={
+                      selectedProvider === CUSTOM_OPENAI_PROVIDER_ID
+                        ? t("translation.modelPlaceholderOp")
+                        : t("translation.modelPlaceholder")
+                    }
+                  />
+                  <Button type="button" onClick={handleFetchModels} disabled={fetchingModels} variant="secondary" size="sm">
+                    <RefreshCw size={13} className={fetchingModels ? "animate-spin" : ""} />
+                    {t("translation.fetchModels")}
+                  </Button>
+                  <datalist id="translation-model-options">
+                    {availableModels.map((model) => <option key={model} value={model} />)}
+                  </datalist>
+                </div>
+                {availableModels.length > 0 && <p className="mt-1.5 text-xs text-success">{t("translation.modelsFound", { count: availableModels.length })}</p>}
+              </div>
+            )}
+
+            {selectedProviderInfo.is_ai && (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.systemPrompt")}</label>
+                  <Textarea
+                    value={systemPrompt}
+                    onChange={(event) => setSystemPrompt(event.target.value)}
+                    rows={5}
+                    maxLength={20000}
+                    placeholder={t("translation.systemPromptPlaceholder")}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.userPrompt")}</label>
+                  <Textarea
+                    value={userPrompt}
+                    onChange={(event) => setUserPrompt(event.target.value)}
+                    rows={5}
+                    maxLength={20000}
+                    placeholder={t("translation.userPromptPlaceholder")}
+                  />
+                </div>
+                <p className="text-xs leading-5 text-text-tertiary lg:col-span-2">{t("translation.promptTokensHint")}</p>
+                <div className="liquid-panel lg:col-span-2 rounded-2xl border border-border-subtle p-4">
+                  <div className="mb-4 flex items-start gap-3">
+                    <span className="liquid-icon grid h-9 w-9 shrink-0 place-items-center rounded-xl text-brand">
+                      <Braces size={17} />
+                    </span>
+                    <div>
+                      <h5 className="text-sm font-semibold text-text-primary">{t("translation.customParamsTitle")}</h5>
+                      <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("translation.customParamsDesc")}</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.customHeaders")}</label>
+                      <Textarea
+                        value={customHeadersJson}
+                        onChange={(event) => {
+                          setCustomHeadersJson(event.target.value);
+                          setError("");
+                        }}
+                        rows={8}
+                        spellCheck={false}
+                        className="font-mono text-xs leading-5"
+                        placeholder={'{\n  "X-Client": "FinalSub",\n  "Authorization": "Bearer ${API_KEY}"\n}'}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.customBody")}</label>
+                      <Textarea
+                        value={customBodyJson}
+                        onChange={(event) => {
+                          setCustomBodyJson(event.target.value);
+                          setError("");
+                        }}
+                        rows={8}
+                        spellCheck={false}
+                        className="font-mono text-xs leading-5"
+                        placeholder={'{\n  "temperature": 0.2,\n  "max_tokens": 2048\n}'}
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-text-tertiary">{t("translation.customParamsHint")}</p>
+                </div>
               </div>
             )}
             
@@ -492,6 +721,90 @@ export default function TranslationPage() {
           )}
         </div>
       </Card>
+
+      {settings && (
+        <Card className="p-6">
+          <h3 className="mb-1 font-display text-h2 font-semibold text-text-primary">{t("translation.runtimeTitle")}</h3>
+          <p className="mb-5 text-sm leading-6 text-text-tertiary">{t("translation.runtimeDesc")}</p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.batchSize")}</label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={settings.translate_batch_size}
+                onChange={(event) => setSettings({ ...settings, translate_batch_size: Math.min(50, Math.max(1, Number(event.target.value) || 1)) })}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.concurrency")}</label>
+              <Input
+                type="number"
+                min={1}
+                max={8}
+                value={settings.translate_concurrency}
+                onChange={(event) => setSettings({ ...settings, translate_concurrency: Math.min(8, Math.max(1, Number(event.target.value) || 1)) })}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.requestInterval")}</label>
+              <Input
+                type="number"
+                min={0}
+                max={60000}
+                step={100}
+                value={settings.translate_request_interval_ms}
+                onChange={(event) => setSettings({ ...settings, translate_request_interval_ms: Math.min(60000, Math.max(0, Number(event.target.value) || 0)) })}
+              />
+            </div>
+          </div>
+          <div className="mt-5 border-t border-border-subtle pt-5">
+            <label className="flex cursor-pointer items-center gap-3 text-sm text-text-secondary">
+              <input
+                type="checkbox"
+                checked={settings.proxy_enabled}
+                onChange={(event) => {
+                  setSettings({ ...settings, proxy_enabled: event.target.checked });
+                  setError("");
+                  setProxyStatus("");
+                }}
+                className="h-4 w-4 accent-brand"
+              />
+              <span className="font-semibold text-text-primary">{t("translation.enableProxy")}</span>
+            </label>
+            <Input
+              className="mt-3"
+              type="url"
+              disabled={!settings.proxy_enabled}
+              value={settings.proxy_url}
+              onChange={(event) => {
+                setSettings({ ...settings, proxy_url: event.target.value });
+                setError("");
+                setProxyStatus("");
+              }}
+              placeholder="http://127.0.0.1:7890"
+            />
+            <p className="mt-1.5 text-xs leading-5 text-text-tertiary">{t("translation.proxyHint")}</p>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button type="button" variant="secondary" size="sm" onClick={handleProxyTest} disabled={!settings.proxy_enabled || testingProxy}>
+                <Network size={14} className={testingProxy ? "animate-pulse" : ""} />
+                {testingProxy ? t("translation.proxyTesting") : t("translation.proxyTest")}
+              </Button>
+              <Button type="button" variant="primary" size="sm" onClick={handleSaveRuntime}>
+                <Save size={14} />
+                {t("translation.runtimeSave")}
+              </Button>
+              {proxyStatus && <span className="text-sm font-medium text-success">{proxyStatus}</span>}
+              {runtimeSaved && (
+                <span className="flex items-center gap-1.5 text-sm font-medium text-success">
+                  <CheckCircle size={14} /> {t("translation.runtimeSaved")}
+                </span>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* 测试翻译 */}
       <Card className="p-6">

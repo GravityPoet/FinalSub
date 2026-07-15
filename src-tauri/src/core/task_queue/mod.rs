@@ -52,6 +52,10 @@ pub struct Task {
     #[serde(default)]
     pub translation_content_mode: TranslationContentMode,
     pub output_format: String,
+    #[serde(default)]
+    pub output_name: Option<String>,
+    #[serde(default)]
+    pub strip_chinese_punctuation: bool,
     pub progress: f32,
     pub status_message: String,
     pub output_path: Option<String>,
@@ -73,6 +77,8 @@ pub struct CreateTaskParams {
     pub target_language: Option<String>,
     pub translation_content_mode: TranslationContentMode,
     pub output_format: Option<String>,
+    pub output_name: Option<String>,
+    pub strip_chinese_punctuation: bool,
 }
 
 pub fn create_task(params: CreateTaskParams) -> Task {
@@ -89,6 +95,8 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         target_language: params.target_language,
         translation_content_mode: params.translation_content_mode,
         output_format: params.output_format.unwrap_or_else(|| "srt".into()),
+        output_name: params.output_name,
+        strip_chinese_punctuation: params.strip_chinese_punctuation,
         progress: 0.0,
         status_message: "待处理".into(),
         output_path: None,
@@ -129,4 +137,77 @@ pub fn save_tasks(app_config_dir: &Path, tasks: &HashMap<String, Task>) -> Resul
     std::fs::write(&tmp_path, content).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn insert_tasks_atomically(
+    app_config_dir: &Path,
+    tasks: &mut HashMap<String, Task>,
+    new_tasks: &[Task],
+) -> Result<(), String> {
+    let mut next = tasks.clone();
+    for task in new_tasks {
+        next.insert(task.id.clone(), task.clone());
+    }
+    save_tasks(app_config_dir, &next)?;
+    *tasks = next;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_task(name: &str) -> Task {
+        create_task(CreateTaskParams {
+            task_type: TaskType::GenerateOnly,
+            media_path: format!("/tmp/{name}.wav"),
+            media_name: format!("{name}.wav"),
+            engine_id: "whisper-cpp".into(),
+            model_id: "small".into(),
+            source_language: Some("auto".into()),
+            target_language: None,
+            translation_content_mode: TranslationContentMode::TargetOnly,
+            output_format: Some("srt".into()),
+            output_name: None,
+            strip_chinese_punctuation: false,
+        })
+    }
+
+    #[test]
+    fn batch_insert_persists_all_tasks_together() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = sample_task("first");
+        let second = sample_task("second");
+        let mut tasks = HashMap::new();
+
+        insert_tasks_atomically(temp.path(), &mut tasks, &[first.clone(), second.clone()]).unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        let loaded = load_tasks(temp.path()).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains_key(&first.id));
+        assert!(loaded.contains_key(&second.id));
+    }
+
+    #[test]
+    fn batch_insert_keeps_memory_unchanged_when_persistence_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocked_config_dir = temp.path().join("not-a-directory");
+        std::fs::write(&blocked_config_dir, b"blocked").unwrap();
+        let existing = sample_task("existing");
+        let incoming = sample_task("incoming");
+        let mut tasks = HashMap::from([(existing.id.clone(), existing.clone())]);
+
+        let error = insert_tasks_atomically(
+            &blocked_config_dir,
+            &mut tasks,
+            std::slice::from_ref(&incoming),
+        )
+        .unwrap_err();
+
+        assert!(!error.is_empty());
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks.contains_key(&existing.id));
+        assert!(!tasks.contains_key(&incoming.id));
+    }
 }

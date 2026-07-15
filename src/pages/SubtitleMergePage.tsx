@@ -1,19 +1,20 @@
 import { useState, useEffect } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
 import { useI18n } from "../lib/i18n";
 import {
   burnSubtitle,
   cancelBurnSubtitle,
   getVideoMetadata,
   generateSubtitlePreview,
+  listen,
+  openDialog,
+  saveDialog,
   type VideoMetadata,
 } from "../lib/tauri";
 
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
-import { Input } from "../components/ui/Input";
+import { Input, Select } from "../components/ui/Input";
 import { Progress } from "../components/ui/Progress";
 
 function assColorToCss(assColor: string): string {
@@ -58,10 +59,18 @@ export default function SubtitleMergePage() {
   const [subtitlePath, setSubtitlePath] = useState("");
   const [outputPath, setOutputPath] = useState("");
   const [preset, setPreset] = useState(0);
+  const [fontName, setFontName] = useState("PingFang SC");
   const [fontSize, setFontSize] = useState(24);
   const [fontColor, setFontColor] = useState("&H00FFFFFF");
   const [outlineColor, setOutlineColor] = useState("&H00000000");
+  const [outlineWidth, setOutlineWidth] = useState(2);
+  const [shadow, setShadow] = useState(0);
+  const [backgroundColor, setBackgroundColor] = useState("&H80000000");
+  const [opaqueBackground, setOpaqueBackground] = useState(false);
+  const [alignment, setAlignment] = useState(2);
   const [marginV, setMarginV] = useState(30);
+  const [crf, setCrf] = useState(20);
+  const [encodingPreset, setEncodingPreset] = useState("medium");
   const [processing, setProcessing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState("");
@@ -127,7 +136,7 @@ export default function SubtitleMergePage() {
   }, [processing, outputPath]);
 
   const handleSelectVideo = async () => {
-    const selected = await open({
+    const selected = await openDialog({
       multiple: false,
       filters: [{ name: t("merge.videoFiles"), extensions: ["mp4", "mkv", "mov", "webm"] }],
     });
@@ -135,7 +144,7 @@ export default function SubtitleMergePage() {
   };
 
   const handleSelectSubtitle = async () => {
-    const selected = await open({
+    const selected = await openDialog({
       multiple: false,
       filters: [{ name: t("merge.subtitleFiles"), extensions: ["srt", "ass", "vtt"] }],
     });
@@ -143,7 +152,7 @@ export default function SubtitleMergePage() {
   };
 
   const handleSelectOutput = async () => {
-    const selected = await save({
+    const selected = await saveDialog({
       defaultPath: videoPath ? videoPath.replace(/\.[^.]+$/, "-subtitled.mp4") : "output.mp4",
       filters: [{ name: "MP4", extensions: ["mp4"] }],
     });
@@ -174,10 +183,18 @@ export default function SubtitleMergePage() {
         video_path: videoPath,
         subtitle_path: subtitlePath,
         output_path: outputPath,
+        font_name: fontName,
         font_size: fontSize,
         font_color: fontColor,
         outline_color: outlineColor,
+        outline_width: outlineWidth,
+        shadow,
+        background_color: backgroundColor,
+        opaque_background: opaqueBackground,
+        alignment,
         margin_v: marginV,
+        crf,
+        preset: encodingPreset,
         soft_subtitle: softSubtitle,
       });
       setResult(out);
@@ -215,10 +232,18 @@ export default function SubtitleMergePage() {
         video_path: videoPath,
         subtitle_path: subtitlePath,
         output_path: "",
+        font_name: fontName,
         font_size: fontSize,
         font_color: fontColor,
         outline_color: outlineColor,
+        outline_width: outlineWidth,
+        shadow,
+        background_color: backgroundColor,
+        opaque_background: opaqueBackground,
+        alignment,
         margin_v: marginV,
+        crf,
+        preset: "ultrafast",
       });
       setNotice(t("merge.previewSuccess"));
     } catch (err) {
@@ -358,6 +383,10 @@ export default function SubtitleMergePage() {
           </div>
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="col-span-2">
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontName")}</label>
+              <Input type="text" maxLength={128} value={fontName} disabled={processing || softSubtitle} onChange={(e) => setFontName(e.target.value)} className="h-9" />
+            </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontSize")}</label>
               <Input type="number" min={10} max={72} value={fontSize} disabled={processing || softSubtitle} onChange={(e) => setFontSize(Number(e.target.value))} className="h-9" />
@@ -371,31 +400,77 @@ export default function SubtitleMergePage() {
               <Input type="text" value={outlineColor} disabled={processing || softSubtitle} onChange={(e) => setOutlineColor(e.target.value)} className="h-9 font-mono" />
             </div>
             <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.outlineWidth")}</label>
+              <Input type="number" min={0} max={10} step={0.5} value={outlineWidth} disabled={processing || softSubtitle} onChange={(e) => setOutlineWidth(Number(e.target.value))} className="h-9" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.shadow")}</label>
+              <Input type="number" min={0} max={20} step={0.5} value={shadow} disabled={processing || softSubtitle} onChange={(e) => setShadow(Number(e.target.value))} className="h-9" />
+            </div>
+            <div>
               <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.marginV")}</label>
               <Input type="number" min={0} max={100} value={marginV} disabled={processing || softSubtitle} onChange={(e) => setMarginV(Number(e.target.value))} className="h-9" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.quality")}</label>
+              <Input type="number" min={0} max={51} value={crf} disabled={processing || softSubtitle} onChange={(e) => setCrf(Number(e.target.value))} className="h-9" />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.encodingPreset")}</label>
+              <Select value={encodingPreset} disabled={processing || softSubtitle} onChange={(e) => setEncodingPreset(e.target.value)} className="h-9">
+                {['ultrafast', 'veryfast', 'fast', 'medium', 'slow', 'veryslow'].map((value) => <option key={value} value={value}>{value}</option>)}
+              </Select>
+            </div>
+            <label className="col-span-2 flex cursor-pointer items-center gap-3 rounded-xl border border-border-subtle bg-surface-overlay px-3.5 py-3 text-sm text-text-secondary">
+              <input type="checkbox" checked={opaqueBackground} disabled={processing || softSubtitle} onChange={(e) => setOpaqueBackground(e.target.checked)} className="h-4 w-4 accent-brand" />
+              <span className="font-semibold text-text-primary">{t("merge.opaqueBackground")}</span>
+            </label>
+            <div className="col-span-2">
+              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.backgroundColor")}</label>
+              <Input type="text" value={backgroundColor} disabled={processing || softSubtitle || !opaqueBackground} onChange={(e) => setBackgroundColor(e.target.value)} className="h-9 font-mono" />
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <label className="mb-2 block text-sm font-medium text-text-secondary">{t("merge.alignment")}</label>
+            <div className="grid w-44 grid-cols-3 gap-1.5 rounded-xl border border-border-subtle bg-surface-overlay p-2">
+              {[7, 8, 9, 4, 5, 6, 1, 2, 3].map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={processing || softSubtitle}
+                  onClick={() => setAlignment(value)}
+                  aria-pressed={alignment === value}
+                  className={`h-9 rounded-lg text-xs font-bold transition ${alignment === value ? "liquid-selected text-brand" : "text-text-tertiary hover:bg-surface-overlay hover:text-text-primary"}`}
+                >
+                  {value}
+                </button>
+              ))}
             </div>
           </div>
 
           <div className="mt-5">
             <label className="mb-2 block text-sm font-medium text-text-secondary">{t("merge.previewStyle")}</label>
-            <div className="relative flex h-40 w-full items-center justify-center overflow-hidden rounded-xl border border-border-subtle bg-black shadow-inner">
+            <div
+              className="relative flex h-52 w-full overflow-hidden rounded-xl border border-border-subtle bg-black p-5 shadow-inner"
+              style={{
+                alignItems: alignment >= 7 ? "flex-start" : alignment >= 4 ? "center" : "flex-end",
+                justifyContent: [1, 4, 7].includes(alignment) ? "flex-start" : [3, 6, 9].includes(alignment) ? "flex-end" : "center",
+              }}
+            >
               <div className="absolute inset-0 bg-[linear-gradient(45deg,#1f2937_25%,transparent_25%),linear-gradient(-45deg,#1f2937_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#1f2937_75%),linear-gradient(-45deg,transparent_75%,#1f2937_75%)] bg-[size:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0] opacity-30"></div>
               <div
-                className="relative z-10 px-4 py-1 text-center select-none font-bold font-sans"
+                className="relative z-10 max-w-[90%] px-4 py-1 text-center font-bold select-none"
                 style={{
+                  fontFamily: fontName,
                   fontSize: `${fontSize}px`,
                   color: assColorToCss(fontColor),
-                  textShadow: `
-                    -1px -1px 0 ${assColorToCss(outlineColor)},  
-                     1px -1px 0 ${assColorToCss(outlineColor)},
-                    -1px  1px 0 ${assColorToCss(outlineColor)},
-                     1px  1px 0 ${assColorToCss(outlineColor)},
-                    -2px -2px 0 ${assColorToCss(outlineColor)},  
-                     2px -2px 0 ${assColorToCss(outlineColor)},
-                    -2px  2px 0 ${assColorToCss(outlineColor)},
-                     2px  2px 0 ${assColorToCss(outlineColor)}
-                  `,
-                  transform: `translateY(${marginV / 4}px)`,
+                  WebkitTextStroke: `${outlineWidth}px ${assColorToCss(outlineColor)}`,
+                  paintOrder: "stroke fill",
+                  textShadow: shadow > 0 ? `${shadow}px ${shadow}px ${Math.max(1, shadow / 2)}px rgba(0,0,0,.85)` : "none",
+                  background: opaqueBackground ? assColorToCss(backgroundColor) : "transparent",
+                  borderRadius: opaqueBackground ? "0.4rem" : undefined,
+                  transform: alignment <= 3 ? `translateY(-${marginV / 6}px)` : alignment >= 7 ? `translateY(${marginV / 6}px)` : undefined,
                 }}
               >
                 {t("merge.previewPlaceholder")}

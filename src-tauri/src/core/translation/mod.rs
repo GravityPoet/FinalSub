@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
+use std::time::Duration;
 
 use crate::error::{FinalSubError, Result};
 
@@ -36,16 +37,27 @@ impl Default for TranslationConfig {
     }
 }
 
-fn translation_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+fn translation_http_client(req: &TranslateRequest) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
         .user_agent("FinalSub/1.0")
-        .build()
-        .map_err(|e| {
-            FinalSubError::Validation(format!(
-                "初始化 HTTP 客户端失败：{}",
-                describe_reqwest_error(&e)
-            ))
-        })
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(120));
+    if let Some(proxy_url) = configured_str(req.proxy_url.as_deref()) {
+        if !(proxy_url.starts_with("http://") || proxy_url.starts_with("https://")) {
+            return Err(FinalSubError::Validation(
+                "翻译代理仅支持 http:// 或 https:// 地址".into(),
+            ));
+        }
+        let proxy = reqwest::Proxy::all(proxy_url)
+            .map_err(|error| FinalSubError::Validation(format!("翻译代理地址无效：{error}")))?;
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(|e| {
+        FinalSubError::Validation(format!(
+            "初始化 HTTP 客户端失败：{}",
+            describe_reqwest_error(&e)
+        ))
+    })
 }
 
 fn describe_reqwest_error(err: &reqwest::Error) -> String {
@@ -339,6 +351,16 @@ pub struct TranslateRequest {
     pub api_url: Option<String>,
     pub model_name: Option<String>,
     pub secret_fields: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub user_prompt: Option<String>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub custom_headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub custom_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,6 +431,138 @@ pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse>
             Err(FinalSubError::Validation(redacted_msg))
         }
     }
+}
+
+pub async fn list_provider_models(req: &TranslateRequest) -> Result<Vec<String>> {
+    let endpoint = request_endpoint(req, &req.provider)
+        .ok_or_else(|| FinalSubError::Validation("获取模型列表前需要配置端点 URL".into()))?;
+    let client = translation_http_client(req)?;
+    let builder = match req.provider.as_str() {
+        "ollama" => {
+            let base = endpoint
+                .trim_end_matches('/')
+                .trim_end_matches("/api/generate")
+                .trim_end_matches("/api/chat");
+            client.get(format!("{base}/api/tags"))
+        }
+        "gemini" => {
+            let api_key = request_api_key(req)
+                .ok_or_else(|| FinalSubError::Validation("Gemini 缺少 API Key".into()))?;
+            let mut base = endpoint.trim_end_matches('/').to_string();
+            if base.ends_with("generativelanguage.googleapis.com") {
+                base.push_str("/v1beta");
+            }
+            client
+                .get(format!("{base}/models"))
+                .header("x-goog-api-key", api_key)
+        }
+        "azureopenai" => {
+            return Err(FinalSubError::Validation(
+                "Azure OpenAI 使用部署名称，无法通过数据面端点自动枚举；请填写 Azure 中已有的 deployment name。".into(),
+            ));
+        }
+        _ => {
+            let api_key = request_api_key(req).ok_or_else(|| {
+                FinalSubError::Validation(format!("{} 缺少 API Key", req.provider))
+            })?;
+            let models_url = openai_models_url(&endpoint);
+            client.get(models_url).bearer_auth(api_key)
+        }
+    };
+    let response = apply_custom_headers(builder, req)?
+        .send()
+        .await
+        .map_err(|error| {
+            FinalSubError::Validation(format!(
+                "获取模型列表失败：{}",
+                describe_reqwest_error(&error)
+            ))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(FinalSubError::Validation(format!(
+            "模型列表接口返回 {status}：{body}"
+        )));
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| FinalSubError::Validation(format!("模型列表响应解析失败：{error}")))?;
+    let mut models = if req.provider == "ollama" {
+        value["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| model["name"].as_str())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    } else if req.provider == "gemini" {
+        value["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| model["name"].as_str())
+            .map(|name| name.trim_start_matches("models/").to_string())
+            .collect::<Vec<_>>()
+    } else {
+        value["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| model["id"].as_str())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    };
+    models.sort();
+    models.dedup();
+    models.truncate(500);
+    if models.is_empty() {
+        return Err(FinalSubError::Validation(
+            "模型列表接口没有返回可用模型".into(),
+        ));
+    }
+    Ok(models)
+}
+
+pub async fn test_proxy_connection(proxy_url: &str, target_url: &str) -> Result<String> {
+    let proxy_url = proxy_url.trim();
+    let target_url = target_url.trim();
+    let proxy = reqwest::Url::parse(proxy_url)
+        .map_err(|error| FinalSubError::Validation(format!("代理地址无效：{error}")))?;
+    let target = reqwest::Url::parse(target_url)
+        .map_err(|error| FinalSubError::Validation(format!("测试目标地址无效：{error}")))?;
+    if !matches!(proxy.scheme(), "http" | "https") {
+        return Err(FinalSubError::Validation(
+            "翻译代理仅支持 http:// 或 https:// 地址".into(),
+        ));
+    }
+    if !matches!(target.scheme(), "http" | "https") {
+        return Err(FinalSubError::Validation(
+            "代理测试目标仅支持 http:// 或 https:// 地址".into(),
+        ));
+    }
+
+    let proxy = reqwest::Proxy::all(proxy_url)
+        .map_err(|error| FinalSubError::Validation(format!("代理地址无效：{error}")))?;
+    let client = reqwest::Client::builder()
+        .user_agent("FinalSub-ProxyProbe/1.0")
+        .proxy(proxy)
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| FinalSubError::Validation(format!("初始化代理测试失败：{error}")))?;
+    let response = client
+        .get(target)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+        .map_err(|error| {
+            FinalSubError::Validation(format!("代理连接失败：{}", describe_reqwest_error(&error)))
+        })?;
+    Ok(format!("HTTP {}", response.status().as_u16()))
 }
 
 fn redact_secrets(err_msg: &str, req: &TranslateRequest) -> String {
@@ -489,6 +643,147 @@ fn configured_str(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+fn render_prompt_template(template: &str, req: &TranslateRequest) -> String {
+    template
+        .replace("{source}", &req.source_language)
+        .replace("{target}", &req.target_language)
+        .replace("{text}", &req.text)
+}
+
+fn translation_system_prompt(req: &TranslateRequest) -> String {
+    configured_str(req.system_prompt.as_deref())
+        .map(|template| render_prompt_template(template, req))
+        .unwrap_or_else(|| {
+            format!(
+                "You are a professional subtitle translator. Translate from {} to {}. Only output the translation, preserve line breaks and structured batch keys, and do not add explanations.",
+                req.source_language, req.target_language
+            )
+        })
+}
+
+fn translation_user_prompt(req: &TranslateRequest) -> String {
+    match configured_str(req.user_prompt.as_deref()) {
+        Some(template) if template.contains("{text}") => render_prompt_template(template, req),
+        Some(template) => format!("{}\n\n{}", render_prompt_template(template, req), req.text),
+        None => req.text.clone(),
+    }
+}
+
+fn render_secret_template(template: &str, req: &TranslateRequest) -> String {
+    let api_key = request_api_key(req).unwrap_or("");
+    let mut rendered = template
+        .replace("${API_KEY}", api_key)
+        .replace("{apiKey}", api_key);
+    if let Some(secrets) = &req.secret_fields {
+        for (field, value) in secrets {
+            rendered = rendered.replace(&format!("{{secret:{field}}}"), value);
+        }
+    }
+    rendered
+}
+
+fn render_custom_json(value: serde_json::Value, req: &TranslateRequest) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(value) => {
+            serde_json::Value::String(render_secret_template(&value, req))
+        }
+        serde_json::Value::Array(values) => serde_json::Value::Array(
+            values
+                .into_iter()
+                .map(|value| render_custom_json(value, req))
+                .collect(),
+        ),
+        serde_json::Value::Object(values) => serde_json::Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, render_custom_json(value, req)))
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+fn merge_json_value(target: &mut serde_json::Value, update: serde_json::Value) {
+    match (target, update) {
+        (serde_json::Value::Object(target), serde_json::Value::Object(update)) => {
+            for (key, value) in update {
+                match target.get_mut(&key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        target.insert(key, value);
+                    }
+                }
+            }
+        }
+        (target, update) => *target = update,
+    }
+}
+
+fn merge_custom_body(
+    mut base: serde_json::Value,
+    req: &TranslateRequest,
+    reserved_keys: &[&str],
+) -> Result<serde_json::Value> {
+    let Some(custom_body) = &req.custom_body else {
+        return Ok(base);
+    };
+    if custom_body.len() > 64 {
+        return Err(FinalSubError::Validation(
+            "单个翻译服务最多配置 64 个自定义请求体参数".into(),
+        ));
+    }
+    let encoded = serde_json::to_vec(custom_body)?;
+    if encoded.len() > 64 * 1024 {
+        return Err(FinalSubError::Validation(
+            "单个翻译服务的自定义请求体不能超过 64 KiB".into(),
+        ));
+    }
+    for key in custom_body.keys() {
+        if reserved_keys.contains(&key.as_str()) {
+            return Err(FinalSubError::Validation(format!(
+                "自定义请求体不能覆盖核心字段：{key}"
+            )));
+        }
+    }
+    merge_json_value(
+        &mut base,
+        render_custom_json(serde_json::Value::Object(custom_body.clone()), req),
+    );
+    Ok(base)
+}
+
+fn apply_custom_headers(
+    mut builder: reqwest::RequestBuilder,
+    req: &TranslateRequest,
+) -> Result<reqwest::RequestBuilder> {
+    let Some(headers) = &req.custom_headers else {
+        return Ok(builder);
+    };
+    if headers.len() > 64 {
+        return Err(FinalSubError::Validation(
+            "单个翻译服务最多配置 64 个自定义请求头".into(),
+        ));
+    }
+    for (name, value) in headers {
+        let normalized = name.trim().to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "host" | "content-length" | "transfer-encoding" | "connection"
+        ) {
+            return Err(FinalSubError::Validation(format!(
+                "不允许覆盖受保护的请求头：{name}"
+            )));
+        }
+        let name = reqwest::header::HeaderName::from_bytes(name.trim().as_bytes())
+            .map_err(|error| FinalSubError::Validation(format!("自定义请求头名称无效：{error}")))?;
+        let rendered = render_secret_template(value, req);
+        let value = reqwest::header::HeaderValue::from_str(&rendered)
+            .map_err(|error| FinalSubError::Validation(format!("自定义请求头值无效：{error}")))?;
+        builder = builder.header(name, value);
+    }
+    Ok(builder)
+}
+
 fn has_any_secret_field(req: &TranslateRequest) -> bool {
     req.secret_fields
         .as_ref()
@@ -535,7 +830,7 @@ async fn translate_baidu(req: &TranslateRequest) -> Result<TranslateResponse> {
     let sign_str = format!("{}{}{}{}", app_id, req.text, salt, secret_key);
     let sign = format!("{:x}", md5::compute(sign_str));
 
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let url = "https://fanyi-api.baidu.com/api/trans/vip/translate";
     let params = [
         ("q", req.text.as_str()),
@@ -585,7 +880,7 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
     if api_key.is_empty() {
         return Err(FinalSubError::Validation("谷歌翻译缺少 API Key".into()));
     }
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let url = "https://translation.googleapis.com/language/translate/v2";
 
     let source_lang = if req.source_language == "auto" {
@@ -637,7 +932,7 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
 async fn translate_deeplx(req: &TranslateRequest) -> Result<TranslateResponse> {
     let api_url =
         request_endpoint(req, "deeplx").unwrap_or_else(|| "http://localhost:1188/translate".into());
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let body = serde_json::json!({
         "text": req.text,
         "source_lang": req.source_language.to_uppercase(),
@@ -686,19 +981,24 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
     let model = request_model(req).unwrap_or("qwen2.5:7b");
 
     let prompt = format!(
-        "Translate the following text from {} to {}. Only output the translation, nothing else.\n\n{}",
-        req.source_language, req.target_language, req.text
+        "{}\n\n{}",
+        translation_system_prompt(req),
+        translation_user_prompt(req)
     );
 
-    let client = translation_http_client()?;
-    let body = serde_json::json!({
-        "model": model,
-        "prompt": prompt,
-        "stream": false,
-    });
+    let client = translation_http_client(req)?;
+    let body = merge_custom_body(
+        serde_json::json!({
+            "model": model,
+            "prompt": prompt,
+            "stream": false,
+        }),
+        req,
+        &["model", "prompt", "stream"],
+    )?;
 
-    let resp = client
-        .post(api_url)
+    let builder = apply_custom_headers(client.post(api_url), req)?;
+    let resp = builder
         .json(&body)
         .timeout(std::time::Duration::from_secs(120))
         .send()
@@ -744,27 +1044,28 @@ async fn translate_openai_compatible(
     }
     let model = request_model(req).unwrap_or("gpt-4o-mini");
 
-    let system_prompt = format!(
-        "You are a professional translator. Translate subtitles from {} to {}. \
-         Only output the translated text, preserving line breaks and timing. \
-         Do not add explanations.",
-        req.source_language, req.target_language
-    );
+    let system_prompt = translation_system_prompt(req);
+    let user_prompt = translation_user_prompt(req);
 
-    let client = translation_http_client()?;
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": &req.text}
-        ],
-        "temperature": 0.3,
-    });
+    let client = translation_http_client(req)?;
+    let body = merge_custom_body(
+        serde_json::json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3,
+        }),
+        req,
+        &["model", "messages"],
+    )?;
 
-    let resp = client
+    let builder = client
         .post(&api_url)
         .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+    let resp = apply_custom_headers(builder, req)?
         .json(&body)
         .timeout(std::time::Duration::from_secs(120))
         .send()
@@ -814,34 +1115,32 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         return Err(FinalSubError::Validation("Gemini 缺少 API Key".into()));
     }
 
-    let system_prompt = format!(
-        "You are a professional translator. Translate subtitles from {} to {}. \
-         Only output the translated text. Preserve line breaks. Do not add explanations.",
-        req.source_language, req.target_language
-    );
-    let user_prompt = format!(
-        "Translate this subtitle text from {} to {}:\n\n{}",
-        req.source_language, req.target_language, req.text
-    );
+    let system_prompt = translation_system_prompt(req);
+    let user_prompt = translation_user_prompt(req);
 
-    let client = translation_http_client()?;
-    let body = serde_json::json!({
-        "systemInstruction": {
-            "parts": [{"text": system_prompt}]
-        },
-        "contents": [{
-            "role": "user",
-            "parts": [{"text": user_prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.2
-        }
-    });
+    let client = translation_http_client(req)?;
+    let body = merge_custom_body(
+        serde_json::json!({
+            "systemInstruction": {
+                "parts": [{"text": system_prompt}]
+            },
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": user_prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.2
+            }
+        }),
+        req,
+        &["systemInstruction", "contents"],
+    )?;
 
-    let resp = client
+    let builder = client
         .post(&api_url)
         .header("x-goog-api-key", api_key)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+    let resp = apply_custom_headers(builder, req)?
         .json(&body)
         .timeout(std::time::Duration::from_secs(120))
         .send()
@@ -910,6 +1209,17 @@ fn openai_chat_completions_url(raw: &str) -> String {
         trimmed.to_string()
     } else {
         format!("{trimmed}/chat/completions")
+    }
+}
+
+fn openai_models_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if let Some(base) = trimmed.strip_suffix("/chat/completions") {
+        format!("{base}/models")
+    } else if trimmed.ends_with("/models") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/models")
     }
 }
 
@@ -1016,7 +1326,7 @@ async fn translate_azure(req: &TranslateRequest) -> Result<TranslateResponse> {
         url.push_str(&format!("&from={source_lang}"));
     }
 
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let mut builder = client
         .post(&url)
         .header("Ocp-Apim-Subscription-Key", api_key)
@@ -1084,26 +1394,27 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         trimmed_url, deployment, api_version
     );
 
-    let system_prompt = format!(
-        "You are a professional translator. Translate subtitles from {} to {}. \
-         Only output the translated text, preserving line breaks and timing. \
-         Do not add explanations.",
-        req.source_language, req.target_language
-    );
+    let system_prompt = translation_system_prompt(req);
+    let user_prompt = translation_user_prompt(req);
 
-    let client = translation_http_client()?;
-    let body = serde_json::json!({
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": &req.text}
-        ],
-        "temperature": 0.3,
-    });
+    let client = translation_http_client(req)?;
+    let body = merge_custom_body(
+        serde_json::json!({
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3,
+        }),
+        req,
+        &["messages"],
+    )?;
 
-    let resp = client
+    let builder = client
         .post(&url)
         .header("api-key", api_key)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+    let resp = apply_custom_headers(builder, req)?
         .json(&body)
         .send()
         .await
@@ -1146,7 +1457,7 @@ async fn translate_niutrans(req: &TranslateRequest) -> Result<TranslateResponse>
     if api_key.is_empty() {
         return Err(FinalSubError::Validation("小牛翻译缺少 API Key".into()));
     }
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let url = "https://api.niutrans.com/NiuTransServer/translation";
 
     let params = [
@@ -1239,7 +1550,7 @@ async fn translate_tencent(req: &TranslateRequest) -> Result<TranslateResponse> 
         secret_id, credential_scope, signature
     );
 
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let resp = client
         .post("https://tmt.tencentcloudapi.com")
         .header("Authorization", authorization)
@@ -1355,7 +1666,7 @@ async fn translate_aliyun(req: &TranslateRequest) -> Result<TranslateResponse> {
         string_to_sign.as_bytes(),
     ));
 
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let url = "https://mt.aliyuncs.com";
 
     let mut body_params = params.clone();
@@ -1497,7 +1808,7 @@ async fn translate_volc(req: &TranslateRequest) -> Result<TranslateResponse> {
         access_key, credential_scope, signature
     );
 
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let url = "https://open.volcengineapi.com/?Action=TranslateText&Version=2020-06-01";
     let resp = client
         .post(url)
@@ -1615,7 +1926,7 @@ async fn translate_xunfei(req: &TranslateRequest) -> Result<TranslateResponse> {
         api_key, signature
     );
 
-    let client = translation_http_client()?;
+    let client = translation_http_client(req)?;
     let resp = client
         .post("https://itrans.xfyun.cn/v2/its")
         .header("Content-Type", "application/json")
@@ -1690,6 +2001,30 @@ fn map_lang_xunfei(lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn base_test_request() -> TranslateRequest {
+        TranslateRequest {
+            text: "Hello world".into(),
+            source_language: "en".into(),
+            target_language: "zh".into(),
+            provider: "custom-openai".into(),
+            api_key: Some("bound-secret".into()),
+            api_url: Some("https://gateway.example.com/v1".into()),
+            model_name: Some("model-a".into()),
+            secret_fields: Some(std::collections::HashMap::from([
+                ("apiKey".into(), "bound-secret".into()),
+                ("tenantId".into(), "tenant-42".into()),
+            ])),
+            system_prompt: None,
+            user_prompt: None,
+            proxy_url: None,
+            custom_headers: None,
+            custom_body: None,
+        }
+    }
 
     #[test]
     fn builtin_providers_count() {
@@ -1757,6 +2092,11 @@ mod tests {
                 "apiKey".to_string(),
                 "stored-key".to_string(),
             )])),
+            system_prompt: None,
+            user_prompt: None,
+            proxy_url: None,
+            custom_headers: None,
+            custom_body: None,
         };
 
         assert_eq!(request_api_key(&req), Some("stored-key"));
@@ -1786,6 +2126,11 @@ mod tests {
                 "apiKey".to_string(),
                 "test-key".to_string(),
             )])),
+            system_prompt: None,
+            user_prompt: None,
+            proxy_url: None,
+            custom_headers: None,
+            custom_body: None,
         };
 
         let err = translate_text(&req).await.unwrap_err();
@@ -1811,6 +2156,129 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prompt_templates_render_source_target_and_text_tokens() {
+        let req = TranslateRequest {
+            system_prompt: Some("Translate {source} -> {target}".into()),
+            user_prompt: Some("Input:\n{text}".into()),
+            ..base_test_request()
+        };
+
+        assert_eq!(translation_system_prompt(&req), "Translate en -> zh");
+        assert_eq!(translation_user_prompt(&req), "Input:\nHello world");
+
+        let req = TranslateRequest {
+            user_prompt: Some("Keep subtitle timing.".into()),
+            ..req
+        };
+        assert_eq!(
+            translation_user_prompt(&req),
+            "Keep subtitle timing.\n\nHello world"
+        );
+    }
+
+    #[test]
+    fn custom_headers_render_endpoint_bound_secret_placeholders() {
+        let req = TranslateRequest {
+            custom_headers: Some(std::collections::HashMap::from([
+                ("Authorization".into(), "Bearer ${API_KEY}".into()),
+                ("X-Tenant".into(), "{secret:tenantId}".into()),
+            ])),
+            ..base_test_request()
+        };
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let request = apply_custom_headers(client.get("http://127.0.0.1"), &req)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(request.headers()["authorization"], "Bearer bound-secret");
+        assert_eq!(request.headers()["x-tenant"], "tenant-42");
+
+        let protected = TranslateRequest {
+            custom_headers: Some(std::collections::HashMap::from([(
+                "Content-Length".into(),
+                "100".into(),
+            )])),
+            ..base_test_request()
+        };
+        assert!(apply_custom_headers(client.get("http://127.0.0.1"), &protected).is_err());
+    }
+
+    #[test]
+    fn custom_body_deep_merges_typed_values_and_protects_core_fields() {
+        let req = TranslateRequest {
+            custom_body: Some(serde_json::Map::from_iter([
+                ("temperature".into(), serde_json::json!(0.8)),
+                (
+                    "response_format".into(),
+                    serde_json::json!({"type": "json_object"}),
+                ),
+                (
+                    "metadata".into(),
+                    serde_json::json!({"tenant": "{secret:tenantId}"}),
+                ),
+            ])),
+            ..base_test_request()
+        };
+        let merged = merge_custom_body(
+            serde_json::json!({
+                "model": "model-a",
+                "messages": [],
+                "temperature": 0.3,
+                "metadata": {"source": "FinalSub"}
+            }),
+            &req,
+            &["model", "messages"],
+        )
+        .unwrap();
+
+        assert_eq!(merged["temperature"], serde_json::json!(0.8));
+        assert_eq!(merged["metadata"]["source"], "FinalSub");
+        assert_eq!(merged["metadata"]["tenant"], "tenant-42");
+        assert_eq!(merged["response_format"]["type"], "json_object");
+
+        let protected = TranslateRequest {
+            custom_body: Some(serde_json::Map::from_iter([(
+                "messages".into(),
+                serde_json::json!([]),
+            )])),
+            ..base_test_request()
+        };
+        assert!(merge_custom_body(
+            serde_json::json!({"messages": []}),
+            &protected,
+            &["messages"]
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn proxy_probe_uses_the_configured_http_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener_endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET http://example.invalid/probe HTTP/1.1"));
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+
+        let status = test_proxy_connection(
+            &format!("http://{listener_endpoint}"),
+            "http://example.invalid/probe",
+        )
+        .await
+        .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(status, "HTTP 204");
+    }
+
     #[tokio::test]
     async fn custom_openai_requires_endpoint_and_model() {
         let req = TranslateRequest {
@@ -1822,6 +2290,11 @@ mod tests {
             api_url: None,
             model_name: None,
             secret_fields: None,
+            system_prompt: None,
+            user_prompt: None,
+            proxy_url: None,
+            custom_headers: None,
+            custom_body: None,
         };
 
         let err = translate_custom_openai_compatible(&req).await.unwrap_err();

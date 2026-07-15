@@ -14,7 +14,9 @@
       {
         "title": "FinalSub",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "minWidth": 360,
+        "minHeight": 600
       }
     ],
     "security": {
@@ -30,9 +32,10 @@
     "active": true,
     "targets": "all",
     "macOS": {
-      "signingIdentity": null,
+      "signingIdentity": "-",
       "hardenedRuntime": true,
-      "entitlements": "Entitlements.plist"
+      "entitlements": "Entitlements.plist",
+      "minimumSystemVersion": "12.0"
     },
     "externalBin": [
       "binaries/ffmpeg",
@@ -40,9 +43,12 @@
     ],
     "resources": [
       "licenses/ffmpeg-GPLv2.txt",
+      "licenses/ffmpeg-GPLv3.txt",
       "licenses/ffmpeg-NOTICE.md",
-      "resources/parakeet/parakeet_transcribe.py",
       "resources/vad/ggml-silero-v5.1.2.bin",
+      "resources/vad/silero_vad.onnx",
+      "licenses/silero-vad-LICENSE.txt",
+      "licenses/silero-vad-NOTICE.md",
       "licenses/whisper.cpp-LICENSE.txt",
       "licenses/whisper-NOTICE.md"
     ],

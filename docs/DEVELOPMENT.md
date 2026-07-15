@@ -14,27 +14,19 @@
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/app-icon-source.png
 ```
 
-## 发布前缺口 (截至 2026-06-21)
+## 当前发布边界（更新于 2026-07-15）
 
-- 内置模型下载、导入、checksum 校验和下载取消尚未实现；当前需要用户手动下载 Whisper `ggml-*.bin` 到模型目录
-- SenseVoice 运行时、自定义 ASR 命令尚未接入
-- 百度、谷歌、阿里云、火山、小牛、腾讯、讯飞、微软、Azure OpenAI 等 provider 仍为未接入状态（已在 Tauri command dispatch 中预留，但需真实 E2E 验证）
-- 商业翻译 provider 仍需真实 API Key/模型配置验收，字幕批量翻译和 AI 优化翻译未完整接入主流水线
-- 任务队列尚未持久化，暂停/恢复/重试和任务日志流未实现
-- 字幕校对仍需 GUI 点击流、复杂编辑能力和失败恢复验收
-- 视频合字幕进度解析、预览、取消尚未接入 UI
-- GUI 点击流端到端人工验收、Intel/x86_64 实机验收仍未完成
-- 正式发布签名与 notarization
+旧版记录中的模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、批量翻译、持久任务队列、校对、合成进度/预览/取消和 Universal 构建均已交付。当前剩余边界是外部环境验收：Apple Developer ID 与 notarization 凭据、Windows/Linux runner 安装启动、Linux Secret Service 桌面会话，以及付费云服务真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)。
 
 ## 验收命令
 
 ```bash
-npm run build
-cd src-tauri && cargo test && cargo clippy -- -D warnings
-cd .. && npm run build:local
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:universal
 ```
 
-`npm run build:local` 会执行 Tauri 打包、本地 ad-hoc 签名和 `codesign --verify --deep --strict` 校验。
+`npm run build:universal` 会在构建前清掉旧残留，生成并验签 arm64 + x86_64 Universal 应用与 DMG，再在成功、失败或可捕获中断后真实删除仓库 `target` 中的构建 `.app`，最终只保留 DMG。构建期间 `target/.metadata_never_index` 仅作为第二道防线，避免临时 App 被 Spotlight 收录；即使上次进程被强制终止，下一次构建也会先物理清场。需要构建后直接覆盖本机唯一应用时使用 `npm run build:install:universal`；它会安装到 `/Applications/FinalSub.app`，再清理全部构建 `.app`。
 
 正式发布、覆盖安装包、平台产物验证和踩坑记录统一维护在 [Release SOP](release-sop.md)。
 

@@ -7,16 +7,24 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "prepare:tauri-target": "node scripts/prepare-tauri-target.mjs",
+    "prepare:release-updater-config": "node scripts/prepare-release-updater-config.mjs",
+    "pretauri": "npm run prepare:tauri-target",
     "tauri": "tauri",
+    "pretauri:build": "npm run prepare:tauri-target",
     "tauri:build": "tauri build",
-    "sign:local": "codesign --force --deep --sign - \"src-tauri/target/release/bundle/macos/FinalSub.app\"",
     "verify:bundle": "codesign --verify --deep --strict --verbose=4 \"src-tauri/target/release/bundle/macos/FinalSub.app\"",
-    "build:local": "npm run tauri:build && npm run sign:local && npm run verify:bundle",
+    "cleanup:bundle-apps:macos": "bash scripts/cleanup-finalsub-bundle-apps-macos.sh",
+    "build:local:bundle": "npm run tauri:build && npm run verify:bundle",
+    "build:local": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:local:bundle",
     "binaries:universal": "lipo -create src-tauri/binaries/ffmpeg-aarch64-apple-darwin src-tauri/binaries/ffmpeg-x86_64-apple-darwin -output src-tauri/binaries/ffmpeg-universal-apple-darwin && codesign --force --sign - src-tauri/binaries/ffmpeg-universal-apple-darwin && lipo -create src-tauri/binaries/whisper-cli-aarch64-apple-darwin src-tauri/binaries/whisper-cli-x86_64-apple-darwin -output src-tauri/binaries/whisper-cli-universal-apple-darwin && codesign --force --sign - src-tauri/binaries/whisper-cli-universal-apple-darwin",
+    "pretauri:build:universal": "npm run prepare:tauri-target",
     "tauri:build:universal": "tauri build --target universal-apple-darwin",
-    "sign:local:universal": "codesign --force --deep --sign - \"src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app\"",
     "verify:bundle:universal": "codesign --verify --deep --strict --verbose=4 \"src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app\"",
-    "build:universal": "npm run binaries:universal && npm run tauri:build:universal && npm run sign:local:universal && npm run verify:bundle:universal"
+    "build:universal:bundle": "npm run binaries:universal && npm run tauri:build:universal && npm run verify:bundle:universal",
+    "build:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle",
+    "install:local:universal": "bash scripts/install-finalsub-local-macos.sh",
+    "build:install:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle install:local:universal"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -30,13 +38,13 @@
     "react-router-dom": "^7.6.1"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.7",
-    "@tauri-apps/cli": "^2",
+    "@tailwindcss/vite": "^4.3.2",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
+    "@vitejs/plugin-react": "^6.0.3",
     "tailwindcss": "^4.1.7",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^8.1.4"
   }
 }

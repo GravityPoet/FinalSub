@@ -14,21 +14,18 @@
 - Bundle ID：`com.gravitypoet.finalsub`
 - 版本来源：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`
 - 包管理器：`npm`
-- 当前已验证平台：macOS Apple Silicon
-- 当前默认 macOS 构建脚本：`npm run build:local`
-- `npm run build:local` 会执行：
-  - `tauri build`
-  - 对 `src-tauri/target/release/bundle/macos/FinalSub.app` 做 ad-hoc 签名
-  - `codesign --verify --deep --strict` 校验 `.app`
-- Windows/Linux 打包命令：仓库当前没有专用脚本或 CI 配置证据，补齐前不得编造命令作为正式外发路径。
+- 当前本机完整验收平台：macOS 12+ Universal（arm64 + x86_64）
+- 当前默认 macOS 构建脚本：`npm run build:universal`
+- `src-tauri/tauri.conf.json` 本地使用 `signingIdentity: "-"`，Tauri 会在制作 DMG 前完成 ad-hoc 签名；GitHub Actions 中的 `APPLE_SIGNING_IDENTITY` 会覆盖该本地值。
+- Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；在对应 runner 真实跑通安装与启动前，状态仍是“流程已交付、目标机待验收”。
 
 ## 平台产物规划
 
 | 平台 | 当前状态 | 目标产物 | 备注 |
 | --- | --- | --- | --- |
-| macOS | 已有本地验证流程 | `.dmg`、`.pkg` | 正式外发需 Developer ID 签名和 notarization |
-| Windows | 待补齐 | `.msi` / `.exe` | 需要 Windows runner、签名证书和安装/卸载验收 |
-| Linux | 待补齐 | `.AppImage` / `.deb` / `.rpm` | 需要 Linux runner 和目标发行版验收矩阵 |
+| macOS | Universal `.app` / `.dmg` 已验证 | `.dmg` | 正式外发需 Developer ID 签名和 notarization |
+| Windows | 构建脚本与 release job 已交付 | NSIS `.exe` | 仍需 Windows runner 安装/卸载验收；代码签名可选但强烈建议 |
+| Linux | 构建脚本与 release job 已交付 | `.AppImage` / `.deb` | 仍需 Linux 桌面会话启动与 Secret Service 验收 |
 
 ## GitHub Release 规则
 
@@ -37,6 +34,28 @@
 - 公开创建 tag、推送 tag、创建 GitHub Release、上传资产属于 `[P1]`，执行前必须有回滚路径和熔断条件。
 - 本地打包、校验和生成、草稿说明属于低风险本地写入，不推送、不公开分发。
 - Release notes 来源：`CHANGELOG`、上一个 tag 以来的 commits，或本文件记录的验收摘要；禁止声称未执行过的测试通过。
+
+## 签名应用内更新
+
+正式 release 使用 Tauri 官方 updater 产物；本地普通构建不生成 updater 包，也不要求持有生产私钥：
+
+- `src-tauri/tauri.release.conf.json` 是不含密钥的 release 模板，启用 `bundle.createUpdaterArtifacts`；workflow 调用 `npm run prepare:release-updater-config`，从 Secret 原子生成 git-ignored 的 `src-tauri/target/tauri.release.generated.conf.json` 后再叠加构建。
+- `FINALSUB_UPDATER_PUBLIC_KEY` 在编译时写入正式分发二进制；没有该值的构建只提供 Releases 页面手动下载。
+- `TAURI_SIGNING_PRIVATE_KEY` 只存在于 GitHub Actions secret，用于签名 updater 包；如私钥带密码，再配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+- release job 必须生成并合并 `latest.json`，同时包含 `darwin-aarch64-app`、`darwin-x86_64-app`、`linux-x86_64-appimage`、`linux-x86_64-deb` 与 `windows-x86_64-nsis`。任一 URL 或签名缺失，publish job 必须停止，draft 不得公开。
+- 应用只从固定 HTTPS 地址读取 `latest.json`，并只接受 `api.github.com/repos/GravityPoet/FinalSub/releases/assets/<数字 ID>` 下载地址；正式构建存在公钥时，来源或签名检查失败都不会降级到未签名安装。
+- 临时生成的 release 配置权限为 `0600`，位于已忽略的 `src-tauri/target`；不得上传为 artifact 或打印其内容。
+- 安装前后端会阻止运行中/排队中的字幕任务、模型下载/安装和视频合成；下载期间若出现新任务，安装前会再次检查并停止替换。
+
+生产 updater 根密钥属于 `[P0]` 信任根：一旦旧版本内置公钥，丢失对应私钥会让这些安装无法接受后续更新。生成或更换生产根密钥前，必须先确认离线加密备份、恢复演练、双人保管边界和旧版本迁移方案；不得把测试私钥、空公钥或私钥内容写入仓库。
+
+workflow 所需 updater secrets：
+
+```text
+FINALSUB_UPDATER_PUBLIC_KEY
+TAURI_SIGNING_PRIVATE_KEY
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD  # 仅私钥设置密码时需要
+```
 
 ## 通用发布前检查
 
@@ -66,7 +85,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm ci
 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo test && cargo clippy -- -D warnings
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ### Checksums
@@ -96,78 +115,87 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && plutil -p src-tauri/tauri.conf.
 ### 标准打包流程
 
 ```bash
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:local
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:universal
 ```
 
 基础产物：
 
-- `src-tauri/target/release/bundle/macos/FinalSub.app`
-- Tauri 默认生成的 DMG：`src-tauri/target/release/bundle/dmg/FinalSub_<version>_aarch64.dmg`
+- `src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_<version>_universal.dmg`
 
-基础验收：
+Tauri 生成的 `.app` 是临时打包输入：脚本在构建前先清旧残留，验签后再在成功、失败或可捕获中断时物理删除。构建期间的 `target/.metadata_never_index` 仅是防止 Spotlight 收录临时 App 的第二道防线，不代替文件清理；若上次进程被强制终止，下一次构建会先物理清场。
+
+基础验收（完整 App 内容从 DMG 挂载后检查）：
 
 ```bash
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && codesign --verify --deep --strict --verbose=4 "src-tauri/target/release/bundle/macos/FinalSub.app"
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && file "src-tauri/target/release/bundle/macos/FinalSub.app/Contents/MacOS/finalsubtauri"
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && file "src-tauri/target/release/bundle/macos/FinalSub.app/Contents/MacOS/ffmpeg"
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && file "src-tauri/target/release/bundle/macos/FinalSub.app/Contents/MacOS/whisper-cli"
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && hdiutil verify "src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_<version>_universal.dmg"
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && test -z "$(find src-tauri/target -type d -path '*/bundle/macos/FinalSub.app' -prune -print)"
 ```
 
-### 重新制作可验证 DMG
+### 验证 DMG 内部 App
 
-经验教训：当前脚本是在 Tauri 生成 DMG 后，再对磁盘上的 `.app` 做 ad-hoc 签名。因此 Tauri 默认 DMG 里的 `.app` 不一定等于最终已校验的 `.app`。必须挂载 DMG 检查内部 `.app`，不能只看 `hdiutil verify`。
-
-重新制作 DMG：
+Tauri 现在会在制作 DMG 前签名 `.app`，不再需要二次制作镜像。仍必须挂载 DMG 验证内部 `.app`，因为只运行 `hdiutil verify` 不能证明应用签名、架构和最低系统版本正确。
 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
 set -euo pipefail
 
-APP="src-tauri/target/release/bundle/macos/FinalSub.app"
-VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
-OUT="src-tauri/target/release/bundle/dmg/FinalSub_${VERSION}_aarch64_signed.dmg"
-STAGE="$(mktemp -d /tmp/finalsub-dmg-stage.XXXXXX)"
+DMG="$(ls -1 src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_*_universal.dmg | tail -1)"
 MOUNT="$(mktemp -d /tmp/finalsub-dmg-mount.XXXXXX)"
+DEVICE=""
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 cleanup() {
-  hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
-  rm -rf "$STAGE" "$MOUNT"
+  if [ -d "$MOUNT/FinalSub.app" ]; then
+    "$LSREGISTER" -u "$MOUNT/FinalSub.app" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$DEVICE" ]; then
+    diskutil eject "$DEVICE" >/dev/null 2>&1 || hdiutil detach "$DEVICE" >/dev/null 2>&1 || true
+  fi
+  rmdir "$MOUNT" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-codesign --verify --deep --strict --verbose=4 "$APP"
-ditto "$APP" "$STAGE/FinalSub.app"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "FinalSub" -srcfolder "$STAGE" -ov -format UDZO "$OUT"
-hdiutil verify "$OUT"
-hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$OUT" >/dev/null
+hdiutil verify "$DMG"
+ATTACH_OUTPUT="$(diskutil image attach --readOnly --nobrowse --mountPoint "$MOUNT" "$DMG")"
+DEVICE="$(printf '%s\n' "$ATTACH_OUTPUT" | awk 'NR==1{print $1}')"
 codesign --verify --deep --strict --verbose=4 "$MOUNT/FinalSub.app"
+test "$(lipo -archs "$MOUNT/FinalSub.app/Contents/MacOS/finalsubtauri")" = "x86_64 arm64"
+test "$(lipo -archs "$MOUNT/FinalSub.app/Contents/MacOS/ffmpeg")" = "x86_64 arm64"
+test "$(lipo -archs "$MOUNT/FinalSub.app/Contents/MacOS/whisper-cli")" = "x86_64 arm64"
+test "$(xcrun vtool -show-build "$MOUNT/FinalSub.app/Contents/MacOS/finalsubtauri" | awk '/minos/{print $2}' | sort -u)" = "12.0"
+test "$(xcrun vtool -show-build "$MOUNT/FinalSub.app/Contents/MacOS/whisper-cli" | awk '/minos/{print $2}' | sort -u)" = "12.0"
+test "$(plutil -extract LSMinimumSystemVersion raw "$MOUNT/FinalSub.app/Contents/Info.plist")" = "12.0"
+FILTERS="$("$MOUNT/FinalSub.app/Contents/MacOS/ffmpeg" -hide_banner -filters 2>&1)"
+ENCODERS="$("$MOUNT/FinalSub.app/Contents/MacOS/ffmpeg" -hide_banner -encoders 2>&1)"
+rg -q ' subtitles ' <<<"$FILTERS"
+rg -q 'libx264' <<<"$ENCODERS"
+test -f "$MOUNT/FinalSub.app/Contents/Resources/licenses/ffmpeg-GPLv3.txt"
+test -f "$MOUNT/FinalSub.app/Contents/Resources/licenses/whisper.cpp-LICENSE.txt"
+shasum -a 256 "$DMG" > "$DMG.sha256"
 EOF
-```
-
-交付 DMG 使用：
-
-```text
-src-tauri/target/release/bundle/dmg/FinalSub_<version>_aarch64_signed.dmg
 ```
 
 ### 制作覆盖旧版的 PKG
 
 `.pkg` 适合“安装器覆盖旧软件”的场景。安装路径固定为 `/Applications/FinalSub.app`，并通过 `upgrade-bundle` 匹配 `com.gravitypoet.finalsub`。
 
+PKG 需要临时 `.app`，因此先运行 `npm run build:universal:bundle`；下方脚本的退出处理会在成功或失败时物理删除该 App：
+
 ```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:universal:bundle
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
 set -euo pipefail
 
-APP="src-tauri/target/release/bundle/macos/FinalSub.app"
+APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app"
 VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
-PKG_DIR="src-tauri/target/release/bundle/pkg"
-PKG="$PKG_DIR/FinalSub_${VERSION}_aarch64.pkg"
+PKG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/pkg"
+PKG="$PKG_DIR/FinalSub_${VERSION}_universal.pkg"
 ROOT="$(mktemp -d /tmp/finalsub-pkg-root.XXXXXX)"
 COMPONENTS="$(mktemp /tmp/finalsub-components.XXXXXX.plist)"
 
 cleanup() {
   rm -rf "$ROOT" "$COMPONENTS"
+  bash scripts/cleanup-finalsub-bundle-apps-macos.sh
 }
 trap cleanup EXIT
 
@@ -195,7 +223,7 @@ EOF
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
 set -euo pipefail
 
-PKG="$(ls -1 src-tauri/target/release/bundle/pkg/FinalSub_*_aarch64.pkg | tail -1)"
+PKG="$(ls -1 src-tauri/target/universal-apple-darwin/release/bundle/pkg/FinalSub_*_universal.pkg | tail -1)"
 TMP="$(mktemp -d /tmp/finalsub-pkg-expand.XXXXXX)"
 
 cleanup() {
@@ -223,7 +251,7 @@ EOF
 只在明确需要安装到本机时执行：
 
 ```bash
-sudo installer -pkg "/Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/target/release/bundle/pkg/FinalSub_<version>_aarch64.pkg" -target /
+sudo installer -pkg "/Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/target/universal-apple-darwin/release/bundle/pkg/FinalSub_<version>_universal.pkg" -target /
 codesign --verify --deep --strict --verbose=4 "/Applications/FinalSub.app"
 plutil -extract CFBundleIdentifier raw "/Applications/FinalSub.app/Contents/Info.plist"
 plutil -extract CFBundleShortVersionString raw "/Applications/FinalSub.app/Contents/Info.plist"
@@ -232,49 +260,10 @@ plutil -extract CFBundleShortVersionString raw "/Applications/FinalSub.app/Conte
 若当前会话不能无交互使用 `sudo`，且 `/Applications/FinalSub.app` 归当前用户所有，可使用本机覆盖 fallback。此路径只适合本机测试，不等同于 `.pkg` 安装器验收：
 
 ```bash
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
-set -euo pipefail
-
-SRC="/Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/target/release/bundle/macos/FinalSub.app"
-DST="/Applications/FinalSub.app"
-BACKUP="/Applications/FinalSub.app.backup.$(date +%Y%m%d%H%M%S)"
-RESTORED=0
-
-rollback() {
-  status=$?
-  if [ "$status" -ne 0 ]; then
-    rm -rf "$DST"
-    if [ -d "$BACKUP" ]; then
-      mv "$BACKUP" "$DST"
-      RESTORED=1
-    fi
-    echo "ROLLBACK_RESTORED=$RESTORED"
-  fi
-  exit "$status"
-}
-trap rollback EXIT
-
-if [ ! -d "$SRC" ] || [ ! -d "$DST" ]; then
-  echo "missing source or destination app" >&2
-  exit 1
-fi
-if ps ax -o args= | rg -q '^/Applications/FinalSub\.app/Contents/MacOS/finalsubtauri( |$)'; then
-  echo "FinalSub is running; stop before overwrite" >&2
-  exit 1
-fi
-
-codesign --verify --deep --strict --verbose=4 "$SRC"
-mv "$DST" "$BACKUP"
-ditto "$SRC" "$DST"
-codesign --verify --deep --strict --verbose=4 "$DST"
-plutil -extract CFBundleIdentifier raw "$DST/Contents/Info.plist"
-plutil -extract CFBundleShortVersionString raw "$DST/Contents/Info.plist"
-file "$DST/Contents/MacOS/finalsubtauri"
-file "$DST/Contents/MacOS/ffmpeg"
-file "$DST/Contents/MacOS/whisper-cli"
-echo "BACKUP=$BACKUP"
-EOF
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run install:local:universal
 ```
+
+该脚本会先验签并制作 ZIP 回滚包，再原子替换 `/Applications/FinalSub.app`；成功启动后注销并删除 `src-tauri/target` 中的构建 `.app`，定向清除旧 DMG/构建路径的 LaunchServices 记录，最后要求 LaunchServices 与 Spotlight 对 `com.gravitypoet.finalsub` 都只返回 `/Applications/FinalSub.app`。禁止把第二个可索引 `.app` 或 `.app.backup.*` 留在 `/Applications`、仓库构建目录或 staging 目录。
 
 本机启动验收使用等待循环，避免应用启动较慢导致误判：
 
@@ -311,10 +300,12 @@ EOF
 回滚方式：
 
 - 重新安装上一版 `.pkg` 或 DMG 中的上一版 `.app`。
-- 若只是本机测试，可先备份旧版：
+- 本机脚本的 ZIP 回滚包位于 `~/Library/Application Support/FinalSub/Backups/<timestamp>/FinalSub.app.zip`，不会被 LaunchServices 当成第二个应用。
+
+本机安装验收必须包含：
 
 ```bash
-cp -a "/Applications/FinalSub.app" "/Applications/FinalSub.app.backup.$(date +%Y%m%d%H%M%S)"
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && test "$(mdfind 'kMDItemCFBundleIdentifier == \"com.gravitypoet.finalsub\"c' | sort)" = "/Applications/FinalSub.app"
 ```
 
 ### 正式外发要求
@@ -338,31 +329,52 @@ security find-identity -v
 
 ## Windows 打包
 
-当前仓库没有 Windows 专用打包脚本、CI workflow 或签名验收记录。补齐前只允许 dry run 规划，不得声称 Windows 安装包可正式外发。
+Windows x86_64 release job 会先安装固定 SHA-256 的 GPL FFmpeg、从固定 whisper.cpp commit 构建 sidecar，再让 Tauri 生成 NSIS 安装包：
 
-最低需要补齐：
+```powershell
+./scripts/install-ffmpeg-sidecar-windows.ps1
+./scripts/build-whisper-sidecar-windows.ps1
+npm ci
+npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis
+```
 
-- Windows runner 或本机 Windows 构建环境。
-- Tauri Windows 产物类型：`.msi`、`.exe` 或两者。
-- 代码签名证书和签名命令。
-- 安装、覆盖安装、卸载、SmartScreen/签名状态验收。
-- 产物路径、校验和、GitHub Release asset 命名。
+GitHub Actions 入口：`.github/workflows/release.yml`。当前仓库尚未配置 Windows 代码签名证书；这不阻止生成 NSIS，但正式公开下载前仍需 runner 上完成安装、覆盖安装、卸载与 SmartScreen/签名状态验收。
 
 ## Linux 打包
 
-当前仓库没有 Linux 专用打包脚本、CI workflow 或发行版验收记录。补齐前只允许 dry run 规划，不得声称 Linux 安装包可正式外发。
+Linux x86_64 release job 会安装 WebKit/Secret Service/Keyutils 构建依赖，安装固定 SHA-256 的 GPL FFmpeg、从固定 whisper.cpp commit 构建 sidecar，再生成 AppImage 与 DEB：
 
-最低需要补齐：
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && bash scripts/install-ffmpeg-sidecar-linux.sh
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && bash scripts/build-whisper-sidecar-linux.sh
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm ci
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run tauri -- build --target x86_64-unknown-linux-gnu --bundles appimage,deb
+```
 
-- Linux runner 或本机 Linux 构建环境。
-- 目标产物：`.AppImage`、`.deb`、`.rpm` 或组合。
-- 目标发行版矩阵和基础运行验收。
-- 安装、覆盖安装、卸载验收。
-- 产物路径、校验和、GitHub Release asset 命名。
+GitHub Actions 入口：`.github/workflows/release.yml`。正式宣称 Linux 可发布前，仍需在真实桌面会话验收 AppImage/DEB 启动、覆盖/卸载，以及 Secret Service + Keyutils 的 Keychain 存取。
 
 ## 踩坑记录
 
-### 2026-06-22：Tauri 默认 DMG 内部 App 签名校验失败
+### 2026-07-15：无 updater 配置的本机构建启动即崩溃
+
+现象：
+
+```text
+PluginInitialization("updater", "Error deserializing 'plugins.updater' ... invalid type: null")
+```
+
+原因：
+
+- 本机构建刻意不携带生产 updater 公钥与 endpoint，但仍无条件注册了 updater plugin。
+- 构建、签名和 DMG 挂载均能通过，只有从真实安装路径启动时才会暴露初始化失败。
+
+处理与防复发：
+
+- 仅当编译时存在非空 `FINALSUB_UPDATER_PUBLIC_KEY` 时注册 updater plugin；无公钥构建保留固定官方 Releases 手动下载流程。
+- 正式签名构建必须同时使用原子生成的 release 配置提供固定 endpoint 与公钥，不允许签名检查失败后降级到手动判断并继续安装。
+- 发版验收必须分别运行“无公钥本机构建”和“一次性测试公钥构建”至少 10 秒，并检查进程仍存活且日志不含 `PluginInitialization`、`panic` 或配置反序列化错误；不能以 build、codesign 或进程瞬时出现替代真实运行边界。
+
+### 2026-06-22：Tauri 默认 DMG 内部 App 签名校验失败（2026-07-15 已修复）
 
 现象：
 
@@ -378,9 +390,9 @@ FinalSub.app: code has no resources but signature indicates they must be present
 
 处理：
 
-- 不直接交付 Tauri 默认 DMG。
-- 用最终校验通过的 `FinalSub.app` 重新制作 `FinalSub_<version>_aarch64_signed.dmg`。
-- 挂载新 DMG 后，对镜像内部的 `FinalSub.app` 再跑一次 `codesign --verify --deep --strict`。
+- `src-tauri/tauri.conf.json` 设置本地 `signingIdentity: "-"`，让 Tauri 在生成 DMG 前完成 ad-hoc 签名；CI 的 `APPLE_SIGNING_IDENTITY` 仍可覆盖为正式身份。
+- `build:local` / `build:universal` 不再在 DMG 生成后重签 `.app`。
+- 每次仍需挂载 Tauri 生成的 DMG，对镜像内部 `FinalSub.app` 执行深度签名、双架构与最低 macOS 版本验证。
 
 ### 2026-06-22：`pkgbuild` 出现 `write: Permission denied` 但包可展开验证
 
@@ -436,8 +448,8 @@ sudo: a password is required
 处理：
 
 - 先确认 FinalSub 没有运行。
-- 对当前 `/Applications/FinalSub.app` 做时间戳备份。
-- 用 `ditto` 将已签名校验的 `src-tauri/target/release/bundle/macos/FinalSub.app` 覆盖到 `/Applications/FinalSub.app`。
+- 对当前 `/Applications/FinalSub.app` 制作带时间戳的 ZIP 回滚包，禁止在可索引目录留下第二个 `.app`。
+- 用 `ditto` 将已签名校验的 `src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app` 覆盖到 `/Applications/FinalSub.app`。
 - 覆盖后重新执行 `codesign --verify --deep --strict`、Bundle ID、版本号和 sidecar 架构校验。
 
 防复发：
@@ -509,7 +521,7 @@ error: this `impl` can be derived
 处理：
 
 - 对 `src-tauri/src/core/asr/sensevoice.rs`、`src-tauri/src/core/asr/custom.rs`、`src-tauri/src/core/settings/mod.rs`、`src-tauri/src/core/subtitle/mod.rs`、`src-tauri/src/core/task_queue/mod.rs` 做行为保持的机械修复。
-- 重新执行 `cargo fmt`、`cargo clippy -- -D warnings`、`cargo test`、`npm run build:local`，再重制 `.pkg` 和覆盖 `/Applications/FinalSub.app`。
+- 重新执行 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test --lib`，再运行 `npm run build:install:universal` 覆盖 `/Applications/FinalSub.app`。
 
 防复发：
 

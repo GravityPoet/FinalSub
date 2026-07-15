@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  💡 <strong>FinalSub</strong> 是一款基于 Tauri 2.0 + Rust + React 开发的全新一代桌面端字幕制作神兵利器。它打破了传统字幕工具的“环境配置地狱”，将<strong>本地 GPU 加速语音识别（ASR）</strong>、<strong>18 大 AI 智能翻译引擎</strong>、<strong>可视化字幕校对</strong>与 <strong>FFmpeg 无损视频字幕烧录</strong>融为一体。零门槛，解压即用！
+  💡 <strong>FinalSub</strong> 是一款基于 Tauri 2.0 + Rust + React 的桌面字幕工作站，将<strong>本地优先、可选云端的语音识别（ASR）</strong>、<strong>18 个翻译引擎</strong>、<strong>可视化字幕校对</strong>与 <strong>FFmpeg 高质量字幕烧录</strong>融为一体。
 </p>
 
 ---
@@ -32,27 +32,27 @@
 
 | 痛点维度 | 传统在线字幕服务 (Web AI / 平台) | 传统开源字幕工具 (基于 Python / 命令行) | 🌟 FinalSub (本工具) |
 | :--- | :--- | :--- | :--- |
-| **隐私安全** | ❌ 视频/音频上传云端，商业机密与个人隐私有泄漏风险 | 🟢 本地运行，安全 | **🟢 100% 本地转写，隐私零泄漏，断网也能用** |
-| **环境门槛** | 🟢 无需配置环境 | ❌ 需要安装 Python, Conda, Homebrew，动辄环境变量报错崩溃 | **🟢 零依赖，内置已签名的 FFmpeg 与 Whisper 引擎，解压即用** |
+| **隐私安全** | ❌ 默认上传完整媒体 | 🟢 本地运行 | **🟢 默认本地；云 ASR 仅在显式授权后上传本机 VAD 切出的语音片段** |
+| **环境门槛** | 🟢 无需配置环境 | ❌ 常需 Python、Conda、Homebrew 与环境变量 | **🟢 本地引擎不依赖 Python 或 uv；FFmpeg 与 Whisper sidecar 随应用提供** |
 | **使用成本** | ❌ 按分钟或按月收费，额度受限，长期使用费用高昂 | 🟢 开源免费，但学习门槛极高 | **🟢 永久免费开源，支持免 API Key 的本地 Ollama 翻译，零成本产出** |
-| **运行性能** | 🟢 占用云端算力，本地省电 | 🟡 纯 CPU 跑效率极低，GPU 驱动配置繁琐 | **🟢 深度支持 macOS Metal & Accelerate 加速，M芯片设备近乎瞬间转录，发热极低** |
+| **运行性能** | 🟢 占用云端算力，本地省电 | 🟡 纯 CPU 跑效率较低，GPU 配置繁琐 | **🟢 Whisper.cpp 支持 macOS Metal；原生 sherpa-onnx 引擎可完全离线运行** |
 | **全链路闭环** | 🟡 仅转写，导出后需要去其他软件剪辑/烧录 | ❌ 链路断散，需要多个脚本配合运行 | **🟢 音频提取 ➔ 本地转写 ➔ AI 翻译 ➔ 可视化校对 ➔ 一键烧录，一条龙搞定** |
 
 ---
 
 ## ✨ 核心特性矩阵
 
-### 🎙️ 100% 本地离线 ASR（语音转文字）
-* **Metal 硬件加速**：基于 `whisper.cpp` 强力驱动，原生适配 Apple Silicon (M1/M2/M3/M4) 的 **Metal** 与 **Accelerate** 硬件加速。7秒钟音频仅需不到1秒即可完成高精度转录！
-* **智能模型扫描**：支持放置多个尺寸 of `ggml-*.bin` 模型（提供极简的模型管理界面和快捷路径引导），自动识别，随时切换。
-* **多引擎支持**：支持 Whisper.cpp 原生推理，并提供 Parakeet MLX 扩展支持，满足各种场景的转录精度需求。
+### 🎙️ 本地优先、可选云端的 ASR（语音转文字）
+* **本地引擎**：支持 Whisper.cpp、Parakeet TDT、SenseVoice、Paraformer、Qwen3-ASR 与 FireRedASR2；原生 sherpa-onnx 模型安装后可断网运行，Parakeet 不依赖 Python 或 uv。
+* **受管模型**：支持应用内下载、断点续传、速度/ETA、固定大小与 SHA-256 校验、安全解包、原子安装和本地导入。
+* **云端协议**：支持 OpenAI 兼容、ElevenLabs、Deepgram、Gladia、火山引擎、腾讯云、阿里云和讯飞；可保存多套配置实例。长音频先由本机 Silero VAD 切片，只有用户明确授权后才上传；同一服务地址跨任务共享可配置的全局并发与启动间隔闸门。
 
 ### 🤖 18 大 AI 翻译引擎，畅享智能双语
 一键连接你最喜爱的 AI，将转录字幕翻译为优雅、信雅达的双语/多语字幕。
 * **主流商业大模型**：已完美接驳 **DeepSeek (V3/R1)**、**豆包 (火山引擎)**、**Gemini**、**通义千问 (Qwen)**、**硅基流动 (SiliconFlow)**、**Azure OpenAI** 与自定义 OpenAI 兼容接口。
 * **零成本本地大模型**：深度集成 **Ollama**！如果你本地运行了 Ollama，无需任何 API Key，直接调用本地大模型进行高质量免费翻译。
 * **专业翻译通道**：集成 **DeepLX (内置零配置免 Key 通道)**、微软翻译、谷歌翻译、百度、腾讯、火山、小牛、讯飞等多家翻译服务。
-* **安全密钥存储**：采用 **macOS Keychain / Windows Credential Manager 系统级凭据管理器** 原生加密通道存储所有 API Key，绝不将密钥以明文形式保存在前端或普通配置文件中，安全无懈可击。
+* **安全密钥存储**：密钥存入系统 Keychain/凭据管理器，并与 provider、endpoint 和字段绑定；更换 endpoint 不会自动复用旧密钥，密钥也不会通过 IPC 回传前端。
 
 ### ✏️ 可视化智能字幕校对器
 * 摆退难用的文本编辑器！内置专为字幕工作流设计的精细校对界面。
@@ -60,25 +60,28 @@
 * **极速编辑**：支持字幕行快捷拆分、合并、批量搜索替换。
 * **时间偏移**：支持整轨或选定区域时间轴精准微调，完美解决音画不同步。
 
-### 🎬 FFmpeg 一键字幕无损烧录
+### 🎬 FFmpeg 一键高质量字幕烧录
 * 内置 Universal 架构静态高版本 `ffmpeg` 侧载程序，无须在系统安装任何音视频依赖。
 * 支持一键将生成的 `SRT`/`VTT` 烧录（Hardsub）至原视频中。
-* 内置多种字幕样式与颜色预设，渲染精美，支持无损快速导出。
+* 支持字体、描边、阴影、背景、九宫格位置、CRF 与编码 preset，并提供样式预览、进度和取消。
 
 ### 📁 丰富的格式支持
 * 导入导出完全自由，支持 **SRT**、**VTT**、**ASS**、**LRC (歌词)** 以及 **TXT (会议纪要文本)** 等主流格式。
+
+### 🔐 可验证更新
+* FinalSub 支持从签名发布清单检查、下载、验签、安装并重启；字幕任务、模型操作或视频合成进行中时会阻止安装。未内置生产公钥的本地构建会安全降级到 Releases 页面。
 
 ---
 
 ## 🚀 3 步开启高效字幕制作
 
 ### 1. 下载与运行
-前往 [Releases 页面](https://github.com/GravityPoet/FinalSub/releases) 下载适合您操作系统的最新安装包（例如 Mac `.dmg` 或 Windows 对应格式），解压并运行。
+前往 [Releases 页面](https://github.com/GravityPoet/FinalSub/releases) 下载 macOS Universal 安装包。当前仓库尚未提供经过实机验收的 Windows/Linux 安装包。
 
 ### 2. 准备 Whisper 模型
 1. 进入软件的 **“模型管理”** 页面。
-2. 根据页面中的外部下载引导链接，下载您需要的 Whisper 模型（如 `ggml-base.bin` 或 `ggml-medium.bin`）。
-3. 点击“打开模型目录”，将下载好的 `.bin` 文件拖入该目录，点击刷新，软件将自动识别并加载。
+2. 选择所需模型并点击“应用内下载”；下载可取消和断点续传，受管模型会在安装前完成完整性校验。
+3. Whisper 模型也可通过“导入本地”安装；导入后软件会自动扫描并更新状态。
 
 ### 3. 创建字幕任务
 1. 返回 **“任务”** 页面，拖入您需要制作字幕的视频或音频文件。
@@ -94,7 +97,7 @@ FinalSub 使用了当前最前沿的桌面开发技术栈，保证了极致的�
 * **核心框架**：[Tauri 2.0](https://tauri.app/) (基于 Rust 的新一代跨平台框架，拒绝 Electron 的臃肿)
 * **前端逻辑**：[React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
 * **样式设计**：[TailwindCSS 4.0](https://tailwindcss.com/)
-* **ASR 引擎**：[Whisper.cpp](https://github.com/ggerganov/whisper.cpp) (GGML C/C++ 移植版)
+* **ASR 引擎**：[Whisper.cpp](https://github.com/ggerganov/whisper.cpp) + [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 * **媒体引擎**：[FFmpeg 7.x](https://ffmpeg.org/) (已完成签名的静态多架构 Thin Sidecar)
 * **系统安全**：Rust [keyring](https://github.com/hwchen/keyring-rs) 库直连 OS Keychain / 凭据管理器
 
@@ -104,8 +107,10 @@ FinalSub 使用了当前最前沿的桌面开发技术栈，保证了极致的�
 
 **我们极其看重您的隐私。**
 * **FinalSub 是一款 100% 运行在您本地的客户端软件。** 
-* 您的音视频文件、本地生成的字幕、转录产生的缓存数据，均完全保存在您本地设备上，**绝不会上传到任何第三方云端服务器**。
-* 只有当您主动配置并启用了第三方云端翻译 API（如 DeepSeek, Gemini 等）时，软件才会将需要翻译的字幕文本加密发送至对应的官方 API 端点，除此之外没有任何后台联网上传行为。
+* 默认使用本地 ASR 时，音视频、字幕与任务缓存都保存在本机。
+* 只有当您主动配置云 ASR、勾选音频上传授权并启动对应任务时，软件才会把本机 Silero VAD 切出的语音片段发送到当前配置的 endpoint。
+* 只有当您主动配置并启用云端翻译 API 时，待翻译字幕文本才会发送到对应 endpoint。
+* 自动启动检查更新与匿名崩溃/错误上报均默认关闭。只有您手动检查或开启启动检查时，软件才会访问 GitHub Release 元数据；只有显式开启遥测后才会向 Sentry 发送错误诊断信息。
 
 ---
 

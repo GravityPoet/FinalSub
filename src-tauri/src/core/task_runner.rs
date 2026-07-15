@@ -1,4 +1,3 @@
-use keyring::Entry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -8,8 +7,10 @@ use tauri::Manager;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, RwLock};
 
-use crate::commands::{default_local_llm_dir, resolve_sidecar, whisper_models_dir};
-use crate::core::asr::parakeet::ParakeetMlxEngine;
+use crate::commands::{resolve_sidecar, whisper_models_dir};
+use crate::core::asr::cloud::{parse_protocol, CloudAsrConfig, CloudAsrEngine};
+use crate::core::asr::parakeet::ParakeetNativeEngine;
+use crate::core::asr::sherpa_native::{SherpaNativeEngine, SherpaNativeKind};
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, ProgressUpdate, TranscribeJob};
 use crate::core::subtitle::{Cue, SubtitleTrack};
@@ -26,13 +27,51 @@ const ASR_PROGRESS_END_GENERATE_ONLY: f32 = 0.95;
 const TRANSLATION_PROGRESS_START: f32 = 0.80;
 const TRANSLATION_ONLY_PROGRESS_START: f32 = 0.05;
 const TRANSLATION_PROGRESS_END: f32 = 0.95;
-const AI_TRANSLATION_MAX_BATCH_CUES: usize = 24;
 const AI_TRANSLATION_MAX_BATCH_CHARS: usize = 4_000;
 
 enum TranslationAttemptResult {
     Success(String),
     Cancelled,
     Failed(String),
+}
+
+fn sherpa_vad_model_path(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        let current_dir = std::env::current_dir().map_err(|error| error.to_string())?;
+        for candidate in [
+            current_dir
+                .join("src-tauri")
+                .join("resources")
+                .join("vad")
+                .join("silero_vad.onnx"),
+            current_dir
+                .join("resources")
+                .join("vad")
+                .join("silero_vad.onnx"),
+        ] {
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+        Err("开发环境缺少 src-tauri/resources/vad/silero_vad.onnx".into())
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let path = app
+            .path()
+            .resolve(
+                "resources/vad/silero_vad.onnx",
+                tauri::path::BaseDirectory::Resource,
+            )
+            .map_err(|error| format!("解析内置 Silero VAD 路径失败：{error}"))?;
+        if !path.is_file() {
+            return Err(format!("内置 Silero VAD 资源缺失：{}", path.display()));
+        }
+        Ok(path)
+    }
 }
 
 pub fn start_task(
@@ -428,48 +467,91 @@ async fn run_task_impl(
                     Box::new(WhisperCppEngine::new(whisper_bin, models_dir, options))
                 }
                 "parakeet-mlx" => {
-                    let uv_bin = default_uv_bin_fallback();
-
-                    #[cfg(debug_assertions)]
-                    let transcribe_script = {
-                        let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-                        let p1 = current_dir
-                            .join("src-tauri")
-                            .join("resources")
-                            .join("parakeet")
-                            .join("parakeet_transcribe.py");
-                        if p1.exists() {
-                            p1
-                        } else {
-                            current_dir
-                                .join("resources")
-                                .join("parakeet")
-                                .join("parakeet_transcribe.py")
-                        }
-                    };
-                    #[cfg(not(debug_assertions))]
-                    let transcribe_script = app
-                        .path()
-                        .resolve(
-                            "resources/parakeet/parakeet_transcribe.py",
-                            tauri::path::BaseDirectory::Resource,
-                        )
-                        .map_err(|e| format!("解析 Parakeet 脚本路径失败：{e}"))?;
-
-                    let cache_root = default_local_llm_dir();
-                    let ffmpeg_path = Some(resolve_sidecar(app, "ffmpeg")?);
-                    Box::new(ParakeetMlxEngine::new(
-                        uv_bin,
-                        transcribe_script,
-                        cache_root,
-                        ffmpeg_path,
-                    ))
+                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    Box::new(ParakeetNativeEngine::new(models_dir))
                 }
                 "sensevoice" => {
                     let models_dir = whisper_models_dir(&app_config_dir)?;
                     Box::new(crate::core::asr::sensevoice::SenseVoiceEngine::new(
                         models_dir,
+                        sherpa_vad_model_path(app)?,
                     ))
+                }
+                "paraformer" => {
+                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    Box::new(SherpaNativeEngine::new(
+                        SherpaNativeKind::Paraformer,
+                        models_dir,
+                        sherpa_vad_model_path(app)?,
+                    ))
+                }
+                "qwen3-asr" => {
+                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    Box::new(SherpaNativeEngine::new(
+                        SherpaNativeKind::Qwen3,
+                        models_dir,
+                        sherpa_vad_model_path(app)?,
+                    ))
+                }
+                "firered-asr" => {
+                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    Box::new(SherpaNativeEngine::new(
+                        SherpaNativeKind::FireRedCtc,
+                        models_dir,
+                        sherpa_vad_model_path(app)?,
+                    ))
+                }
+                "cloud-asr" => {
+                    let settings = crate::core::settings::load_settings(&app_config_dir)
+                        .map_err(|e| format!("加载云端 ASR 设置失败：{e}"))?;
+                    if !settings.cloud_asr_upload_consent {
+                        return Err("云端 ASR 未获得音频上传授权，请先在模型管理中明确启用".into());
+                    }
+                    let protocol = parse_protocol(&settings.cloud_asr_protocol)
+                        .map_err(|error| error.to_string())?;
+                    let provider_key = crate::core::secrets::get_provider_secret(
+                        protocol.secret_provider(),
+                        &settings.cloud_asr_endpoint,
+                        "apiKey",
+                    )?
+                    .filter(|secret| !secret.trim().is_empty())
+                    .ok_or_else(|| {
+                        "当前云端 ASR endpoint 未保存 API Key，请先在模型管理中配置".to_string()
+                    })?;
+                    let api_secret = crate::core::secrets::get_provider_secret(
+                        protocol.secret_provider(),
+                        &settings.cloud_asr_endpoint,
+                        "apiSecret",
+                    )?;
+                    let account_id = crate::core::secrets::get_provider_secret(
+                        protocol.secret_provider(),
+                        &settings.cloud_asr_endpoint,
+                        "accountId",
+                    )?;
+                    let proxy_url = settings
+                        .proxy_enabled
+                        .then(|| settings.proxy_url.clone())
+                        .filter(|value| !value.trim().is_empty());
+                    Box::new(
+                        CloudAsrEngine::new(
+                            CloudAsrConfig {
+                                protocol,
+                                endpoint: settings.cloud_asr_endpoint,
+                                model: settings.cloud_asr_model,
+                                api_key: provider_key,
+                                api_secret,
+                                account_id,
+                                timeout_seconds: settings.cloud_asr_timeout_seconds,
+                                retry_times: settings.cloud_asr_retry_times,
+                                request_concurrency: settings.cloud_asr_request_concurrency,
+                                request_interval_ms: settings.cloud_asr_request_interval_ms,
+                                proxy_url,
+                                state_dir: Some(work_dir.join("cloud-asr-state")),
+                            },
+                            sherpa_vad_model_path(app)?,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    )
                 }
                 "custom-command" => {
                     let settings = crate::core::settings::load_settings(&app_config_dir)
@@ -623,15 +705,6 @@ async fn run_task_impl(
         )
         .await;
 
-        let service = "com.gravitypoet.finalsub";
-        let account = format!("translate:{}:apiKey", provider);
-        let mut api_key = None;
-        if let Ok(entry) = Entry::new(service, &account) {
-            if let Ok(pwd) = entry.get_password() {
-                api_key = Some(pwd);
-            }
-        }
-
         let provider_info = builtin_providers()
             .into_iter()
             .find(|item| item.id == provider);
@@ -642,19 +715,31 @@ async fn run_task_impl(
         });
         let model_name = configured_value(settings.translate_models.get(&provider));
         let retry_times = settings.translate_retry_times;
+        let system_prompt = configured_value(settings.translate_system_prompts.get(&provider));
+        let user_prompt = configured_value(settings.translate_user_prompts.get(&provider));
+        let custom_headers = settings.translate_custom_headers.get(&provider).cloned();
+        let custom_body = settings.translate_custom_body.get(&provider).cloned();
+        let proxy_url = settings
+            .proxy_enabled
+            .then(|| settings.proxy_url.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let batch_size = settings.translate_batch_size as usize;
+        let translation_concurrency = settings.translate_concurrency as usize;
+        let request_interval_ms = settings.translate_request_interval_ms;
 
         let mut secret_fields = std::collections::HashMap::new();
         if let Some(p) = &provider_info {
             for field in &p.secret_fields {
-                let service = "com.gravitypoet.finalsub";
-                let account = format!("translate:{}:{}", provider, field);
-                if let Ok(entry) = Entry::new(service, &account) {
-                    if let Ok(pwd) = entry.get_password() {
-                        secret_fields.insert(field.clone(), pwd);
-                    }
+                if let Some(secret) = crate::core::secrets::get_provider_secret(
+                    &provider,
+                    api_url.as_deref().unwrap_or_default(),
+                    field,
+                )? {
+                    secret_fields.insert(field.clone(), secret);
                 }
             }
         }
+        let api_key = secret_fields.get("apiKey").cloned();
         let secret_fields_opt = if secret_fields.is_empty() {
             None
         } else {
@@ -720,8 +805,93 @@ async fn run_task_impl(
                 return Ok(());
             }
 
+            if !batch_translation_enabled && translation_concurrency > 1 {
+                let concurrent_end = (next_cue_index + translation_concurrency).min(total_cues);
+                let mut requests = tokio::task::JoinSet::new();
+                for cue_index in next_cue_index..concurrent_end {
+                    let request = TranslateRequest {
+                        text: track.cues[cue_index].text.clone(),
+                        source_language: source_lang.clone(),
+                        target_language: target_lang.clone(),
+                        provider: provider.clone(),
+                        api_key: api_key.clone(),
+                        api_url: api_url.clone(),
+                        model_name: model_name.clone(),
+                        secret_fields: secret_fields_opt.clone(),
+                        system_prompt: system_prompt.clone(),
+                        user_prompt: user_prompt.clone(),
+                        proxy_url: proxy_url.clone(),
+                        custom_headers: custom_headers.clone(),
+                        custom_body: custom_body.clone(),
+                    };
+                    let mut child_cancel = cancel_rx.clone();
+                    requests.spawn(async move {
+                        (
+                            cue_index,
+                            translate_with_retries(&request, retry_times, &mut child_cancel).await,
+                        )
+                    });
+                }
+
+                let mut translated = Vec::with_capacity(concurrent_end - next_cue_index);
+                while let Some(joined) = requests.join_next().await {
+                    let (cue_index, result) =
+                        joined.map_err(|error| format!("并发翻译任务异常：{error}"))?;
+                    match result {
+                        TranslationAttemptResult::Success(text) => {
+                            translated.push((cue_index, text));
+                        }
+                        TranslationAttemptResult::Cancelled => {
+                            requests.abort_all();
+                            handle_translation_stop(
+                                app,
+                                tasks.clone(),
+                                &app_config_dir,
+                                task_id,
+                                &temp_translated_path,
+                                &track,
+                                next_cue_index,
+                            )
+                            .await;
+                            return Ok(());
+                        }
+                        TranslationAttemptResult::Failed(error) => {
+                            requests.abort_all();
+                            return Err(format!(
+                                "并发翻译失败（尝试 {} 次）：{}",
+                                retry_times + 1,
+                                error
+                            ));
+                        }
+                    }
+                }
+                translated.sort_by_key(|(cue_index, _)| *cue_index);
+                for (cue_index, text) in translated {
+                    track.cues[cue_index].text = text;
+                }
+                next_cue_index = concurrent_end;
+                save_translation_checkpoint(&temp_translated_path, &track, next_cue_index);
+                let progress = translation_progress_for(task.task_type, next_cue_index, total_cues);
+                let msg = format!("正在并发翻译字幕... ({}/{})", next_cue_index, total_cues);
+                update_task_progress(app, tasks.clone(), task_id, progress, &msg).await;
+                if !wait_translation_interval(request_interval_ms, cancel_rx).await {
+                    handle_translation_stop(
+                        app,
+                        tasks.clone(),
+                        &app_config_dir,
+                        task_id,
+                        &temp_translated_path,
+                        &track,
+                        next_cue_index,
+                    )
+                    .await;
+                    return Ok(());
+                }
+                continue;
+            }
+
             let batch_end = if batch_translation_enabled {
-                translation_batch_end(&track.cues, next_cue_index)
+                translation_batch_end(&track.cues, next_cue_index, batch_size)
             } else {
                 (next_cue_index + 1).min(total_cues)
             };
@@ -738,6 +908,11 @@ async fn run_task_impl(
                     api_url: api_url.clone(),
                     model_name: model_name.clone(),
                     secret_fields: secret_fields_opt.clone(),
+                    system_prompt: system_prompt.clone(),
+                    user_prompt: user_prompt.clone(),
+                    proxy_url: proxy_url.clone(),
+                    custom_headers: custom_headers.clone(),
+                    custom_body: custom_body.clone(),
                 };
 
                 match translate_with_retries(&batch_req, retry_times, cancel_rx).await {
@@ -767,6 +942,20 @@ async fn run_task_impl(
                                 );
                                 update_task_progress(app, tasks.clone(), task_id, progress, &msg)
                                     .await;
+                                if !wait_translation_interval(request_interval_ms, cancel_rx).await
+                                {
+                                    handle_translation_stop(
+                                        app,
+                                        tasks.clone(),
+                                        &app_config_dir,
+                                        task_id,
+                                        &temp_translated_path,
+                                        &track,
+                                        next_cue_index,
+                                    )
+                                    .await;
+                                    return Ok(());
+                                }
                                 continue;
                             }
                             Err(parse_err) => {
@@ -819,6 +1008,11 @@ async fn run_task_impl(
                 api_url: api_url.clone(),
                 model_name: model_name.clone(),
                 secret_fields: secret_fields_opt.clone(),
+                system_prompt: system_prompt.clone(),
+                user_prompt: user_prompt.clone(),
+                proxy_url: proxy_url.clone(),
+                custom_headers: custom_headers.clone(),
+                custom_body: custom_body.clone(),
             };
 
             let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await {
@@ -852,6 +1046,19 @@ async fn run_task_impl(
             let progress = translation_progress_for(task.task_type, next_cue_index, total_cues);
             let msg = format!("正在翻译字幕... ({}/{})", next_cue_index, total_cues);
             update_task_progress(app, tasks.clone(), task_id, progress, &msg).await;
+            if !wait_translation_interval(request_interval_ms, cancel_rx).await {
+                handle_translation_stop(
+                    app,
+                    tasks.clone(),
+                    &app_config_dir,
+                    task_id,
+                    &temp_translated_path,
+                    &track,
+                    next_cue_index,
+                )
+                .await;
+                return Ok(());
+            }
         }
 
         let _ = std::fs::remove_file(&temp_translated_path);
@@ -877,11 +1084,16 @@ async fn run_task_impl(
     update_task_progress(app, tasks.clone(), task_id, 0.95, "正在写出字幕文件...").await;
 
     let format_str = task.output_format.clone();
-    let output_track = if should_translate {
+    let mut output_track = if should_translate {
         build_translation_output_track(&source_track, &track, task.translation_content_mode)
     } else {
         track
     };
+    if task.strip_chinese_punctuation {
+        for cue in &mut output_track.cues {
+            cue.text = strip_chinese_punctuation(&cue.text);
+        }
+    }
     let srt_output = output_track
         .to_format(&format_str)
         .map_err(|e| e.to_string())?;
@@ -898,7 +1110,9 @@ async fn run_task_impl(
         }
     };
 
-    let final_output_path = reserve_unique_output_path(&media_path, &suffix, &format_str)?;
+    let output_stem = resolve_output_stem(&task, &media_path)?;
+    let final_output_path =
+        reserve_unique_output_path(&media_path, output_stem.as_deref(), &suffix, &format_str)?;
 
     if check_cancelled(cancel_rx) {
         let _ = tokio::fs::remove_file(&final_output_path).await;
@@ -1085,14 +1299,15 @@ fn translation_supports_batch(provider_info: Option<&TranslationProvider>) -> bo
     provider_info.map(|item| item.is_ai).unwrap_or(false)
 }
 
-fn translation_batch_end(cues: &[Cue], start_index: usize) -> usize {
+fn translation_batch_end(cues: &[Cue], start_index: usize, max_batch_cues: usize) -> usize {
     if start_index >= cues.len() {
         return start_index;
     }
 
     let mut end_index = start_index;
     let mut char_count = 0usize;
-    while end_index < cues.len() && end_index - start_index < AI_TRANSLATION_MAX_BATCH_CUES {
+    let max_batch_cues = max_batch_cues.clamp(1, 50);
+    while end_index < cues.len() && end_index - start_index < max_batch_cues {
         let cue_chars = cues[end_index].text.chars().count();
         if end_index > start_index && char_count + cue_chars > AI_TRANSLATION_MAX_BATCH_CHARS {
             break;
@@ -1238,6 +1453,27 @@ async fn translate_with_retries(
     TranslationAttemptResult::Failed(last_err)
 }
 
+async fn wait_translation_interval(
+    interval_ms: u64,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> bool {
+    if interval_ms == 0 {
+        return !check_cancelled(cancel_rx);
+    }
+    let delay = tokio::time::sleep(std::time::Duration::from_millis(interval_ms));
+    tokio::pin!(delay);
+    loop {
+        tokio::select! {
+            _ = &mut delay => return true,
+            changed = cancel_rx.changed() => {
+                if changed.is_err() || *cancel_rx.borrow() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
 fn build_translation_output_track(
     source_track: &SubtitleTrack,
     translated_track: &SubtitleTrack,
@@ -1285,14 +1521,18 @@ fn merge_bilingual_text(top: &str, bottom: &str) -> String {
 
 fn reserve_unique_output_path(
     media_path: &Path,
+    stem_override: Option<&str>,
     suffix: &str,
     format: &str,
 ) -> Result<PathBuf, String> {
     let parent = media_path.parent().ok_or("媒体文件必须有父级目录")?;
-    let stem = media_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or("无法获取媒体文件名")?;
+    let stem = match stem_override {
+        Some(stem) if !stem.trim().is_empty() => stem.trim(),
+        _ => media_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("无法获取媒体文件名")?,
+    };
 
     for counter in 0..=1000 {
         let file_name = build_output_file_name(stem, suffix, format, counter)?;
@@ -1315,6 +1555,39 @@ fn reserve_unique_output_path(
     }
 
     Err("无法生成唯一的输出路径，尝试次数过多".into())
+}
+
+fn resolve_output_stem(task: &Task, media_path: &Path) -> Result<Option<String>, String> {
+    let Some(template) = task.output_name.as_deref() else {
+        return Ok(None);
+    };
+    let source_stem = media_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or("无法获取媒体文件名")?;
+    let language = task
+        .target_language
+        .as_deref()
+        .unwrap_or(task.source_language.as_deref().unwrap_or("auto"));
+    let resolved = template
+        .replace("{name}", source_stem)
+        .replace("{lang}", language)
+        .trim()
+        .to_string();
+    if resolved.is_empty() || matches!(resolved.as_str(), "." | "..") {
+        return Err("输出名称模板解析后为空或无效".into());
+    }
+    Ok(Some(resolved))
+}
+
+fn strip_chinese_punctuation(text: &str) -> String {
+    const PUNCTUATION: &[char] = &[
+        '，', '。', '！', '？', '；', '：', '、', '“', '”', '‘', '’', '（', '）', '【', '】', '《',
+        '》', '〈', '〉', '…', '—', '·', '～', '﹏', '「', '」', '『', '』',
+    ];
+    text.chars()
+        .filter(|character| !PUNCTUATION.contains(character))
+        .collect()
 }
 
 fn build_output_file_name(
@@ -1382,10 +1655,6 @@ fn stable_hash_hex(input: &str) -> String {
         hash = hash.wrapping_mul(0x01000193);
     }
     format!("{:08x}", hash)
-}
-
-fn default_uv_bin_fallback() -> PathBuf {
-    crate::core::asr::parakeet::default_uv_bin()
 }
 
 pub async fn write_task_log(app: &AppHandle, app_config_dir: &Path, task_id: &str, message: &str) {
@@ -1568,10 +1837,7 @@ mod tests {
                 text: "短句".into(),
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            translation_batch_end(&short_cues, 0),
-            AI_TRANSLATION_MAX_BATCH_CUES
-        );
+        assert_eq!(translation_batch_end(&short_cues, 0, 24), 24);
 
         let long_cues = (0..4)
             .map(|idx| Cue {
@@ -1581,7 +1847,7 @@ mod tests {
                 text: "长".repeat(2_500),
             })
             .collect::<Vec<_>>();
-        assert_eq!(translation_batch_end(&long_cues, 0), 1);
+        assert_eq!(translation_batch_end(&long_cues, 0, 24), 1);
     }
 
     #[test]
@@ -1591,7 +1857,7 @@ mod tests {
         std::fs::write(&media, b"media").unwrap();
         std::fs::write(tmp.path().join("clip.finalsub.srt"), b"existing").unwrap();
 
-        let output = reserve_unique_output_path(&media, ".finalsub", "srt").unwrap();
+        let output = reserve_unique_output_path(&media, None, ".finalsub", "srt").unwrap();
         assert_eq!(output, tmp.path().join("clip.finalsub-1.srt"));
         assert!(output.exists());
     }
@@ -1602,8 +1868,8 @@ mod tests {
         let media = tmp.path().join("clip.mp4");
         std::fs::write(&media, b"media").unwrap();
 
-        let first = reserve_unique_output_path(&media, ".finalsub", "srt").unwrap();
-        let second = reserve_unique_output_path(&media, ".finalsub", "srt").unwrap();
+        let first = reserve_unique_output_path(&media, None, ".finalsub", "srt").unwrap();
+        let second = reserve_unique_output_path(&media, None, ".finalsub", "srt").unwrap();
 
         assert_eq!(first, tmp.path().join("clip.finalsub.srt"));
         assert_eq!(second, tmp.path().join("clip.finalsub-1.srt"));
@@ -1616,7 +1882,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let media = tmp.path().join(format!("{}.mp4", "a".repeat(320)));
 
-        let output = reserve_unique_output_path(&media, ".finalsub", "srt").unwrap();
+        let output = reserve_unique_output_path(&media, None, ".finalsub", "srt").unwrap();
         let file_name = output.file_name().unwrap().to_str().unwrap();
 
         assert!(file_name.len() <= MAX_OUTPUT_FILE_NAME_BYTES);
@@ -1632,7 +1898,7 @@ mod tests {
             .path()
             .join(format!("{}.mp4", "很长的字幕视频标题".repeat(80)));
 
-        let output = reserve_unique_output_path(&media, ".finalsub.zh", "srt").unwrap();
+        let output = reserve_unique_output_path(&media, None, ".finalsub.zh", "srt").unwrap();
         let file_name = output.file_name().unwrap().to_str().unwrap();
 
         assert!(file_name.len() <= MAX_OUTPUT_FILE_NAME_BYTES);
@@ -1658,5 +1924,27 @@ mod tests {
             ".finalsub-019edc9a-1111-2222-3333-444455556666.srt.tmp"
         );
         assert!(file_name.len() <= MAX_OUTPUT_FILE_NAME_BYTES);
+    }
+
+    #[test]
+    fn custom_output_stem_replaces_source_name_without_overwriting() {
+        let temp = tempfile::tempdir().unwrap();
+        let media = temp.path().join("episode-01.mp4");
+        std::fs::write(&media, b"video").unwrap();
+        let output =
+            reserve_unique_output_path(&media, Some("season-one-episode-01"), ".finalsub", "srt")
+                .unwrap();
+        assert_eq!(
+            output.file_name().and_then(|name| name.to_str()),
+            Some("season-one-episode-01.finalsub.srt")
+        );
+    }
+
+    #[test]
+    fn chinese_punctuation_removal_preserves_latin_punctuation_and_line_breaks() {
+        assert_eq!(
+            strip_chinese_punctuation("你好，世界！\nHello, world!"),
+            "你好世界\nHello, world!"
+        );
     }
 }

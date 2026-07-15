@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../lib/i18n";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   scanModels,
   deleteModel,
@@ -10,6 +8,8 @@ import {
   cancelModelDownload,
   importLocalModel,
   importSensevoiceModel,
+  listen,
+  openDialog,
   type AsrModelInfo,
   type ModelDownloadProgress,
 } from "../lib/tauri";
@@ -19,6 +19,7 @@ import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { Progress } from "../components/ui/Progress";
+import { CloudAsrPanel } from "../components/CloudAsrPanel";
 
 function StatusBadge({
   status,
@@ -77,6 +78,27 @@ function StatusBadge({
   return null;
 }
 
+function modelSourceLabel(model: AsrModelInfo, fallback: string): string {
+  if (!model.download_url) {
+    return fallback;
+  }
+  try {
+    return new URL(model.download_url).hostname;
+  } catch {
+    return model.download_url;
+  }
+}
+
+function formatDownloadPhase(phase: ModelDownloadProgress["phase"], t: ReturnType<typeof useI18n>["t"]): string {
+  switch (phase) {
+    case "resuming": return t("models.phaseResuming");
+    case "verifying": return t("models.phaseVerifying");
+    case "installing": return t("models.phaseInstalling");
+    case "paused": return t("models.phasePaused");
+    default: return t("models.phaseDownloading");
+  }
+}
+
 export default function ModelsPage() {
   const { t } = useI18n();
   const [models, setModels] = useState<AsrModelInfo[]>([]);
@@ -90,8 +112,12 @@ export default function ModelsPage() {
   const engineLabel = (engineId: string): string => {
     const labels: Record<string, string> = {
       "whisper-cpp": "Whisper.cpp",
-      "parakeet-mlx": "Parakeet MLX",
+      "parakeet-mlx": "Parakeet Native",
       sensevoice: "SenseVoice",
+      paraformer: "Paraformer",
+      "qwen3-asr": "Qwen3-ASR",
+      "firered-asr": "FireRedASR2",
+      "cloud-asr": "Cloud ASR",
       "custom-command": t("models.customCommand"),
     };
     return labels[engineId] ?? engineId;
@@ -155,7 +181,7 @@ export default function ModelsPage() {
   const handleImportModel = async (modelId: string) => {
     setMessage(null);
     try {
-      const selected = await open({
+      const selected = await openDialog({
         multiple: false,
         filters: [{ name: "Whisper Model", extensions: ["bin"] }],
       });
@@ -174,12 +200,12 @@ export default function ModelsPage() {
   const handleImportSensevoice = async () => {
     setMessage(null);
     try {
-      const onnx = await open({
+      const onnx = await openDialog({
         multiple: false,
         filters: [{ name: "ONNX Model", extensions: ["onnx"] }],
       });
       if (!onnx) return;
-      const tokens = await open({
+      const tokens = await openDialog({
         multiple: false,
         filters: [{ name: "Tokens", extensions: ["txt"] }],
       });
@@ -233,7 +259,7 @@ export default function ModelsPage() {
   }
 
   const visibleModels = models.filter(
-    (model) => model.engine_id !== "custom-command"
+    (model) => !["custom-command", "cloud-asr"].includes(model.engine_id)
   );
   const engineGroups = visibleModels.reduce<Record<string, AsrModelInfo[]>>((acc, model) => {
     (acc[model.engine_id] ??= []).push(model);
@@ -242,12 +268,13 @@ export default function ModelsPage() {
 
   return (
     <div className="page-shell space-y-7">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("models.title")}</h2>
         <Button
           onClick={refresh}
           variant="secondary"
           size="sm"
+          className="self-start sm:self-auto"
         >
           <RefreshCw size={15} />
           <span>{t("models.refresh")}</span>
@@ -265,6 +292,8 @@ export default function ModelsPage() {
           {message.text}
         </div>
       )}
+
+      <CloudAsrPanel onSaved={refresh} />
 
       {Object.entries(engineGroups).map(([engineId, engineModels]) => (
         <div key={engineId} className="space-y-4">
@@ -297,6 +326,22 @@ export default function ModelsPage() {
                           </Badge>
                         ))}
                       </div>
+                      <div className="mt-3 grid gap-2 text-xs text-text-tertiary sm:grid-cols-2">
+                        <div className="min-w-0 rounded-lg border border-border-subtle bg-surface-overlay px-2.5 py-2">
+                          <span className="mr-1 font-semibold text-text-secondary">{t("models.sourceLabel")}</span>
+                          <span className="font-mono">{modelSourceLabel(model, t("models.sourceRuntime"))}</span>
+                        </div>
+                        <div className="min-w-0 rounded-lg border border-border-subtle bg-surface-overlay px-2.5 py-2">
+                          <span className="mr-1 font-semibold text-text-secondary">{t("models.integrityLabel")}</span>
+                          <span>
+                            {["parakeet-mlx", "sensevoice", "paraformer", "qwen3-asr", "firered-asr"].includes(model.engine_id)
+                              ? t("models.integrityPinned")
+                              : model.download_url
+                              ? t("models.integritySizeOnly")
+                              : t("models.integrityRuntime")}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                     <div className="flex flex-col items-start justify-between gap-3 lg:items-end lg:pt-1">
                       <StatusBadge status={model.status} downloadInfo={downloadInfo} />
@@ -306,7 +351,7 @@ export default function ModelsPage() {
                         )}
                         {model.status === "available" && !isDownloading && (
                           <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
-                            {model.engine_id !== "sensevoice" && model.download_url && (
+                            {model.download_url && (
                               <Button
                                 type="button"
                                 onClick={() => handleDownload(model.id)}
@@ -364,7 +409,7 @@ export default function ModelsPage() {
                             <span>{t("models.retryAction")}</span>
                           </Button>
                         )}
-                        {model.status === "downloaded" && model.engine_id === "whisper-cpp" && (
+                        {model.status === "downloaded" && !["custom-command", "cloud-asr"].includes(model.engine_id) && (
                           <button
                             type="button"
                             onClick={() => setPendingDelete(model)}
@@ -383,7 +428,7 @@ export default function ModelsPage() {
                     <div className="mt-4 w-full space-y-1.5">
                       <Progress value={Number((downloadInfo.progress * 100).toFixed(1))} />
                       <div className="flex items-center justify-between font-mono text-xs text-text-tertiary">
-                        <span>{(downloadInfo.progress * 100).toFixed(0)}%</span>
+                        <span>{formatDownloadPhase(downloadInfo.phase, t)} · {(downloadInfo.progress * 100).toFixed(0)}%</span>
                         {downloadInfo.total_bytes > 0 && (
                           <span>
                             {(downloadInfo.bytes_downloaded / 1024 / 1024).toFixed(1)} MB /{" "}
@@ -391,6 +436,12 @@ export default function ModelsPage() {
                           </span>
                         )}
                       </div>
+                      {Boolean(downloadInfo.bytes_per_second) && (
+                        <div className="flex justify-end gap-2 font-mono text-[11px] text-text-tertiary">
+                          <span>{((downloadInfo.bytes_per_second ?? 0) / 1024 / 1024).toFixed(1)} MB/s</span>
+                          {downloadInfo.eta_seconds != null && <span>ETA {downloadInfo.eta_seconds}s</span>}
+                        </div>
+                      )}
                     </div>
                   )}
                 </Card>

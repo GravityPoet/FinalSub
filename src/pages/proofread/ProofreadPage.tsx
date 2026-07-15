@@ -17,14 +17,13 @@ import { useI18n } from '../../lib/i18n';
 type WorkflowStage = 'import' | 'list' | 'edit';
 
 export async function getProofreadTasks(): Promise<ProofreadTask[]> {
-  try {
-    const raw = await loadProofreadTasks();
-    if (!raw || raw.trim() === '') return [];
-    return JSON.parse(raw) as ProofreadTask[];
-  } catch (e) {
-    console.error('Failed to load proofread tasks:', e);
-    return [];
+  const raw = await loadProofreadTasks();
+  if (!raw || raw.trim() === '') return [];
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error('Invalid proofread task history format');
   }
+  return parsed as ProofreadTask[];
 }
 
 export async function persistProofreadTasks(tasks: ProofreadTask[]): Promise<void> {

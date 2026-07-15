@@ -1,6 +1,4 @@
 import { useEffect, useState, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useI18n } from "../lib/i18n";
 import {
   cancelTask,
@@ -11,6 +9,9 @@ import {
   retryTask,
   getTaskLogs,
   listTasks,
+  listen,
+  openPath,
+  revealItemInDir,
   TASK_DELETED_EVENT,
   TASK_UPDATED_EVENT,
   type Task,

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -16,6 +17,7 @@ pub struct AppState {
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
     pub task_semaphore: Arc<std::sync::Mutex<Arc<tokio::sync::Semaphore>>>,
+    pub update_in_progress: AtomicBool,
 }
 
 impl AppState {
@@ -37,8 +39,10 @@ impl AppState {
         }
         let settings = crate::core::settings::load_settings(&app_config_dir).unwrap_or_default();
         let initial_limit = settings.max_concurrent_tasks.max(1) as usize;
-        let task_semaphore = Arc::new(std::sync::Mutex::new(Arc::new(tokio::sync::Semaphore::new(initial_limit))));
-        
+        let task_semaphore = Arc::new(std::sync::Mutex::new(Arc::new(
+            tokio::sync::Semaphore::new(initial_limit),
+        )));
+
         Self {
             tasks: Arc::new(RwLock::new(loaded_tasks)),
             task_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -47,6 +51,7 @@ impl AppState {
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,
             task_semaphore,
+            update_in_progress: AtomicBool::new(false),
         }
     }
 }

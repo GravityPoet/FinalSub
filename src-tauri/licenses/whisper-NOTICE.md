@@ -8,25 +8,22 @@ This project packages `whisper-cli` as a sidecar for ASR (Speech-to-Text) functi
 - **License**: MIT (See [whisper.cpp-LICENSE.txt](./whisper.cpp-LICENSE.txt))
 
 ## Binary Metadata & Compilation Details
-The sidecar binaries are compiled locally on macOS. They are built as fully self-contained static executables to prevent runtime dependency issues.
+The sidecars are reproducibly built by [`scripts/build-whisper-sidecars-macos.sh`](../../scripts/build-whisper-sidecars-macos.sh) from the pinned upstream archive.
 
-### Compile Commands
-- **aarch64-apple-darwin**:
-  ```bash
-  cmake -B build-arm64-static -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DWHISPER_COREML=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
-    -DBUILD_SHARED_LIBS=OFF
-  cmake --build build-arm64-static --config Release -j --target whisper-cli
-  ```
+- **Upstream archive SHA-256**: `279af4ce60dbf397362868f3bacc75b56a4332ac2541cae155070093f6aaf0e3`
+- **Minimum macOS version**: `12.0` for both thin slices and the universal binary
+- **Runtime linkage**: system libraries/frameworks only
+- **Accelerate BLAS**: disabled because the current SDK exposes BLAS entry points with macOS 13.3 availability; CPU and Metal backends remain enabled
+- **Code signing**: ad-hoc signed after each thin build and after universal merge
 
-- **x86_64-apple-darwin**:
-  ```bash
-  cmake -B build-x64-static -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-    -DWHISPER_COREML=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
-    -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF
-  cmake --build build-x64-static --config Release -j --target whisper-cli
-  ```
+### Build Command
+```bash
+bash scripts/build-whisper-sidecars-macos.sh
+```
+
+The script downloads and verifies the pinned source archive, builds `arm64` and `x86_64` with `CMAKE_OSX_DEPLOYMENT_TARGET=12.0`, checks architectures and load commands with `lipo`/`vtool`, rejects non-system dynamic dependencies with `otool`, runs `--help` under both architectures, creates the universal binary, signs all outputs, and restores the previous sidecars if installation fails.
 
 ### File Integrity (SHA-256)
-- **whisper-cli-aarch64-apple-darwin**: `c7bf9701e2937f9b9f06b1a0b6c45806c4006990bd85bb89ac32fa6486b8e563`
-- **whisper-cli-x86_64-apple-darwin**: `ace8c282fc11cd1570d79f42f63a0c1e54be2c72ded434166c25dfea5713156e`
+- **whisper-cli-aarch64-apple-darwin**: `d97d9e9506494ba7b6196e4aac6b2820b88c365ea7ce4ad9fe9e61ca60ae5a20`
+- **whisper-cli-x86_64-apple-darwin**: `f5bd0e0a9ab0a823177e3168178278bdcd555a165cc01860476a5f9adafa0794`
+- **whisper-cli-universal-apple-darwin**: `db7d5654f8f168b011fff51ff5db2ebc2fa4163cc5d07a800173c98c3f9fe1f1`

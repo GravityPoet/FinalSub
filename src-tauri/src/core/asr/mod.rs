@@ -3,10 +3,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::subtitle::SubtitleTrack;
 
-pub mod parakeet;
-pub mod whisper;
-pub mod sensevoice;
+pub mod cloud;
 pub mod custom;
+pub mod parakeet;
+pub mod sensevoice;
+pub mod sherpa_native;
+pub(crate) mod vad;
+pub mod whisper;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsrCapabilities {

@@ -13,7 +13,6 @@ import {
   Plus,
   Check,
 } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-dialog';
 import {
   PendingFile,
   createPendingFileFromVideo,
@@ -21,6 +20,7 @@ import {
 } from './proofreadUtils';
 import { detectLanguageFromFilename, getLanguageName } from './languageDetector';
 import { useI18n } from '../../lib/i18n';
+import { openDialog } from '../../lib/tauri';
 
 import { Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
@@ -63,7 +63,7 @@ export default function ProofreadFileList({
   const handleSelectSourceSubtitle = useCallback(
     async (index: number) => {
       try {
-        const selected = await open({
+        const selected = await openDialog({
           multiple: false,
           directory: false,
           filters: [{ name: t('proofread.list.subtitleFilterName'), extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
@@ -105,7 +105,7 @@ export default function ProofreadFileList({
   const handleSelectTargetSubtitle = useCallback(
     async (index: number) => {
       try {
-        const selected = await open({
+        const selected = await openDialog({
           multiple: false,
           directory: false,
           filters: [{ name: t('proofread.list.subtitleFilterName'), extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],
@@ -182,7 +182,7 @@ export default function ProofreadFileList({
   const handleAppendFiles = useCallback(async () => {
     try {
       if (importType === 'video') {
-        const selected = await open({
+        const selected = await openDialog({
           multiple: true,
           directory: false,
           filters: [
@@ -204,7 +204,7 @@ export default function ProofreadFileList({
           onAddFiles(newFiles);
         }
       } else {
-        const selected = await open({
+        const selected = await openDialog({
           multiple: true,
           directory: false,
           filters: [{ name: t('proofread.list.subtitleFilterName'), extensions: ['srt', 'vtt', 'ass', 'ssa', 'lrc'] }],

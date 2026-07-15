@@ -18,7 +18,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
-keyring = { version = "3", features = ["apple-native", "windows-native"] }
+tauri-plugin-updater = "2.10.1"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -26,7 +27,7 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "system-proxy"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls-native-roots", "system-proxy"], default-features = false }
 md5 = "0.7"
 hmac = "0.12"
 sha1 = "0.10"
@@ -34,12 +35,17 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 percent-encoding = "2.3"
+tar = "0.4"
+bzip2 = "0.4"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
 # 崩溃/错误遥测（分发版用，默认关闭，需用户在设置里 opt-in）。
 # rustls 传输，与项目其余 reqwest 配置一致，避免拖入 native-tls/openssl。
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
 sys-locale = "0.3"
 sherpa-onnx = "1.13.3"
 opencc-fmmseg = "0.11.0"
+semver = "1"
 
 [dev-dependencies]
 tempfile = "3"

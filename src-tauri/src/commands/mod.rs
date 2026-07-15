@@ -1,14 +1,16 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State};
+use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::core::asr::parakeet::ParakeetMlxEngine;
+use crate::core::asr::parakeet::ParakeetNativeEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
 use crate::core::audio;
-use crate::core::models::{self, AsrModelInfo};
+use crate::core::models::{self, AsrModelInfo, ModelStatus};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{
@@ -16,11 +18,18 @@ use crate::core::task_queue::{
 };
 use crate::core::translation::{self, TranslationProvider};
 use crate::state::AppState;
-use keyring::Entry;
 use tauri_plugin_fs::FsExt;
 
 const TASK_UPDATED_EVENT: &str = "task-updated";
 const TASK_DELETED_EVENT: &str = "task-deleted";
+const TRANSLATE_ONLY_SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "lrc"];
+const MAX_BATCH_TASKS: usize = 10_000;
+const RELEASE_LATEST_URL: &str = "https://github.com/GravityPoet/FinalSub/releases/latest";
+const RELEASE_LATEST_API_URL: &str =
+    "https://api.github.com/repos/GravityPoet/FinalSub/releases/latest";
+const UPDATER_MANIFEST_URL: &str =
+    "https://github.com/GravityPoet/FinalSub/releases/latest/download/latest.json";
+const UPDATER_ASSET_PATH_PREFIX: &str = "/repos/GravityPoet/FinalSub/releases/assets/";
 
 #[derive(serde::Serialize)]
 pub struct AppInfo {
@@ -165,9 +174,24 @@ pub fn scan_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, Stri
 }
 
 #[tauri::command]
+pub fn discover_batch_inputs(
+    paths: Vec<String>,
+    task_type: String,
+    recursive: Option<bool>,
+) -> Result<Vec<String>, String> {
+    let kind = if task_type.trim() == "translate-only" {
+        crate::core::batch::BatchInputKind::Subtitle
+    } else {
+        crate::core::batch::BatchInputKind::Media
+    };
+    crate::core::batch::discover_inputs(&paths, kind, recursive.unwrap_or(true))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
     let models_dir = whisper_models_dir(&state.app_config_dir)?;
-    models::delete_whisper_model(&models_dir, &model_id).map_err(|e| e.to_string())
+    models::delete_managed_model(&models_dir, &model_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -179,8 +203,7 @@ pub async fn import_local_model(
 ) -> Result<(), String> {
     let models_dir = whisper_models_dir(&state.app_config_dir)?;
     let source = validate_existing_file_path(&source_path, "Source model file")?;
-    let normalized = models::validate_whisper_model_id(&model_id)
-        .map_err(|e| e.to_string())?;
+    let normalized = models::validate_whisper_model_id(&model_id).map_err(|e| e.to_string())?;
     let dest_path = models::whisper_model_path(&models_dir, &normalized);
 
     if let Some(parent) = dest_path.parent() {
@@ -393,14 +416,9 @@ pub async fn download_model(
     let cleanup_model_id = normalized.clone();
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        let result = models::download::download_model_impl(
-            app_clone,
-            model_controls,
-            models_dir,
-            normalized.clone(),
-            rx,
-        )
-        .await;
+        let result =
+            models::download::download_model_impl(app_clone, models_dir, normalized.clone(), rx)
+                .await;
         cleanup_controls.write().await.remove(&cleanup_model_id);
         if let Err(error) = result {
             let _ = app.emit(
@@ -411,6 +429,9 @@ pub async fn download_model(
                     total_bytes: 0,
                     progress: 0.0,
                     status: "error".into(),
+                    phase: "error".into(),
+                    bytes_per_second: None,
+                    eta_seconds: None,
                     error: Some(error.to_string()),
                 },
             );
@@ -443,14 +464,11 @@ pub struct CreateTaskRequest {
     pub target_language: Option<String>,
     pub translation_content_mode: Option<String>,
     pub output_format: Option<String>,
+    pub output_name: Option<String>,
+    pub strip_chinese_punctuation: Option<bool>,
 }
 
-#[tauri::command]
-pub async fn create_task(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    req: CreateTaskRequest,
-) -> Result<Task, String> {
+fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
     let task_type = match req.task_type.as_str() {
         "generate-and-translate" => TaskType::GenerateAndTranslate,
         "generate-only" => TaskType::GenerateOnly,
@@ -475,22 +493,13 @@ pub async fn create_task(
 
     // 如果是 translate-only，校验字幕格式
     if task_type == TaskType::TranslateOnly {
-        let ext = media_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if ext != "srt" {
-            return Err("Translate-only mode only supports .srt subtitle file input".into());
-        }
+        validate_translate_only_subtitle_extension(&media_path)?;
     }
 
     let output_format = validate_subtitle_output_format(req.output_format)?;
+    let output_name = validate_output_name_template(req.output_name)?;
     let translation_content_mode = validate_translation_content_mode(req.translation_content_mode)?;
-    let source_language = req
-        .source_language
-        .map(|lang| lang.trim().to_string())
-        .filter(|lang| !lang.is_empty());
+    let source_language = validate_source_language_for_engine(&engine_id, req.source_language)?;
     let target_language = match task_type {
         TaskType::GenerateAndTranslate | TaskType::TranslateOnly => Some(validate_non_empty(
             "target_language",
@@ -508,7 +517,7 @@ pub async fn create_task(
         .unwrap_or("Unnamed media")
         .to_string();
 
-    let task = task_queue::create_task(CreateTaskParams {
+    Ok(task_queue::create_task(CreateTaskParams {
         task_type,
         media_path: media_path.to_string_lossy().to_string(),
         media_name,
@@ -518,36 +527,98 @@ pub async fn create_task(
         target_language,
         translation_content_mode,
         output_format,
-    });
+        output_name,
+        strip_chinese_punctuation: req.strip_chinese_punctuation.unwrap_or(false),
+    }))
+}
 
-    let task_clone = task.clone();
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    let tasks = state.tasks.clone();
-    let task_controls = state.task_controls.clone();
-    let app_config_dir = state.app_config_dir.clone();
-
-    tasks.write().await.insert(task.id.clone(), task);
-    if let Err(error) = persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await {
-        tasks.write().await.remove(&task_clone.id);
-        return Err(error);
+async fn create_tasks_inner(
+    app: AppHandle,
+    state: &AppState,
+    requests: Vec<CreateTaskRequest>,
+) -> Result<Vec<Task>, String> {
+    if requests.is_empty() {
+        return Err("Please provide at least one task".into());
     }
-    task_controls
-        .write()
-        .await
-        .insert(task_clone.id.clone(), cancel_tx);
-    emit_task_update(&app, &task_clone);
+    if requests.len() > MAX_BATCH_TASKS {
+        return Err(format!(
+            "A single batch can contain at most {MAX_BATCH_TASKS} tasks"
+        ));
+    }
 
-    // 启动后台 worker
-    crate::core::task_runner::start_task(
-        app,
-        tasks,
-        task_controls,
-        app_config_dir,
-        task_clone.id.clone(),
-        cancel_rx,
-    );
+    // Validate every request before changing memory, disk, controls, or worker state.
+    let new_tasks = requests
+        .into_iter()
+        .map(prepare_task_request)
+        .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(task_clone)
+    if let Some(cloud_task) = new_tasks
+        .iter()
+        .find(|task| task.engine_id == crate::core::asr::cloud::CLOUD_ASR_ENGINE_ID)
+    {
+        if cloud_task.model_id != crate::core::asr::cloud::CLOUD_ASR_MODEL_ID {
+            return Err(format!(
+                "Unsupported Cloud ASR model reference: {}",
+                cloud_task.model_id
+            ));
+        }
+        let settings = settings::load_settings(&state.app_config_dir)
+            .map_err(|error| format!("Failed to load Cloud ASR settings: {error}"))?;
+        validate_cloud_asr_readiness(&settings)?;
+    }
+
+    {
+        let mut tasks = state.tasks.write().await;
+        task_queue::insert_tasks_atomically(&state.app_config_dir, &mut tasks, &new_tasks)?;
+    }
+
+    let mut starts = Vec::with_capacity(new_tasks.len());
+    {
+        let mut controls = state.task_controls.write().await;
+        for task in &new_tasks {
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+            controls.insert(task.id.clone(), cancel_tx);
+            starts.push((task.id.clone(), cancel_rx));
+        }
+    }
+
+    for task in &new_tasks {
+        emit_task_update(&app, task);
+    }
+    for (task_id, cancel_rx) in starts {
+        crate::core::task_runner::start_task(
+            app.clone(),
+            state.tasks.clone(),
+            state.task_controls.clone(),
+            state.app_config_dir.clone(),
+            task_id,
+            cancel_rx,
+        );
+    }
+
+    Ok(new_tasks)
+}
+
+#[tauri::command]
+pub async fn create_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: CreateTaskRequest,
+) -> Result<Task, String> {
+    create_tasks_inner(app, &state, vec![req])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Task creation returned no task".to_string())
+}
+
+#[tauri::command]
+pub async fn create_tasks(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    requests: Vec<CreateTaskRequest>,
+) -> Result<Vec<Task>, String> {
+    create_tasks_inner(app, &state, requests).await
 }
 
 #[tauri::command]
@@ -573,6 +644,8 @@ pub async fn create_preview_task(
         target_language: None,
         translation_content_mode: TranslationContentMode::TargetOnly,
         output_format: None,
+        output_name: None,
+        strip_chinese_punctuation: false,
     });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
@@ -859,10 +932,18 @@ pub struct BurnSubtitleRequest {
     pub video_path: String,
     pub subtitle_path: String,
     pub output_path: String,
+    pub font_name: Option<String>,
     pub font_size: Option<u32>,
     pub font_color: Option<String>,
     pub outline_color: Option<String>,
+    pub outline_width: Option<f32>,
+    pub shadow: Option<f32>,
+    pub background_color: Option<String>,
+    pub opaque_background: Option<bool>,
+    pub alignment: Option<u8>,
     pub margin_v: Option<u32>,
+    pub crf: Option<u8>,
+    pub preset: Option<String>,
     pub soft_subtitle: Option<bool>,
 }
 
@@ -878,22 +959,32 @@ pub async fn burn_subtitle(
     let burn_id = output_path.to_string_lossy().to_string();
     validate_burn_style(&req)?;
     let style = audio::BurnInStyleOptions {
+        font_name: req.font_name,
         font_size: req.font_size,
         font_color: req.font_color,
         outline_color: req.outline_color,
+        outline_width: req.outline_width,
+        shadow: req.shadow,
+        background_color: req.background_color,
+        opaque_background: req.opaque_background,
+        alignment: req.alignment,
         margin_v: req.margin_v,
+        crf: req.crf,
+        preset: req.preset,
     };
     let args = if req.soft_subtitle.unwrap_or(false) {
-        let ext = output_path.extension()
+        let ext = output_path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
-            
+
         let subtitle_codec = if ext == "mp4" {
             "mov_text"
         } else if ext == "mkv" {
             // 根据输入字幕文件的后缀选择编码
-            let sub_ext = subtitle_path.extension()
+            let sub_ext = subtitle_path
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
@@ -969,8 +1060,13 @@ pub async fn burn_subtitle(
         }
         res = async {
             use tokio::io::AsyncBufReadExt;
+            let mut stderr_tail = std::collections::VecDeque::with_capacity(40);
             let mut lines_stream = reader.lines();
             while let Ok(Some(line)) = lines_stream.next_line().await {
+                if stderr_tail.len() == 40 {
+                    stderr_tail.pop_front();
+                }
+                stderr_tail.push_back(line.clone());
                 if let Some(duration_ms) = audio::parse_duration_ms(&line) {
                     total_duration_ms = Some(duration_ms);
                 }
@@ -1015,7 +1111,12 @@ pub async fn burn_subtitle(
                 );
                 Ok(output_path_clone.to_string_lossy().to_string())
             } else {
-                Err("FFmpeg execution failed, please check file format or style parameters".to_string())
+                let details = stderr_tail.into_iter().collect::<Vec<_>>().join("\n");
+                if details.trim().is_empty() {
+                    Err("FFmpeg execution failed without diagnostic output".to_string())
+                } else {
+                    Err(format!("FFmpeg execution failed:\n{details}"))
+                }
             }
         } => res
     };
@@ -1197,10 +1298,18 @@ pub async fn generate_subtitle_preview(
 
     validate_burn_style(&req)?;
     let style = audio::BurnInStyleOptions {
+        font_name: req.font_name,
         font_size: req.font_size,
         font_color: req.font_color,
         outline_color: req.outline_color,
+        outline_width: req.outline_width,
+        shadow: req.shadow,
+        background_color: req.background_color,
+        opaque_background: req.opaque_background,
+        alignment: req.alignment,
         margin_v: req.margin_v,
+        crf: req.crf,
+        preset: req.preset,
     };
 
     let mut args = audio::burn_in_args(
@@ -1226,7 +1335,9 @@ pub async fn generate_subtitle_preview(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to generate preview video, FFmpeg error: {stderr}"));
+        return Err(format!(
+            "Failed to generate preview video, FFmpeg error: {stderr}"
+        ));
     }
 
     // Open preview video
@@ -1299,44 +1410,14 @@ pub struct TranscribeParakeetRequest {
 
 #[tauri::command]
 pub async fn transcribe_parakeet(
-    app: AppHandle,
-    _state: State<'_, AppState>,
+    _app: AppHandle,
+    state: State<'_, AppState>,
     req: TranscribeParakeetRequest,
 ) -> Result<String, String> {
     let audio_path = validate_existing_file_path(&req.audio_path, "Audio file")?;
     let output_path = validate_new_output_path(&req.output_path, "Subtitle output path")?;
-    let uv_bin = crate::core::asr::parakeet::default_uv_bin();
-
-    #[cfg(debug_assertions)]
-    let transcribe_script = {
-        let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-        let p1 = current_dir
-            .join("src-tauri")
-            .join("resources")
-            .join("parakeet")
-            .join("parakeet_transcribe.py");
-        if p1.exists() {
-            p1
-        } else {
-            current_dir
-                .join("resources")
-                .join("parakeet")
-                .join("parakeet_transcribe.py")
-        }
-    };
-    #[cfg(not(debug_assertions))]
-    let transcribe_script = app
-        .path()
-        .resolve(
-            "resources/parakeet/parakeet_transcribe.py",
-            tauri::path::BaseDirectory::Resource,
-        )
-        .map_err(|e| format!("Failed to resolve Parakeet script path: {e}"))?;
-
-    let cache_root = default_local_llm_dir();
-    let ffmpeg_path = Some(resolve_sidecar(&app, "ffmpeg")?);
-
-    let engine = ParakeetMlxEngine::new(uv_bin, transcribe_script, cache_root, ffmpeg_path);
+    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let engine = ParakeetNativeEngine::new(models_dir);
     let model_ref = AsrModelRef {
         engine_id: "parakeet-mlx".into(),
         model_id: "parakeet-tdt-0.6b-v2".into(),
@@ -1375,6 +1456,62 @@ pub fn list_translation_providers() -> Vec<TranslationProvider> {
 }
 
 #[tauri::command]
+pub async fn list_translation_models(
+    app: AppHandle,
+    provider_id: String,
+    endpoint: String,
+    custom_headers: Option<std::collections::HashMap<String, String>>,
+) -> Result<Vec<String>, String> {
+    let provider = translation::builtin_providers()
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| format!("Unknown translation provider: {provider_id}"))?;
+    if !provider.requires_model {
+        return Err(format!("{} does not use selectable models", provider.name));
+    }
+    let state = app.state::<AppState>();
+    let settings =
+        settings::load_settings(&state.app_config_dir).map_err(|error| error.to_string())?;
+    let resolved_endpoint = if endpoint.trim().is_empty() {
+        settings
+            .translate_endpoints
+            .get(&provider_id)
+            .cloned()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| provider.default_endpoint.clone())
+    } else {
+        endpoint.trim().to_string()
+    };
+    let mut secret_fields = std::collections::HashMap::new();
+    for field in &provider.secret_fields {
+        if let Some(secret) =
+            crate::core::secrets::get_provider_secret(&provider_id, &resolved_endpoint, field)?
+        {
+            secret_fields.insert(field.clone(), secret);
+        }
+    }
+    let request = translation::TranslateRequest {
+        text: String::new(),
+        source_language: "auto".into(),
+        target_language: "en".into(),
+        provider: provider_id,
+        api_key: secret_fields.get("apiKey").cloned(),
+        api_url: Some(resolved_endpoint),
+        model_name: None,
+        secret_fields: (!secret_fields.is_empty()).then_some(secret_fields),
+        system_prompt: None,
+        user_prompt: None,
+        proxy_url: settings.proxy_enabled.then_some(settings.proxy_url),
+        custom_headers: custom_headers
+            .or_else(|| settings.translate_custom_headers.get(&provider.id).cloned()),
+        custom_body: settings.translate_custom_body.get(&provider.id).cloned(),
+    };
+    translation::list_provider_models(&request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn test_translation(
     app: AppHandle,
     mut req: translation::TranslateRequest,
@@ -1387,15 +1524,26 @@ pub async fn test_translation(
         if req.model_name.is_none() || req.model_name.as_deref().unwrap_or("").is_empty() {
             req.model_name = settings.translate_models.get(&req.provider).cloned();
         }
-    }
-
-    if req.api_key.is_none() || req.api_key.as_deref().unwrap_or("").is_empty() {
-        let service = "com.gravitypoet.finalsub";
-        let account = format!("translate:{}:apiKey", req.provider);
-        if let Ok(entry) = Entry::new(service, &account) {
-            if let Ok(pwd) = entry.get_password() {
-                req.api_key = Some(pwd);
-            }
+        if req.system_prompt.is_none() {
+            req.system_prompt = settings
+                .translate_system_prompts
+                .get(&req.provider)
+                .cloned();
+        }
+        if req.user_prompt.is_none() {
+            req.user_prompt = settings.translate_user_prompts.get(&req.provider).cloned();
+        }
+        if req.custom_headers.is_none() {
+            req.custom_headers = settings
+                .translate_custom_headers
+                .get(&req.provider)
+                .cloned();
+        }
+        if req.custom_body.is_none() {
+            req.custom_body = settings.translate_custom_body.get(&req.provider).cloned();
+        }
+        if req.proxy_url.is_none() && settings.proxy_enabled {
+            req.proxy_url = Some(settings.proxy_url);
         }
     }
 
@@ -1412,14 +1560,17 @@ pub async fn test_translation(
         let mut secret_map = req.secret_fields.take().unwrap_or_default();
         for field in &p.secret_fields {
             if !secret_map.contains_key(field) {
-                let service = "com.gravitypoet.finalsub";
-                let account = format!("translate:{}:{}", req.provider, field);
-                if let Ok(entry) = Entry::new(service, &account) {
-                    if let Ok(pwd) = entry.get_password() {
-                        secret_map.insert(field.clone(), pwd);
-                    }
+                if let Some(secret) = crate::core::secrets::get_provider_secret(
+                    &req.provider,
+                    req.api_url.as_deref().unwrap_or_default(),
+                    field,
+                )? {
+                    secret_map.insert(field.clone(), secret);
                 }
             }
+        }
+        if req.api_key.is_none() {
+            req.api_key = secret_map.get("apiKey").cloned();
         }
         if !secret_map.is_empty() {
             req.secret_fields = Some(secret_map);
@@ -1432,16 +1583,23 @@ pub async fn test_translation(
 }
 
 #[tauri::command]
+pub async fn test_translation_proxy(
+    proxy_url: String,
+    target_url: String,
+) -> Result<String, String> {
+    translation::test_proxy_connection(&proxy_url, &target_url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn set_provider_secret(
     provider_id: String,
+    endpoint: String,
     field: String,
     value: String,
 ) -> std::result::Result<(), String> {
-    let service = "com.gravitypoet.finalsub";
-    let account = format!("translate:{provider_id}:{field}");
-    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::core::secrets::set_provider_secret(&provider_id, &endpoint, &field, &value)
 }
 
 /// 仅返回「该 provider 字段是否已配置密钥」，绝不把明文密钥经 IPC 回传渲染层。
@@ -1449,46 +1607,19 @@ pub fn set_provider_secret(
 #[tauri::command]
 pub fn has_provider_secret(
     provider_id: String,
+    endpoint: String,
     field: String,
 ) -> std::result::Result<bool, String> {
-    let service = "com.gravitypoet.finalsub";
-    let account = format!("translate:{provider_id}:{field}");
-    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(password) => Ok(!password.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-pub fn get_provider_secret(
-    provider_id: String,
-    field: String,
-) -> std::result::Result<Option<String>, String> {
-    let service = "com.gravitypoet.finalsub";
-    let account = format!("translate:{provider_id}:{field}");
-    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
+    crate::core::secrets::has_provider_secret(&provider_id, &endpoint, &field)
 }
 
 #[tauri::command]
 pub fn delete_provider_secret(
     provider_id: String,
+    endpoint: String,
     field: String,
 ) -> std::result::Result<(), String> {
-    let service = "com.gravitypoet.finalsub";
-    let account = format!("translate:{provider_id}:{field}");
-    let entry = Entry::new(service, &account).map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(_) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    crate::core::secrets::delete_provider_secret(&provider_id, &endpoint, &field)
 }
 
 #[tauri::command]
@@ -1622,7 +1753,8 @@ pub fn save_settings_cmd(
 
 #[tauri::command]
 pub fn reset_settings(state: State<'_, AppState>) -> Result<Settings, String> {
-    let new_settings = settings::reset_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
+    let new_settings =
+        settings::reset_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
@@ -1635,7 +1767,8 @@ pub fn export_config(state: State<'_, AppState>) -> Result<String, String> {
 
 #[tauri::command]
 pub fn import_config(state: State<'_, AppState>, json: String) -> Result<Settings, String> {
-    let new_settings = settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
+    let new_settings =
+        settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
@@ -1661,7 +1794,44 @@ pub fn import_config_from_path(
 ) -> Result<Settings, String> {
     let path = validate_json_input_path(&input_path)?;
     let json = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read config: {e}"))?;
-    let new_settings = settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
+    let new_settings =
+        settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
+    update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    crate::set_telemetry_enabled(new_settings.enable_telemetry);
+    Ok(new_settings)
+}
+
+#[tauri::command]
+pub fn export_encrypted_config_to_path(
+    state: State<'_, AppState>,
+    output_path: String,
+    passphrase: String,
+) -> Result<String, String> {
+    let path = validate_json_output_path(&output_path)?;
+    let encrypted = settings::export_encrypted_config(&state.app_config_dir, &passphrase)
+        .map_err(|error| error.to_string())?;
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, encrypted)
+        .map_err(|error| format!("Failed to write encrypted config: {error}"))?;
+    if let Err(error) = std::fs::rename(&tmp_path, &path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(format!("Failed to save encrypted config: {error}"));
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn import_encrypted_config_from_path(
+    state: State<'_, AppState>,
+    input_path: String,
+    passphrase: String,
+) -> Result<Settings, String> {
+    let path = validate_json_input_path(&input_path)?;
+    let encrypted = std::fs::read_to_string(&path)
+        .map_err(|error| format!("Failed to read encrypted config: {error}"))?;
+    let new_settings =
+        settings::import_encrypted_config(&state.app_config_dir, &encrypted, &passphrase)
+            .map_err(|error| error.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
@@ -1669,10 +1839,80 @@ pub fn import_config_from_path(
 
 fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> {
     let whisper_dir = whisper_models_dir(&state.app_config_dir)?;
-    let parakeet_dir = default_local_llm_dir().join("parakeet-models");
     let mut catalog = state.models.clone();
-    models::scan_model_status(&mut catalog, &whisper_dir, &parakeet_dir);
+    models::scan_model_status(&mut catalog, &whisper_dir, &whisper_dir);
+    let settings = settings::load_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
+    if let Some(model) = catalog
+        .iter_mut()
+        .find(|model| model.engine_id == crate::core::asr::cloud::CLOUD_ASR_ENGINE_ID)
+    {
+        let protocol = crate::core::asr::cloud::parse_protocol(&settings.cloud_asr_protocol)
+            .map_err(|error| error.to_string())?;
+        model.name = format!(
+            "Cloud ASR · {} · {}",
+            protocol.display_name(),
+            settings.cloud_asr_model.trim()
+        );
+        model.status = if !settings.cloud_asr_upload_consent {
+            ModelStatus::NotReady
+        } else {
+            let mut ready = true;
+            let mut keychain_error = false;
+            for field in protocol.required_secret_fields() {
+                match crate::core::secrets::has_provider_secret(
+                    protocol.secret_provider(),
+                    &settings.cloud_asr_endpoint,
+                    field,
+                ) {
+                    Ok(configured) => ready &= configured,
+                    Err(_) => keychain_error = true,
+                }
+            }
+            if keychain_error {
+                ModelStatus::Error("Unable to read the system Keychain".into())
+            } else if ready {
+                ModelStatus::Downloaded
+            } else {
+                ModelStatus::NotReady
+            }
+        };
+    }
     Ok(catalog)
+}
+
+fn validate_cloud_asr_readiness(settings: &Settings) -> Result<(), String> {
+    if !settings.cloud_asr_upload_consent {
+        return Err(
+            "Cloud ASR is not ready: enable explicit audio upload consent in Models first".into(),
+        );
+    }
+    crate::core::asr::cloud::validate_service_settings(
+        &settings.cloud_asr_protocol,
+        &settings.cloud_asr_endpoint,
+        &settings.cloud_asr_model,
+        settings.cloud_asr_timeout_seconds,
+        settings.cloud_asr_retry_times,
+        settings.cloud_asr_request_concurrency,
+        settings.cloud_asr_request_interval_ms,
+    )
+    .map_err(|error| error.to_string())?;
+    let secret_provider =
+        crate::core::asr::cloud::secret_provider_for_protocol(&settings.cloud_asr_protocol)
+            .map_err(|error| error.to_string())?;
+    let protocol = crate::core::asr::cloud::parse_protocol(&settings.cloud_asr_protocol)
+        .map_err(|error| error.to_string())?;
+    for field in protocol.required_secret_fields() {
+        if !crate::core::secrets::has_provider_secret(
+            secret_provider,
+            &settings.cloud_asr_endpoint,
+            field,
+        )? {
+            return Err(format!(
+                "Cloud ASR is not ready: save {field} for the current protocol and endpoint in Models"
+            ));
+        }
+    }
+    Ok(())
 }
 pub(crate) fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
     let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
@@ -1681,13 +1921,6 @@ pub(crate) fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, Strin
         return Err("Model path must be an absolute path".into());
     }
     Ok(path)
-}
-
-pub(crate) fn default_local_llm_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("Tools/Local-LLM")
 }
 
 fn expand_home_path(raw: &str) -> PathBuf {
@@ -1722,9 +1955,14 @@ fn validate_new_output_path(raw: &str, label: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(format!("{label} must be an absolute path"));
     }
-    let parent = path.parent().ok_or_else(|| format!("{label} lacks a parent directory"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{label} lacks a parent directory"))?;
     if !parent.is_dir() {
-        return Err(format!("{label} parent directory does not exist: {}", parent.display()));
+        return Err(format!(
+            "{label} parent directory does not exist: {}",
+            parent.display()
+        ));
     }
     if path.exists() {
         return Err(format!(
@@ -1773,6 +2011,82 @@ fn validate_subtitle_output_format(raw: Option<String>) -> Result<Option<String>
     }
 }
 
+fn validate_output_name_template(raw: Option<String>) -> Result<Option<String>, String> {
+    let Some(value) = raw.map(|value| value.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 180 {
+        return Err("Output name template is too long (maximum 180 bytes)".into());
+    }
+    if value
+        .chars()
+        .any(|character| character.is_control() || matches!(character, '/' | '\\' | ':'))
+    {
+        return Err(
+            "Output name must not contain path separators, colons, or control characters".into(),
+        );
+    }
+    if matches!(value.as_str(), "." | "..") {
+        return Err("Output name is invalid".into());
+    }
+    Ok(Some(value))
+}
+
+fn validate_translate_only_subtitle_extension(path: &Path) -> Result<(), String> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if TRANSLATE_ONLY_SUBTITLE_EXTENSIONS.contains(&ext.as_str()) {
+        return Ok(());
+    }
+    Err(format!(
+        "Translate-only mode only supports subtitle inputs: {}",
+        TRANSLATE_ONLY_SUBTITLE_EXTENSIONS
+            .iter()
+            .map(|ext| format!(".{ext}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+fn validate_source_language_for_engine(
+    engine_id: &str,
+    raw: Option<String>,
+) -> Result<Option<String>, String> {
+    let language = raw
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if engine_id == "parakeet-mlx"
+        && language
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "auto" | "en" | "english"))
+    {
+        return Err("Parakeet v2 only supports English transcription (auto or en)".into());
+    }
+    if engine_id == "paraformer"
+        && language
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "auto" | "zh" | "chinese"))
+    {
+        return Err("Paraformer Zh only supports Chinese transcription (auto or zh)".into());
+    }
+    if engine_id == "firered-asr"
+        && language.as_deref().is_some_and(|value| {
+            !matches!(value, "auto" | "zh" | "chinese" | "en" | "english" | "yue")
+        })
+    {
+        return Err("FireRedASR2 CTC supports Chinese, English, and Chinese dialects".into());
+    }
+
+    Ok(language)
+}
+
 fn validate_translation_content_mode(
     raw: Option<String>,
 ) -> Result<TranslationContentMode, String> {
@@ -1799,6 +2113,16 @@ fn validate_translation_content_mode(
 }
 
 fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
+    if let Some(font_name) = req.font_name.as_deref() {
+        let valid = !font_name.trim().is_empty()
+            && font_name.len() <= 128
+            && font_name.chars().all(|character| {
+                !character.is_control() && !matches!(character, ',' | '\'' | '\\')
+            });
+        if !valid {
+            return Err("Subtitle font name contains unsupported characters".into());
+        }
+    }
     if let Some(font_size) = req.font_size {
         if !(10..=120).contains(&font_size) {
             return Err("Subtitle font size must be between 10 and 120".into());
@@ -1815,6 +2139,43 @@ fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
     if let Some(ref color) = req.outline_color {
         validate_ass_color("Outline color", color)?;
     }
+    if let Some(ref color) = req.background_color {
+        validate_ass_color("Background color", color)?;
+    }
+    if req
+        .outline_width
+        .is_some_and(|value| !value.is_finite() || !(0.0..=10.0).contains(&value))
+    {
+        return Err("Subtitle outline width must be between 0 and 10".into());
+    }
+    if req
+        .shadow
+        .is_some_and(|value| !value.is_finite() || !(0.0..=20.0).contains(&value))
+    {
+        return Err("Subtitle shadow must be between 0 and 20".into());
+    }
+    if req.alignment.is_some_and(|value| !(1..=9).contains(&value)) {
+        return Err("Subtitle alignment must be between 1 and 9".into());
+    }
+    if req.crf.is_some_and(|value| value > 51) {
+        return Err("Video CRF must be between 0 and 51".into());
+    }
+    if let Some(preset) = req.preset.as_deref() {
+        if !matches!(
+            preset,
+            "ultrafast"
+                | "superfast"
+                | "veryfast"
+                | "faster"
+                | "fast"
+                | "medium"
+                | "slow"
+                | "slower"
+                | "veryslow"
+        ) {
+            return Err("Unsupported video encoding preset".into());
+        }
+    }
     Ok(())
 }
 
@@ -1825,7 +2186,9 @@ fn validate_ass_color(label: &str, value: &str) -> Result<(), String> {
     if valid {
         Ok(())
     } else {
-        Err(format!("{label} must use ASS color format, e.g. &H00FFFFFF"))
+        Err(format!(
+            "{label} must use ASS color format, e.g. &H00FFFFFF"
+        ))
     }
 }
 
@@ -1879,13 +2242,16 @@ pub(crate) fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<Pat
             }
         }
 
-        Err(format!("Could not find sidecar binary in development environment: {}", name))
+        Err(format!(
+            "Could not find sidecar binary in development environment: {}",
+            name
+        ))
     }
 
     #[cfg(not(debug_assertions))]
     {
-        let exe_path =
-            std::env::current_exe().map_err(|e| format!("Failed to get current executable path: {e}"))?;
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current executable path: {e}"))?;
         let exe_dir = exe_path
             .parent()
             .ok_or_else(|| "Unable to get directory containing executable".to_string())?;
@@ -1994,87 +2360,288 @@ pub struct UpdateInfo {
     pub latest_version: String,
     pub url: String,
     pub body: Option<String>,
+    pub install_supported: bool,
 }
 
-#[tauri::command]
-pub async fn check_for_update(app: tauri::AppHandle) -> std::result::Result<Option<UpdateInfo>, String> {
+fn updater_public_key() -> Option<&'static str> {
+    option_env!("FINALSUB_UPDATER_PUBLIC_KEY").filter(|key| !key.trim().is_empty())
+}
+
+fn signed_updater(app: &AppHandle) -> std::result::Result<tauri_plugin_updater::Updater, String> {
+    let public_key = updater_public_key()
+        .ok_or_else(|| "当前构建未配置更新签名公钥，请前往发布页手动下载。".to_string())?;
+    let endpoint =
+        tauri::Url::parse(UPDATER_MANIFEST_URL).map_err(|e| format!("更新清单地址无效：{e}"))?;
+    let builder = app
+        .updater_builder()
+        .pubkey(public_key)
+        .timeout(Duration::from_secs(30))
+        .endpoints(vec![endpoint])
+        .map_err(|e| format!("更新器配置失败：{e}"))?;
+    builder
+        .build()
+        .map_err(|e| format!("更新器初始化失败：{e}"))
+}
+
+async fn check_signed_update(app: &AppHandle) -> std::result::Result<Option<UpdateInfo>, String> {
+    let update = signed_updater(app)?
+        .check()
+        .await
+        .map_err(|e| format!("签名更新检查失败：{e}"))?;
+    let Some(update) = update else {
+        return Ok(None);
+    };
+    validate_update_download_url(&update.download_url)?;
+    Ok(Some(UpdateInfo {
+        latest_version: update.version,
+        url: RELEASE_LATEST_URL.into(),
+        body: update.body,
+        install_supported: true,
+    }))
+}
+
+async fn check_manual_update(app: &AppHandle) -> std::result::Result<Option<UpdateInfo>, String> {
     let current_version = app.package_info().version.to_string();
     let client = reqwest::Client::builder()
         .user_agent("FinalSub-Updater")
+        .timeout(Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-        
+        .map_err(|e| format!("无法初始化更新检查：{e}"))?;
+
     let resp = client
-        .get("https://api.github.com/repos/GravityPoet/FinalSub/releases/latest")
+        .get(RELEASE_LATEST_API_URL)
         .send()
-        .await;
-        
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => {
-            println!("Update check network request failed: {e}");
-            return Ok(None);
-        }
-    };
-    
+        .await
+        .map_err(|e| format!("无法连接更新服务：{e}"))?;
+
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    
+
     if !resp.status().is_success() {
-        println!("Update check API returned error status: {}", resp.status());
-        return Ok(None);
+        return Err(format!("更新服务返回异常状态：{}", resp.status()));
     }
-    
+
     #[derive(serde::Deserialize)]
     struct GithubRelease {
         tag_name: String,
-        html_url: String,
         body: Option<String>,
     }
-    
-    let release: GithubRelease = match resp.json().await {
-        Ok(r) => r,
-        Err(e) => {
-            println!("Failed to parse update JSON: {e}");
-            return Ok(None);
-        }
-    };
-    
+
+    let release: GithubRelease = resp
+        .json()
+        .await
+        .map_err(|e| format!("更新信息解析失败：{e}"))?;
+
     let latest_tag = release.tag_name;
     let latest_ver = latest_tag.trim_start_matches('v').to_string();
-    
+
     if is_newer_version(&current_version, &latest_ver) {
         Ok(Some(UpdateInfo {
             latest_version: latest_ver,
-            url: release.html_url,
+            url: RELEASE_LATEST_URL.into(),
             body: release.body,
+            install_supported: false,
         }))
     } else {
         Ok(None)
     }
 }
 
-fn is_newer_version(current_ver: &str, new_ver: &str) -> bool {
-    let parse_parts = |v: &str| -> Vec<u32> {
-        v.split('.')
-            .map(|s| s.parse::<u32>().unwrap_or(0))
-            .collect()
-    };
-    
-    let curr_parts = parse_parts(current_ver);
-    let new_parts = parse_parts(new_ver);
-    
-    for i in 0..std::cmp::max(curr_parts.len(), new_parts.len()) {
-        let curr = curr_parts.get(i).cloned().unwrap_or(0);
-        let new = new_parts.get(i).cloned().unwrap_or(0);
-        if new > curr {
-            return true;
-        } else if curr > new {
-            return false;
-        }
+#[tauri::command]
+pub async fn check_for_update(
+    app: tauri::AppHandle,
+) -> std::result::Result<Option<UpdateInfo>, String> {
+    if updater_public_key().is_some() {
+        check_signed_update(&app).await
+    } else {
+        check_manual_update(&app).await
     }
-    false
+}
+
+fn is_newer_version(current_ver: &str, new_ver: &str) -> bool {
+    match (
+        semver::Version::parse(current_ver),
+        semver::Version::parse(new_ver),
+    ) {
+        (Ok(current), Ok(new)) => new > current,
+        _ => false,
+    }
+}
+
+fn validate_update_download_url(url: &tauri::Url) -> std::result::Result<(), String> {
+    let trusted = url.scheme() == "https"
+        && url.host_str() == Some("api.github.com")
+        && url.path().starts_with(UPDATER_ASSET_PATH_PREFIX)
+        && url.path()[UPDATER_ASSET_PATH_PREFIX.len()..]
+            .chars()
+            .all(|character| character.is_ascii_digit());
+    if trusted {
+        Ok(())
+    } else {
+        Err("更新清单包含非 FinalSub 官方 Release 资产地址，已拒绝下载。".into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AppUpdatePhase {
+    Downloading,
+    Verifying,
+    Installing,
+    Restarting,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AppUpdateEvent {
+    pub phase: AppUpdatePhase,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+}
+
+fn send_update_event(
+    channel: &Channel<AppUpdateEvent>,
+    phase: AppUpdatePhase,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    let _ = channel.send(AppUpdateEvent {
+        phase,
+        downloaded_bytes,
+        total_bytes,
+    });
+}
+
+fn update_blocker<'a>(
+    mut tasks: impl Iterator<Item = &'a Task>,
+    task_operation_active: bool,
+    model_operation_active: bool,
+    burn_operation_active: bool,
+) -> Option<&'static str> {
+    if task_operation_active
+        || tasks.any(|task| matches!(task.status, TaskStatus::Pending | TaskStatus::Running))
+    {
+        Some("有字幕任务正在处理或等待，请先暂停或完成任务后再安装更新。")
+    } else if model_operation_active {
+        Some("有模型正在下载或安装，请完成或取消模型操作后再安装更新。")
+    } else if burn_operation_active {
+        Some("有视频正在合成字幕，请完成或取消合成后再安装更新。")
+    } else {
+        None
+    }
+}
+
+async fn ensure_update_can_start(state: &AppState) -> std::result::Result<(), String> {
+    let tasks = state.tasks.read().await;
+    let task_controls = state.task_controls.read().await;
+    let model_controls = state.model_controls.read().await;
+    let burn_controls = state.burn_controls.read().await;
+    if let Some(reason) = update_blocker(
+        tasks.values(),
+        !task_controls.is_empty(),
+        !model_controls.is_empty(),
+        !burn_controls.is_empty(),
+    ) {
+        Err(reason.into())
+    } else {
+        Ok(())
+    }
+}
+
+struct UpdateInProgressGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for UpdateInProgressGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    expected_version: String,
+    on_progress: Channel<AppUpdateEvent>,
+) -> std::result::Result<(), String> {
+    let expected = semver::Version::parse(&expected_version)
+        .map_err(|_| "待安装版本号无效，请重新检查更新。".to_string())?;
+    if updater_public_key().is_none() {
+        return Err("当前构建不支持应用内安装，请前往发布页手动下载。".into());
+    }
+    state
+        .update_in_progress
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| "另一个更新安装正在进行中。".to_string())?;
+    let _update_guard = UpdateInProgressGuard(&state.update_in_progress);
+
+    ensure_update_can_start(&state).await?;
+
+    let update: Update = signed_updater(&app)?
+        .check()
+        .await
+        .map_err(|e| format!("签名更新检查失败：{e}"))?
+        .ok_or_else(|| "没有可安装的新版本，请重新检查更新。".to_string())?;
+    validate_update_download_url(&update.download_url)?;
+    let manifest_version = semver::Version::parse(&update.version)
+        .map_err(|_| "更新清单中的版本号无效。".to_string())?;
+    if manifest_version != expected {
+        return Err(format!(
+            "更新版本已从 {expected_version} 变为 {}，请重新确认后安装。",
+            update.version
+        ));
+    }
+
+    send_update_event(&on_progress, AppUpdatePhase::Downloading, 0, None);
+    let progress_channel = on_progress.clone();
+    let verify_channel = on_progress.clone();
+    let mut downloaded_bytes = 0_u64;
+    let mut total_bytes = None;
+    let bytes = update
+        .download(
+            move |chunk_length, content_length| {
+                downloaded_bytes = downloaded_bytes.saturating_add(chunk_length as u64);
+                total_bytes = content_length.or(total_bytes);
+                send_update_event(
+                    &progress_channel,
+                    AppUpdatePhase::Downloading,
+                    downloaded_bytes,
+                    total_bytes,
+                );
+            },
+            move || {
+                send_update_event(&verify_channel, AppUpdatePhase::Verifying, 0, None);
+            },
+        )
+        .await
+        .map_err(|e| format!("更新包下载或签名验证失败：{e}"))?;
+
+    // 下载期间用户仍可操作应用。安装前持有这些读锁并再次检查，确保不会在
+    // 新任务、模型安装或视频合成启动的竞态窗口内替换应用并重启。
+    let tasks = state.tasks.read().await;
+    let task_controls = state.task_controls.read().await;
+    let model_controls = state.model_controls.read().await;
+    let burn_controls = state.burn_controls.read().await;
+    if let Some(reason) = update_blocker(
+        tasks.values(),
+        !task_controls.is_empty(),
+        !model_controls.is_empty(),
+        !burn_controls.is_empty(),
+    ) {
+        return Err(reason.into());
+    }
+
+    send_update_event(&on_progress, AppUpdatePhase::Installing, 0, None);
+    update
+        .install(&bytes)
+        .map_err(|e| format!("更新包安装失败：{e}"))?;
+    drop(burn_controls);
+    drop(model_controls);
+    drop(task_controls);
+    drop(tasks);
+
+    send_update_event(&on_progress, AppUpdatePhase::Restarting, 0, None);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    app.restart()
 }
 
 #[tauri::command]
@@ -2098,22 +2665,25 @@ mod tests {
 
     #[test]
     #[ignore = "writes to the user's OS keyring; run manually to validate native keyring backend"]
-    fn keyring_native_backend_roundtrips_provider_secret() {
+    fn keyring_native_backend_manages_provider_secret() {
         let provider_id = format!("codex-keyring-roundtrip-{}", uuid::Uuid::new_v4());
+        let endpoint = "https://api.example.test/v1".to_string();
         let field = "apiKey".to_string();
         let value = format!("secret-{}", uuid::Uuid::new_v4());
 
-        let _ = delete_provider_secret(provider_id.clone(), field.clone());
-        set_provider_secret(provider_id.clone(), field.clone(), value.clone()).unwrap();
+        let _ = delete_provider_secret(provider_id.clone(), endpoint.clone(), field.clone());
+        set_provider_secret(
+            provider_id.clone(),
+            endpoint.clone(),
+            field.clone(),
+            value.clone(),
+        )
+        .unwrap();
 
-        assert!(has_provider_secret(provider_id.clone(), field.clone()).unwrap());
-        assert_eq!(
-            get_provider_secret(provider_id.clone(), field.clone()).unwrap(),
-            Some(value)
-        );
+        assert!(has_provider_secret(provider_id.clone(), endpoint.clone(), field.clone()).unwrap());
 
-        delete_provider_secret(provider_id.clone(), field.clone()).unwrap();
-        assert!(!has_provider_secret(provider_id, field).unwrap());
+        delete_provider_secret(provider_id.clone(), endpoint.clone(), field.clone()).unwrap();
+        assert!(!has_provider_secret(provider_id, endpoint, field).unwrap());
     }
 
     #[test]
@@ -2196,6 +2766,61 @@ mod tests {
     }
 
     #[test]
+    fn validate_translate_only_subtitle_extension_matches_picker_formats() {
+        for ext in ["srt", "vtt", "ass", "lrc"] {
+            let path = PathBuf::from(format!("/tmp/subtitle.{ext}"));
+            assert!(
+                validate_translate_only_subtitle_extension(&path).is_ok(),
+                "{ext} should be accepted for translate-only tasks"
+            );
+        }
+
+        let path = PathBuf::from("/tmp/subtitle.txt");
+        assert!(validate_translate_only_subtitle_extension(&path).is_err());
+    }
+
+    #[test]
+    fn validate_parakeet_source_language_rejects_non_english_before_task_creation() {
+        assert_eq!(
+            validate_source_language_for_engine("parakeet-mlx", Some(" en ".into())).unwrap(),
+            Some("en".into())
+        );
+        assert!(validate_source_language_for_engine("parakeet-mlx", Some("zh".into())).is_err());
+        assert_eq!(
+            validate_source_language_for_engine("whisper-cpp", Some("zh".into())).unwrap(),
+            Some("zh".into())
+        );
+    }
+
+    #[test]
+    fn validate_native_sherpa_engine_language_boundaries() {
+        assert!(validate_source_language_for_engine("paraformer", Some("ja".into())).is_err());
+        assert_eq!(
+            validate_source_language_for_engine("paraformer", Some(" zh ".into())).unwrap(),
+            Some("zh".into())
+        );
+        assert!(validate_source_language_for_engine("firered-asr", Some("ja".into())).is_err());
+        assert_eq!(
+            validate_source_language_for_engine("firered-asr", Some("yue".into())).unwrap(),
+            Some("yue".into())
+        );
+        assert_eq!(
+            validate_source_language_for_engine("qwen3-asr", Some("ja".into())).unwrap(),
+            Some("ja".into())
+        );
+    }
+
+    #[test]
+    fn cloud_asr_readiness_requires_explicit_upload_consent() {
+        let settings = Settings {
+            cloud_asr_upload_consent: false,
+            ..Settings::default()
+        };
+        let error = validate_cloud_asr_readiness(&settings).unwrap_err();
+        assert!(error.contains("explicit audio upload consent"));
+    }
+
+    #[test]
     fn validate_translation_content_mode_accepts_supported_values() {
         assert_eq!(
             validate_translation_content_mode(None).unwrap(),
@@ -2274,6 +2899,75 @@ mod tests {
     }
 
     #[test]
+    fn updater_version_comparison_uses_semver_precedence() {
+        assert!(is_newer_version("1.0.9", "1.0.10"));
+        assert!(is_newer_version("1.0.10-beta.1", "1.0.10"));
+        assert!(!is_newer_version("1.0.10", "1.0.10-beta.1"));
+        assert!(!is_newer_version("1.0.10", "1.0.10"));
+        assert!(!is_newer_version("1.0.10", "not-a-version"));
+    }
+
+    #[test]
+    fn updater_accepts_only_finalsub_github_release_assets() {
+        let valid = tauri::Url::parse(
+            "https://api.github.com/repos/GravityPoet/FinalSub/releases/assets/123456",
+        )
+        .unwrap();
+        assert!(validate_update_download_url(&valid).is_ok());
+
+        for invalid in [
+            "http://api.github.com/repos/GravityPoet/FinalSub/releases/assets/123456",
+            "https://example.com/repos/GravityPoet/FinalSub/releases/assets/123456",
+            "https://api.github.com/repos/other/FinalSub/releases/assets/123456",
+            "https://api.github.com/repos/GravityPoet/FinalSub/releases/assets/not-a-number",
+            "https://api.github.com/repos/GravityPoet/FinalSub/releases/assets/123456/extra",
+        ] {
+            let url = tauri::Url::parse(invalid).unwrap();
+            assert!(validate_update_download_url(&url).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn updater_blocks_only_work_that_cannot_survive_restart() {
+        let mut task = task_queue::create_task(CreateTaskParams {
+            task_type: TaskType::GenerateOnly,
+            media_path: "/tmp/video.mp4".into(),
+            media_name: "video.mp4".into(),
+            engine_id: "whisper-cpp".into(),
+            model_id: "small".into(),
+            source_language: Some("auto".into()),
+            target_language: None,
+            translation_content_mode: TranslationContentMode::TargetOnly,
+            output_format: Some("srt".into()),
+            output_name: None,
+            strip_chinese_punctuation: false,
+        });
+
+        task.status = TaskStatus::Paused;
+        assert_eq!(
+            update_blocker([&task].into_iter(), false, false, false),
+            None
+        );
+
+        assert!(update_blocker([&task].into_iter(), true, false, false)
+            .unwrap()
+            .contains("字幕任务"));
+
+        task.status = TaskStatus::Running;
+        assert!(update_blocker([&task].into_iter(), false, false, false)
+            .unwrap()
+            .contains("字幕任务"));
+
+        task.status = TaskStatus::Done;
+        assert!(update_blocker([&task].into_iter(), false, true, false)
+            .unwrap()
+            .contains("模型"));
+        assert!(update_blocker([&task].into_iter(), false, false, true)
+            .unwrap()
+            .contains("合成"));
+    }
+
+    #[test]
     fn prepare_task_for_retry_preserves_checkpoint_progress() {
         let mut task = task_queue::create_task(CreateTaskParams {
             task_type: TaskType::GenerateAndTranslate,
@@ -2285,6 +2979,8 @@ mod tests {
             target_language: Some("zh".into()),
             translation_content_mode: TranslationContentMode::TargetOnly,
             output_format: Some("srt".into()),
+            output_name: None,
+            strip_chinese_punctuation: false,
         });
         task.status = TaskStatus::Error;
         task.progress = 0.87;
