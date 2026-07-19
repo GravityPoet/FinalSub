@@ -1031,6 +1031,13 @@ const zh = {
   "dubbing.acceptSpeed": "接受变速",
   "dubbing.regenerate": "重新生成",
   "dubbing.generate": "生成",
+  "dubbing.editCue": "编辑本行",
+  "dubbing.editCueText": "本行文本",
+  "dubbing.editCueVoice": "本行音色（可选覆盖）",
+  "dubbing.useGlobalVoice": "使用全局音色（{voice}）",
+  "dubbing.saveCueEdit": "保存并标记待合成",
+  "dubbing.cueEdited": "第 {index} 行已更新，需重新合成",
+  "dubbing.voiceOverride": "行级音色",
 };
 
 const en = {
@@ -2063,6 +2070,13 @@ const en = {
   "dubbing.acceptSpeed": "Accept speed",
   "dubbing.regenerate": "Regenerate",
   "dubbing.generate": "Generate",
+  "dubbing.editCue": "Edit line",
+  "dubbing.editCueText": "Line text",
+  "dubbing.editCueVoice": "Line voice (optional override)",
+  "dubbing.useGlobalVoice": "Use global voice ({voice})",
+  "dubbing.saveCueEdit": "Save · mark pending",
+  "dubbing.cueEdited": "Line {index} updated; synthesize it again",
+  "dubbing.voiceOverride": "Line voice",
 };
 
 const ja: Record<keyof typeof zh, string> = {
@@ -3070,6 +3084,13 @@ const ja: Record<keyof typeof zh, string> = {
   "dubbing.acceptSpeed": "速度を承認",
   "dubbing.regenerate": "再生成",
   "dubbing.generate": "生成",
+  "dubbing.editCue": "行を編集",
+  "dubbing.editCueText": "行テキスト",
+  "dubbing.editCueVoice": "行の音声（任意の上書き）",
+  "dubbing.useGlobalVoice": "全体の音声を使用（{voice}）",
+  "dubbing.saveCueEdit": "保存して未処理に戻す",
+  "dubbing.cueEdited": "{index} 行目を更新しました。再合成が必要です",
+  "dubbing.voiceOverride": "行の音声",
 };
 
 export type Locale = "zh" | "en" | "ja";

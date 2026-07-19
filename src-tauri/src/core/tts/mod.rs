@@ -20,8 +20,8 @@ pub use providers::{
 
 pub use dubbing::{
     accept_dubbing_overflow, complete_dubbing_cue, create_dubbing_session, export_dubbing_audio,
-    fail_dubbing_cue, get_dubbing_session, prepare_dubbing_cue, DubbingCue, DubbingCueStatus,
-    DubbingEngineSelection, DubbingRunConfig, DubbingSession, DubbingSynthesizeCueRequest,
-    PreparedDubbingCue,
+    fail_dubbing_cue, get_dubbing_session, prepare_dubbing_cue, update_dubbing_cue, DubbingCue,
+    DubbingCueStatus, DubbingEngineSelection, DubbingRunConfig, DubbingSession,
+    DubbingSynthesizeCueRequest, PreparedDubbingCue, UpdateDubbingCueRequest,
 };
 pub(crate) use models::resolve_ready_model;

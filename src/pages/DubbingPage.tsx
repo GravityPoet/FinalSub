@@ -12,6 +12,7 @@ import {
   HardDrive,
   LoaderCircle,
   Pause,
+  Pencil,
   Play,
   RefreshCw,
   Save,
@@ -19,6 +20,7 @@ import {
   Video,
   Volume2,
   WandSparkles,
+  X,
 } from "lucide-react";
 
 import { Badge } from "../components/ui/Badge";
@@ -40,11 +42,13 @@ import {
   revealItemInDir,
   saveDialog,
   synthesizeDubbingCue,
+  updateDubbingCue,
   type DubbingCue,
   type DubbingEngineSelection,
   type DubbingSession,
   type TtsModelInfo,
   type TtsProviderProfile,
+  type TtsVoice,
 } from "../lib/tauri";
 
 const LAST_SESSION_KEY = "finalsub:last-dubbing-session";
@@ -219,6 +223,8 @@ export default function DubbingPage() {
       throw new Error(t("dubbing.cloneReferenceRequired"));
     }
     const generationId = crypto.randomUUID();
+    const cue = session.cues.find((item) => item.index === cueIndex);
+    const effectiveVoice = cue?.voice_id?.trim() || voice;
     setActiveGenerationId(generationId);
     setActiveCueIndex(cueIndex);
     try {
@@ -226,7 +232,7 @@ export default function DubbingPage() {
         session_id: session.id,
         cue_index: cueIndex,
         engine,
-        voice,
+        voice: effectiveVoice,
         global_speed: globalSpeed,
         reference_audio_path: referenceAudio || undefined,
         reference_text: referenceText.trim() || undefined,
@@ -237,6 +243,23 @@ export default function DubbingPage() {
     } finally {
       setActiveGenerationId(null);
       setActiveCueIndex(null);
+    }
+  };
+
+  const editCue = async (cueIndex: number, text: string, voiceId: string) => {
+    if (!session) return;
+    try {
+      const updated = await updateDubbingCue({
+        session_id: session.id,
+        cue_index: cueIndex,
+        text,
+        voice_id: voiceId,
+      });
+      setSession(updated);
+      setMessage({ type: "ok", text: t("dubbing.cueEdited", { index: cueIndex + 1 }) });
+    } catch (error) {
+      setMessage({ type: "err", text: String(error) });
+      throw error;
     }
   };
 
@@ -535,6 +558,9 @@ export default function DubbingPage() {
                 disabled={batchRunning || exporting || activeGenerationId !== null}
                 onGenerate={() => generateSingle(cue.index)}
                 onAccept={() => acceptOverflow(cue.index)}
+                onUpdate={editCue}
+                globalVoice={voice}
+                voiceOptions={selectedLocalModel && !selectedLocalModel.clone_only ? selectedLocalModel.voices : []}
                 t={t}
               />
             ))}
@@ -558,6 +584,9 @@ function CueCard({
   disabled,
   onGenerate,
   onAccept,
+  onUpdate,
+  globalVoice,
+  voiceOptions,
   t,
 }: {
   cue: DubbingCue;
@@ -565,8 +594,34 @@ function CueCard({
   disabled: boolean;
   onGenerate: () => void;
   onAccept: () => void;
+  onUpdate: (cueIndex: number, text: string, voiceId: string) => Promise<void>;
+  globalVoice: string;
+  voiceOptions: TtsVoice[];
   t: ReturnType<typeof useI18n>["t"];
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draftText, setDraftText] = useState(cue.text);
+  const [draftVoice, setDraftVoice] = useState(cue.voice_id ?? "");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!editing) {
+      setDraftText(cue.text);
+      setDraftVoice(cue.voice_id ?? "");
+    }
+  }, [cue.text, cue.voice_id, editing]);
+
+  const saveEdit = async () => {
+    setSaving(true);
+    try {
+      await onUpdate(cue.index, draftText, draftVoice);
+      setEditing(false);
+    } catch {
+      // The parent has already surfaced the actionable error message.
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const status = {
     pending: { label: t("dubbing.statusPending"), className: "text-text-tertiary", icon: Clock3 },
     synthesizing: { label: t("dubbing.statusSynthesizing"), className: "text-brand", icon: LoaderCircle },
@@ -593,12 +648,17 @@ function CueCard({
             {cue.synthesized_ms !== null && <span>{t("dubbing.audioDuration", { duration: (cue.synthesized_ms / 1000).toFixed(2) })}</span>}
             {cue.ratio !== null && <span>{t("dubbing.ratio", { ratio: cue.ratio.toFixed(2) })}</span>}
             {cue.overlap && <Badge variant="warning">{t("dubbing.overlap")}</Badge>}
+            {cue.voice_id && <Badge variant="info">{t("dubbing.voiceOverride")}: {cue.voice_id}</Badge>}
           </div>
           {cue.error && <p className="mt-2 text-xs leading-5 text-danger">{cue.error}</p>}
         </div>
         <div className="flex flex-col items-stretch gap-2 lg:items-end">
           {audioUrl && <audio controls preload="none" src={audioUrl} className="h-9 w-full max-w-[17rem]" />}
           <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setEditing((current) => !current)} disabled={disabled || saving}>
+              {editing ? <X size={14} /> : <Pencil size={14} />}
+              {editing ? t("common.cancel") : t("dubbing.editCue")}
+            </Button>
             {cue.status === "overlong" && (
               <Button type="button" variant="secondary" size="sm" onClick={onAccept} disabled={disabled}>
                 <Gauge size={14} /> {t("dubbing.acceptSpeed")}
@@ -611,6 +671,31 @@ function CueCard({
           </div>
         </div>
       </div>
+      {editing && (
+        <div className="mt-4 grid gap-3 rounded-2xl border border-brand/20 bg-brand/5 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,0.45fr)]">
+          <label className="space-y-1.5 text-xs font-semibold text-text-secondary">
+            <span>{t("dubbing.editCueText")}</span>
+            <Textarea value={draftText} onChange={(event) => setDraftText(event.target.value)} rows={2} />
+          </label>
+          <label className="space-y-1.5 text-xs font-semibold text-text-secondary">
+            <span>{t("dubbing.editCueVoice")}</span>
+            {voiceOptions.length > 0 ? (
+              <Select value={draftVoice} onChange={(event) => setDraftVoice(event.target.value)}>
+                <option value="">{t("dubbing.useGlobalVoice", { voice: globalVoice || "—" })}</option>
+                {voiceOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </Select>
+            ) : (
+              <Input value={draftVoice} onChange={(event) => setDraftVoice(event.target.value)} placeholder={globalVoice || t("dubbing.voice")} />
+            )}
+          </label>
+          <div className="flex flex-wrap justify-end gap-2 sm:col-span-2">
+            <Button type="button" variant="primary" size="sm" onClick={saveEdit} disabled={disabled || saving || !draftText.trim()}>
+              {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}
+              {t("dubbing.saveCueEdit")}
+            </Button>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
