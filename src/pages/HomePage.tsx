@@ -51,6 +51,7 @@ import {
 import { Button } from "../components/ui/Button";
 import { Input, Select } from "../components/ui/Input";
 import { Card } from "../components/ui/Card";
+import { Badge } from "../components/ui/Badge";
 
 const mediaExtensions = [
   "mp4", "mkv", "mov", "avi", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts",
@@ -733,98 +734,170 @@ export default function HomePage() {
       <div className="grid items-start gap-5 min-[1120px]:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-5">
           <Card className="p-6 sm:p-7">
-            <div className="mb-5">
-              <span className="step-label">01 · {t("home.sourceStep")}</span>
-              <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">
-                {taskType === "translate-only" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")}
-              </h3>
-              <p className="mt-1.5 text-sm leading-6 text-text-secondary">
-                {taskType === "translate-only" ? t("home.sourceHintSubtitle") : t("home.sourceHintMedia")}
-              </p>
-            </div>
-
-            <div className={`file-stage rounded-[1.3rem] p-4 transition sm:p-5 ${dragActive ? "ring-2 ring-brand/70 bg-brand/10" : ""}`}>
-              <div className="flex flex-wrap items-center gap-4">
-                <span className="file-icon">
-                  {taskType === "translate-only" ? <FileText size={24} /> : <FileVideo size={24} />}
-                </span>
-                <div className="min-w-[12rem] flex-[1_1_14rem]">
-                  <p className={`${selectedPath ? "truncate" : "leading-6"} font-semibold text-text-primary`}>
-                    {selectedPaths.length > 1
-                      ? t("home.batchSelected", { count: selectedPaths.length })
-                      : (selectedPath ? fileNameFromPath(selectedPath) : `${t("home.noFileSelected")} · ${selectedFileKind}`)}
-                  </p>
-                  <p className={`mt-1 font-mono text-xs leading-5 text-text-tertiary ${selectedPath ? "truncate" : ""}`} title={selectedPath || undefined}>
-                    {selectedPath || t("home.sourcePathHint")}
+            <div className="grid gap-5 min-[1440px]:grid-cols-[minmax(0,1fr)_minmax(17rem,0.54fr)]">
+              <div className="min-w-0">
+                <div className="mb-5">
+                  <span className="step-label">01 · {t("home.sourceStep")}</span>
+                  <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">
+                    {taskType === "translate-only" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")}
+                  </h3>
+                  <p className="mt-1.5 text-sm leading-6 text-text-secondary">
+                    {taskType === "translate-only" ? t("home.sourceHintSubtitle") : t("home.sourceHintMedia")}
                   </p>
                 </div>
-                <div className="ml-auto flex flex-wrap justify-end gap-2">
-                  <Button type="button" onClick={handleSelectMedia} variant="secondary" size="sm">
-                    <FolderOpen size={14} />
-                    {t("home.selectFile")}
-                    <ChevronRight size={14} className="opacity-55" />
-                  </Button>
-                  <Button type="button" onClick={handleSelectFolder} variant="secondary" size="sm">
-                    <FolderTree size={14} />
-                    {t("home.selectFolder")}
-                  </Button>
+
+                <div className={`file-stage rounded-[1.3rem] p-4 transition sm:p-5 ${dragActive ? "ring-2 ring-brand/70 bg-brand/10" : ""}`}>
+                  <div className="flex flex-wrap items-center gap-4">
+                    <span className="file-icon">
+                      {taskType === "translate-only" ? <FileText size={24} /> : <FileVideo size={24} />}
+                    </span>
+                    <div className="min-w-[12rem] flex-[1_1_14rem]">
+                      <p className={`${selectedPath ? "truncate" : "leading-6"} font-semibold text-text-primary`}>
+                        {selectedPaths.length > 1
+                          ? t("home.batchSelected", { count: selectedPaths.length })
+                          : (selectedPath ? fileNameFromPath(selectedPath) : `${t("home.noFileSelected")} · ${selectedFileKind}`)}
+                      </p>
+                      <p className={`mt-1 font-mono text-xs leading-5 text-text-tertiary ${selectedPath ? "truncate" : ""}`} title={selectedPath || undefined}>
+                        {selectedPath || t("home.sourcePathHint")}
+                      </p>
+                    </div>
+                    <div className="ml-auto flex flex-wrap justify-end gap-2">
+                      <Button type="button" onClick={handleSelectMedia} variant="secondary" size="sm">
+                        <FolderOpen size={14} />
+                        {t("home.selectFile")}
+                        <ChevronRight size={14} className="opacity-55" />
+                      </Button>
+                      <Button type="button" onClick={handleSelectFolder} variant="secondary" size="sm">
+                        <FolderTree size={14} />
+                        {t("home.selectFolder")}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {selectedPaths.length > 1 && (
+                    <div className="mt-4 border-t border-border-subtle pt-4">
+                      <div className="flex flex-wrap gap-2">
+                        {selectedPaths.slice(0, 6).map((path) => (
+                          <span
+                            key={path}
+                            title={path}
+                            className="max-w-full truncate rounded-lg border border-border-subtle bg-surface-overlay px-2.5 py-1.5 font-mono text-[11px] text-text-secondary"
+                          >
+                            {fileNameFromPath(path)}
+                          </span>
+                        ))}
+                        {selectedPaths.length > 6 && (
+                          <span className="rounded-lg bg-brand/10 px-2.5 py-1.5 text-[11px] font-semibold text-brand">
+                            +{selectedPaths.length - 6}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPaths([])}
+                        className="mt-3 text-xs font-semibold text-text-tertiary underline-offset-4 hover:text-text-primary hover:underline"
+                      >
+                        {t("home.clearSelection")}
+                      </button>
+                    </div>
+                  )}
+
+                  {!selectedPath && (
+                    <p className="mt-4 border-t border-dashed border-border-subtle pt-4 text-center text-xs text-text-tertiary">
+                      {dragActive ? t("home.dropNow") : t("home.dragPasteHint")}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {selectedPaths.length > 1 && (
-                <div className="mt-4 border-t border-border-subtle pt-4">
-                  <div className="flex flex-wrap gap-2">
-                    {selectedPaths.slice(0, 6).map((path) => (
-                      <span
-                        key={path}
-                        title={path}
-                        className="max-w-full truncate rounded-lg border border-border-subtle bg-surface-overlay px-2.5 py-1.5 font-mono text-[11px] text-text-secondary"
+              <section className="core-picker rounded-[1.25rem] border border-brand/15 bg-brand/5 p-4 sm:p-5" aria-labelledby="task-core-title">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand">
+                    {taskNeedsAsr ? <Cpu size={17} /> : <Languages size={17} />}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand">{t("home.coreStep")}</p>
+                    <h3 id="task-core-title" className="mt-1 font-display text-lg font-bold tracking-[-0.02em] text-text-primary">{t("home.coreStep")}</h3>
+                    <p className="mt-1 text-xs leading-5 text-text-secondary">
+                      {taskNeedsAsr ? t("home.coreHint") : t("home.coreNotRequired")}
+                    </p>
+                  </div>
+                </div>
+
+                {taskNeedsAsr ? (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label htmlFor="task-asr-engine" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.asrEngine")}</label>
+                      <Select
+                        id="task-asr-engine"
+                        value={engineId}
+                        onChange={(event) => {
+                          setEngineId(event.target.value);
+                          const first = models.find((model) => model.engine_id === event.target.value);
+                          if (first) setModelId(first.id);
+                        }}
                       >
-                        {fileNameFromPath(path)}
-                      </span>
-                    ))}
-                    {selectedPaths.length > 6 && (
-                      <span className="rounded-lg bg-brand/10 px-2.5 py-1.5 text-[11px] font-semibold text-brand">
-                        +{selectedPaths.length - 6}
-                      </span>
+                        {engines.map((engine) => (
+                          <option key={engine} value={engine}>{engineLabels[engine] ?? engine}</option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div>
+                      <label htmlFor="task-asr-model" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.asrModel")}</label>
+                      <Select id="task-asr-model" value={modelId} onChange={(event) => setModelId(event.target.value)}>
+                        {engineModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                      </Select>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <Badge variant={engineId === "cloud-asr" ? "info" : "success"}>
+                        {engineId === "cloud-asr" ? <Cloud size={12} /> : <Cpu size={12} />}
+                        {engineId === "cloud-asr" ? t("home.coreCloud") : t("home.coreLocal")}
+                      </Badge>
+                      {activeModel && (
+                        <span className={`inline-flex items-center gap-1 text-xs font-semibold ${activeModel.status === "downloaded" || engineId === "custom-command" ? "text-success" : "text-warning"}`}>
+                          {activeModel.status === "downloaded" || engineId === "custom-command" ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                          {activeModel.status === "downloaded" || engineId === "custom-command" ? t("home.coreReady") : t("home.coreNeedsSetup")}
+                        </span>
+                      )}
+                    </div>
+                    {activeModel && activeModel.status !== "downloaded" && engineId !== "custom-command" && (
+                      <button
+                        type="button"
+                        onClick={() => navigate("/models")}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-brand transition hover:text-brand-hover"
+                      >
+                        {t("home.openModelManage")}
+                        <ChevronRight size={13} />
+                      </button>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPaths([])}
-                    className="mt-3 text-xs font-semibold text-text-tertiary underline-offset-4 hover:text-text-primary hover:underline"
-                  >
-                    {t("home.clearSelection")}
-                  </button>
-                </div>
-              )}
-
-              {!selectedPath && (
-                <p className="mt-4 border-t border-dashed border-border-subtle pt-4 text-center text-xs text-text-tertiary">
-                  {dragActive ? t("home.dropNow") : t("home.dragPasteHint")}
-                </p>
-              )}
-
-              {mediaMetadata && selectedPaths.length === 1 && (
-                <div className="mt-5 border-t border-border-subtle pt-4">
-                  <p className="mb-3 text-xs font-bold uppercase tracking-[0.12em] text-text-tertiary">{t("home.mediaInfo")}</p>
-                  <div className="grid gap-x-6 gap-y-2 text-xs text-text-secondary sm:grid-cols-2 lg:grid-cols-3">
-                    <div>{t("home.miDuration")}: <span className="font-medium text-text-primary">{mediaMetadata.duration_string}</span></div>
-                    {mediaMetadata.width > 0 && <div>{t("home.miResolution")}: <span className="font-medium text-text-primary">{mediaMetadata.width}×{mediaMetadata.height}</span></div>}
-                    {mediaMetadata.fps > 0 && <div>{t("home.miFps")}: <span className="font-medium text-text-primary">{mediaMetadata.fps.toFixed(2)} fps</span></div>}
-                    {mediaMetadata.codec !== "unknown" && <div>{t("home.miVideoCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.codec}</span></div>}
-                    {mediaMetadata.audio_codec && <div>{t("home.miAudioCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_codec}</span></div>}
-                    {mediaMetadata.audio_sample_rate && (
-                      <div className={mediaMetadata.audio_sample_rate !== 16000 ? "font-semibold text-warning" : ""}>
-                        {t("home.miSampleRate")}: {mediaMetadata.audio_sample_rate} Hz
-                      </div>
-                    )}
-                    {mediaMetadata.audio_channels && <div>{t("home.miChannels")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_channels} ch</span></div>}
-                    <div>{t("home.miAudioTracks")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_tracks}</span></div>
+                ) : (
+                  <div className="mt-4 rounded-xl border border-border-subtle bg-surface-overlay/60 px-3 py-2.5 text-xs leading-5 text-text-secondary">
+                    {t("home.coreNotRequired")}
                   </div>
-                </div>
-              )}
+                )}
+              </section>
             </div>
+
+            {mediaMetadata && selectedPaths.length === 1 && (
+              <div className="mt-5 border-t border-border-subtle pt-4">
+                <p className="mb-3 text-xs font-bold uppercase tracking-[0.12em] text-text-tertiary">{t("home.mediaInfo")}</p>
+                <div className="grid gap-x-6 gap-y-2 text-xs text-text-secondary sm:grid-cols-2 lg:grid-cols-3">
+                  <div>{t("home.miDuration")}: <span className="font-medium text-text-primary">{mediaMetadata.duration_string}</span></div>
+                  {mediaMetadata.width > 0 && <div>{t("home.miResolution")}: <span className="font-medium text-text-primary">{mediaMetadata.width}×{mediaMetadata.height}</span></div>}
+                  {mediaMetadata.fps > 0 && <div>{t("home.miFps")}: <span className="font-medium text-text-primary">{mediaMetadata.fps.toFixed(2)} fps</span></div>}
+                  {mediaMetadata.codec !== "unknown" && <div>{t("home.miVideoCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.codec}</span></div>}
+                  {mediaMetadata.audio_codec && <div>{t("home.miAudioCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_codec}</span></div>}
+                  {mediaMetadata.audio_sample_rate && (
+                    <div className={mediaMetadata.audio_sample_rate !== 16000 ? "font-semibold text-warning" : ""}>
+                      {t("home.miSampleRate")}: {mediaMetadata.audio_sample_rate} Hz
+                    </div>
+                  )}
+                  {mediaMetadata.audio_channels && <div>{t("home.miChannels")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_channels} ch</span></div>}
+                  <div>{t("home.miAudioTracks")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_tracks}</span></div>
+                </div>
+              </div>
+            )}
 
             {error && (
               <div className="mt-4 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm text-danger" role="alert">
@@ -896,43 +969,21 @@ export default function HomePage() {
               </fieldset>
 
               {taskNeedsAsr && (
-                <div className="grid grid-cols-1 gap-4 border-t border-border-subtle pt-6 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="task-asr-engine" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.asrEngine")}</label>
-                    <Select
-                      id="task-asr-engine"
-                      value={engineId}
-                      onChange={(event) => {
-                        setEngineId(event.target.value);
-                        const first = models.find((model) => model.engine_id === event.target.value);
-                        if (first) setModelId(first.id);
-                      }}
-                    >
-                      {engines.map((engine) => (
-                        <option key={engine} value={engine}>{engineLabels[engine] ?? engine}</option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div>
-                    <label htmlFor="task-asr-model" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.asrModel")}</label>
-                    <Select id="task-asr-model" value={modelId} onChange={(event) => setModelId(event.target.value)}>
-                      {engineModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-                    </Select>
-                  </div>
+                <div className="border-t border-border-subtle pt-5">
                   {engineId === "parakeet-mlx" && (
-                    <div className="sm:col-span-2 flex items-start gap-2 rounded-xl border border-info/15 bg-info/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
+                    <div className="flex items-start gap-2 rounded-xl border border-info/15 bg-info/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
                       <Cpu size={14} className="mt-0.5 shrink-0 text-info" />
                       <span>{t("home.parakeetNotice")}</span>
                     </div>
                   )}
                   {["paraformer", "qwen3-asr", "firered-asr"].includes(engineId) && (
-                    <div className="sm:col-span-2 flex items-start gap-2 rounded-xl border border-info/15 bg-info/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
+                    <div className="flex items-start gap-2 rounded-xl border border-info/15 bg-info/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
                       <Cpu size={14} className="mt-0.5 shrink-0 text-info" />
                       <span>{t("home.sherpaNativeNotice")}</span>
                     </div>
                   )}
                   {engineId === "cloud-asr" && (
-                    <div className="sm:col-span-2 flex items-start gap-2 rounded-xl border border-brand/15 bg-brand/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
+                    <div className="flex items-start gap-2 rounded-xl border border-brand/15 bg-brand/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
                       <Cloud size={14} className="mt-0.5 shrink-0 text-brand" />
                       <span>{t("home.cloudAsrNotice")}</span>
                     </div>
