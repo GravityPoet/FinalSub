@@ -58,6 +58,8 @@ const mediaExtensions = [
   "mp3", "wav", "m4a", "flac", "aac", "ogg", "opus", "wma",
 ];
 
+const subtitleExtensions = ["srt", "vtt", "ass", "lrc"];
+
 const sourceLanguageOptions = [
   { value: "auto", labelKey: "language.auto" },
   { value: "zh", labelKey: "language.zh" },
@@ -129,13 +131,28 @@ const translationContentModes: Array<{
   },
 ];
 
-function isMediaTaskType(value: string): boolean {
-  return value !== "translate-only";
-}
-
 function fileNameFromPath(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+function fileExtensionFromPath(path: string): string {
+  const fileName = fileNameFromPath(path);
+  const dotIndex = fileName.lastIndexOf(".");
+  return dotIndex >= 0 ? fileName.slice(dotIndex + 1).toLowerCase() : "";
+}
+
+function isSubtitleInputPath(path: string): boolean {
+  return subtitleExtensions.includes(fileExtensionFromPath(path));
+}
+
+function inputMatchesTaskType(path: string, taskType: string): boolean {
+  if (taskType === "translate-only") {
+    return isSubtitleInputPath(path);
+  }
+  // The Rust media validator accepts any existing file; only a subtitle input
+  // is definitely incompatible with an audio/video workflow here.
+  return !isSubtitleInputPath(path);
 }
 
 export default function HomePage() {
@@ -304,11 +321,18 @@ export default function HomePage() {
     ({ value }) => value === sourceLanguage,
   );
   const activeModel = models.find((m) => m.id === modelId && m.engine_id === engineId);
+  const inputTypeMismatch = selectedPaths.length > 0
+    && selectedPaths.some((path) => !inputMatchesTaskType(path, taskType));
+  const inputTypeMismatchHint = inputTypeMismatch
+    ? (taskType === "translate-only" ? t("home.inputMismatchSubtitle") : t("home.inputMismatchMedia"))
+    : "";
+  const modelReady = !taskNeedsAsr || Boolean(
+    activeModel && (engineId === "custom-command" || activeModel.status === "downloaded")
+  );
   const canStartTask = bootstrapState === "ready"
     && (!taskNeedsAsr || sourceLanguageSupported)
-    && (!taskNeedsAsr || Boolean(
-      activeModel && (engineId === "custom-command" || activeModel.status === "downloaded")
-    ));
+    && modelReady
+    && !inputTypeMismatch;
 
   useEffect(() => {
     if (!sourceLanguageSupported) {
@@ -323,7 +347,7 @@ export default function HomePage() {
   const missingFileHint = !selectedPath
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
     : "";
-  const modelPrerequisiteHint = selectedPath && !canStartTask ? t("home.prereqModel") : "";
+  const modelPrerequisiteHint = selectedPath && !modelReady ? t("home.prereqModel") : "";
 
   const handleSelectMedia = async () => {
     setError("");
@@ -364,6 +388,10 @@ export default function HomePage() {
       setError(missingFileHint || (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia")));
       return;
     }
+    if (inputTypeMismatch) {
+      setError(inputTypeMismatchHint);
+      return;
+    }
     if (!canStartTask) {
       setError(modelPrerequisiteHint || t("home.prereqModel"));
       return;
@@ -402,6 +430,10 @@ export default function HomePage() {
   const handlePreview = async () => {
     if (taskType === "translate-only") {
       setError(t("home.previewOnlyMedia"));
+      return;
+    }
+    if (inputTypeMismatch) {
+      setError(inputTypeMismatchHint);
       return;
     }
     if (!selectedPath) {
@@ -521,9 +553,8 @@ export default function HomePage() {
     const nextTaskType = ["generate-only", "generate-and-translate", "translate-only"].includes(
       snapshot.task_type,
     ) ? snapshot.task_type : "generate-only";
-    if (isMediaTaskType(taskType) !== isMediaTaskType(nextTaskType)) {
-      setSelectedPaths([]);
-    }
+    // A recipe changes processing parameters, not the imported source. Keep
+    // the current selection and let the input guard explain any type mismatch.
     setTaskType(nextTaskType);
 
     let usedFallback = false;
@@ -634,7 +665,7 @@ export default function HomePage() {
   const taskReady = Boolean(selectedPath && canStartTask);
   const readinessHint = !selectedPath
     ? missingFileHint
-    : (modelPrerequisiteHint || t("home.readyToStart"));
+    : (inputTypeMismatchHint || modelPrerequisiteHint || t("home.readyToStart"));
   const workspaceStatus = bootstrapState === "error" || ffmpegVersion === "unavailable"
     ? "error"
     : (bootstrapState === "loading" || ffmpegVersion === "detecting" ? "loading" : "ready");
@@ -773,6 +804,13 @@ export default function HomePage() {
                       </Button>
                     </div>
                   </div>
+
+                  {inputTypeMismatchHint && (
+                    <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-xs leading-5 text-warning" role="status">
+                      <AlertCircle className="mt-0.5 shrink-0" size={14} />
+                      <span>{inputTypeMismatchHint}</span>
+                    </div>
+                  )}
 
                   {selectedPaths.length > 1 && (
                     <div className="mt-4 border-t border-border-subtle pt-4">
@@ -935,7 +973,6 @@ export default function HomePage() {
                           const currentIndex = taskTypes.findIndex(({ value }) => value === taskType);
                           const nextIndex = (currentIndex + direction + taskTypes.length) % taskTypes.length;
                           const nextTaskType = taskTypes[nextIndex].value;
-                          if (isMediaTaskType(taskType) !== isMediaTaskType(nextTaskType)) setSelectedPaths([]);
                           setTaskType(nextTaskType);
                           setError("");
                           const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
@@ -943,9 +980,6 @@ export default function HomePage() {
                         }}
                         onClick={() => {
                           const nextTaskType = item.value;
-                          if (isMediaTaskType(taskType) !== isMediaTaskType(nextTaskType)) {
-                            setSelectedPaths([]);
-                          }
                           setTaskType(nextTaskType);
                           setError("");
                         }}
