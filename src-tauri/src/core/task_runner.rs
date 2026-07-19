@@ -1240,9 +1240,18 @@ async fn run_task_impl(
         if t.status == TaskStatus::Cancelled {
             return Ok(());
         }
-        t.status = TaskStatus::Done;
+        t.status = if t.review_required {
+            TaskStatus::Review
+        } else {
+            TaskStatus::Done
+        };
         t.progress = 1.0;
-        t.status_message = "已完成".into();
+        t.status_message = if t.review_required {
+            "等待人工审核".into()
+        } else {
+            "已完成".into()
+        };
+        t.reviewed_at = None;
         t.output_path = Some(final_output_path.to_string_lossy().to_string());
         t.updated_at = chrono::Utc::now().to_rfc3339();
         let task_clone = t.clone();

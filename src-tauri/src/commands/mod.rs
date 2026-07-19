@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
 use crate::core::audio;
 use crate::core::models::{self, AsrModelInfo, ModelStatus};
+use crate::core::recipes::{self, SaveTaskRecipeRequest, TaskRecipe};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{
@@ -59,7 +60,11 @@ fn validate_task_id(task_id: &str) -> Result<(), String> {
 fn task_can_be_deleted(status: TaskStatus) -> bool {
     matches!(
         status,
-        TaskStatus::Done | TaskStatus::Error | TaskStatus::Cancelled | TaskStatus::Paused
+        TaskStatus::Review
+            | TaskStatus::Done
+            | TaskStatus::Error
+            | TaskStatus::Cancelled
+            | TaskStatus::Paused
     )
 }
 
@@ -69,6 +74,7 @@ fn task_status_label(status: TaskStatus) -> &'static str {
         TaskStatus::Running => "running",
         TaskStatus::Paused => "paused",
         TaskStatus::Cancelled => "cancelled",
+        TaskStatus::Review => "review",
         TaskStatus::Done => "done",
         TaskStatus::Error => "error",
     }
@@ -78,6 +84,7 @@ fn prepare_task_for_retry(task: &mut Task) {
     task.status = TaskStatus::Pending;
     task.progress = task.progress.clamp(0.0, 1.0);
     task.error = None;
+    task.reviewed_at = None;
     task.status_message = "准备从上次进度继续...".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
 }
@@ -466,6 +473,7 @@ pub struct CreateTaskRequest {
     pub output_format: Option<String>,
     pub output_name: Option<String>,
     pub strip_chinese_punctuation: Option<bool>,
+    pub review_required: Option<bool>,
 }
 
 fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
@@ -529,6 +537,7 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
         output_format,
         output_name,
         strip_chinese_punctuation: req.strip_chinese_punctuation.unwrap_or(false),
+        review_required: req.review_required.unwrap_or(false),
     }))
 }
 
@@ -646,6 +655,7 @@ pub async fn create_preview_task(
         output_format: None,
         output_name: None,
         strip_chinese_punctuation: false,
+        review_required: false,
     });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
@@ -661,6 +671,111 @@ pub async fn create_preview_task(
 #[tauri::command]
 pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
     Ok(state.tasks.read().await.values().cloned().collect())
+}
+
+#[tauri::command]
+pub fn list_task_recipes(state: State<'_, AppState>) -> Result<Vec<TaskRecipe>, String> {
+    recipes::load_recipes(&state.app_config_dir)
+}
+
+#[tauri::command]
+pub fn save_task_recipe(
+    state: State<'_, AppState>,
+    request: SaveTaskRecipeRequest,
+) -> Result<TaskRecipe, String> {
+    recipes::save_recipe(&state.app_config_dir, request)
+}
+
+#[tauri::command]
+pub fn delete_task_recipe(state: State<'_, AppState>, recipe_id: String) -> Result<String, String> {
+    recipes::delete_recipe(&state.app_config_dir, &recipe_id)
+}
+
+async fn approve_tasks_by_ids(
+    app: &AppHandle,
+    state: &AppState,
+    task_ids: Vec<String>,
+) -> Result<Vec<Task>, String> {
+    if task_ids.is_empty() {
+        return Err("Please select tasks to approve".into());
+    }
+
+    let mut seen = HashSet::new();
+    let mut unique_task_ids = Vec::new();
+    for task_id in task_ids {
+        validate_task_id(&task_id)?;
+        if seen.insert(task_id.clone()) {
+            unique_task_ids.push(task_id);
+        }
+    }
+
+    let reviewed_at = chrono::Utc::now().to_rfc3339();
+    let mut tasks = state.tasks.write().await;
+    let (next, approved) = approve_review_tasks(&tasks, &unique_task_ids, &reviewed_at)?;
+
+    task_queue::save_tasks(&state.app_config_dir, &next)?;
+    *tasks = next;
+    drop(tasks);
+
+    for task in &approved {
+        emit_task_update(app, task);
+    }
+    Ok(approved)
+}
+
+fn approve_review_tasks(
+    tasks: &HashMap<String, Task>,
+    task_ids: &[String],
+    reviewed_at: &str,
+) -> Result<(HashMap<String, Task>, Vec<Task>), String> {
+    let mut next = tasks.clone();
+    for task_id in task_ids {
+        let task = next
+            .get(task_id)
+            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        if task.status != TaskStatus::Review {
+            return Err(format!(
+                "Task \"{}\" is {}, only review tasks can be approved",
+                task.media_name,
+                task_status_label(task.status)
+            ));
+        }
+    }
+
+    let mut approved = Vec::with_capacity(task_ids.len());
+    for task_id in task_ids {
+        let task = next
+            .get_mut(task_id)
+            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        task.status = TaskStatus::Done;
+        task.status_message = "审核通过".into();
+        task.reviewed_at = Some(reviewed_at.to_string());
+        task.updated_at = reviewed_at.to_string();
+        approved.push(task.clone());
+    }
+    Ok((next, approved))
+}
+
+#[tauri::command]
+pub async fn approve_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Task, String> {
+    approve_tasks_by_ids(&app, &state, vec![task_id])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Task approval returned no task".to_string())
+}
+
+#[tauri::command]
+pub async fn approve_tasks(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_ids: Vec<String>,
+) -> Result<Vec<Task>, String> {
+    approve_tasks_by_ids(&app, &state, task_ids).await
 }
 
 #[tauri::command]
@@ -693,7 +808,10 @@ pub async fn cancel_task(
     let task = tasks
         .get_mut(&task_id)
         .ok_or_else(|| format!("task not found: {task_id}"))?;
-    if matches!(task.status, TaskStatus::Done | TaskStatus::Error) {
+    if matches!(
+        task.status,
+        TaskStatus::Review | TaskStatus::Done | TaskStatus::Error
+    ) {
         return Ok(task.clone());
     }
     task.status = task_queue::TaskStatus::Cancelled;
@@ -3049,8 +3167,59 @@ mod tests {
         assert!(!task_can_be_deleted(TaskStatus::Running));
         assert!(task_can_be_deleted(TaskStatus::Paused));
         assert!(task_can_be_deleted(TaskStatus::Cancelled));
+        assert!(task_can_be_deleted(TaskStatus::Review));
         assert!(task_can_be_deleted(TaskStatus::Done));
         assert!(task_can_be_deleted(TaskStatus::Error));
+    }
+
+    #[test]
+    fn review_batch_approval_is_all_or_nothing() {
+        let make_review_task = |name: &str| {
+            let mut task = task_queue::create_task(CreateTaskParams {
+                task_type: TaskType::GenerateOnly,
+                media_path: format!("/tmp/{name}.wav"),
+                media_name: format!("{name}.wav"),
+                engine_id: "whisper-cpp".into(),
+                model_id: "small".into(),
+                source_language: Some("auto".into()),
+                target_language: None,
+                translation_content_mode: TranslationContentMode::TargetOnly,
+                output_format: Some("srt".into()),
+                output_name: None,
+                strip_chinese_punctuation: false,
+                review_required: true,
+            });
+            task.status = TaskStatus::Review;
+            task.output_path = Some(format!("/tmp/{name}.srt"));
+            task
+        };
+        let first = make_review_task("first");
+        let second = make_review_task("second");
+        let original = HashMap::from([
+            (first.id.clone(), first.clone()),
+            (second.id.clone(), second.clone()),
+        ]);
+        let ids = vec![first.id.clone(), second.id.clone()];
+
+        let (approved_map, approved) =
+            approve_review_tasks(&original, &ids, "2026-07-19T00:00:00Z").unwrap();
+
+        assert_eq!(approved.len(), 2);
+        assert!(approved.iter().all(|task| task.status == TaskStatus::Done));
+        assert!(approved
+            .iter()
+            .all(|task| task.reviewed_at.as_deref() == Some("2026-07-19T00:00:00Z")));
+        assert!(ids
+            .iter()
+            .all(|id| approved_map[id].status == TaskStatus::Done));
+        assert!(ids
+            .iter()
+            .all(|id| original[id].status == TaskStatus::Review));
+
+        let mut invalid = original.clone();
+        invalid.get_mut(&second.id).unwrap().status = TaskStatus::Done;
+        assert!(approve_review_tasks(&invalid, &ids, "2026-07-19T00:00:00Z").is_err());
+        assert_eq!(invalid[&first.id].status, TaskStatus::Review);
     }
 
     #[test]
@@ -3096,6 +3265,7 @@ mod tests {
             output_format: Some("srt".into()),
             output_name: None,
             strip_chinese_punctuation: false,
+            review_required: false,
         });
 
         task.status = TaskStatus::Paused;
@@ -3136,6 +3306,7 @@ mod tests {
             output_format: Some("srt".into()),
             output_name: None,
             strip_chinese_punctuation: false,
+            review_required: false,
         });
         task.status = TaskStatus::Error;
         task.progress = 0.87;

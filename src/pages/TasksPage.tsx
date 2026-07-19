@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useI18n } from "../lib/i18n";
 import {
+  approveTask,
+  approveTasks,
   cancelTask,
   deleteTask,
   deleteTasks,
@@ -43,6 +45,7 @@ function StatusPill({ status }: { status: string }) {
     running: "info",
     paused: "warning",
     cancelled: "default",
+    review: "warning",
     done: "success",
     error: "danger",
   };
@@ -78,7 +81,7 @@ function upsertTask(tasks: Task[], task: Task): Task[] {
 }
 
 function canDeleteTask(task: Task): boolean {
-  return ["done", "error", "cancelled", "paused"].includes(task.status);
+  return ["review", "done", "error", "cancelled", "paused"].includes(task.status);
 }
 
 function errorMessage(error: unknown): string {
@@ -96,6 +99,8 @@ export default function TasksPage() {
   const [pendingDeleteTaskIds, setPendingDeleteTaskIds] = useState<string[] | null>(null);
   const [deletingTaskIds, setDeletingTaskIds] = useState<string[]>([]);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [approvingTaskIds, setApprovingTaskIds] = useState<string[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
   const logContainerRef = useRef<HTMLPreElement>(null);
 
   const deletableTasks = tasks.filter(canDeleteTask);
@@ -104,6 +109,9 @@ export default function TasksPage() {
   );
   const allDeletableSelected =
     deletableTasks.length > 0 && selectedDeletableIds.length === deletableTasks.length;
+  const selectedReviewIds = selectedTaskIds.filter((taskId) =>
+    tasks.some((task) => task.id === taskId && task.status === "review"),
+  );
   const pendingDeleteTasks = pendingDeleteTaskIds
     ? pendingDeleteTaskIds
         .map((taskId) => tasks.find((task) => task.id === taskId))
@@ -243,6 +251,25 @@ export default function TasksPage() {
     }
   };
 
+  const handleApprove = async (taskIds: string[]) => {
+    if (taskIds.length === 0) return;
+    setApprovingTaskIds(taskIds);
+    setActionError(null);
+    try {
+      const approved = taskIds.length === 1
+        ? [await approveTask(taskIds[0])]
+        : await approveTasks(taskIds);
+      setTasks((currentTasks) => approved.reduce(upsertTask, currentTasks));
+      const approvedIds = new Set(approved.map((task) => task.id));
+      setSelectedTaskIds((currentIds) => currentIds.filter((taskId) => !approvedIds.has(taskId)));
+    } catch (error) {
+      setActionError(errorMessage(error));
+      console.error("Failed to approve task", error);
+    } finally {
+      setApprovingTaskIds([]);
+    }
+  };
+
   const removeDeletedTasksFromView = (deletedTaskIds: string[]) => {
     const deletedSet = new Set(deletedTaskIds);
     setTasks((currentTasks) => currentTasks.filter((task) => !deletedSet.has(task.id)));
@@ -318,6 +345,16 @@ export default function TasksPage() {
               </label>
               <Button
                 type="button"
+                onClick={() => void handleApprove(selectedReviewIds)}
+                disabled={selectedReviewIds.length === 0 || approvingTaskIds.length > 0}
+                size="sm"
+                variant="primary"
+              >
+                <CheckCircle size={14} />
+                <span>{t("tasks.approveSelected") + (selectedReviewIds.length > 0 ? ` (${selectedReviewIds.length})` : "")}</span>
+              </Button>
+              <Button
+                type="button"
                 onClick={() => openDeleteDialog(selectedDeletableIds)}
                 disabled={selectedDeletableIds.length === 0}
                 size="sm"
@@ -338,6 +375,12 @@ export default function TasksPage() {
           </Button>
         </div>
       </div>
+
+      {actionError && (
+        <div className="rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm text-danger" role="alert">
+          {actionError}
+        </div>
+      )}
 
       {loading && tasks.length === 0 ? (
         <div className="text-text-tertiary py-16 text-center text-sm">{t("tasks.loading")}</div>
@@ -480,8 +523,30 @@ export default function TasksPage() {
                   </div>
                 )}
 
-                {task.status === "done" && task.output_path && (
+                {(task.status === "review" || task.status === "done") && task.output_path && (
                   <div className="mt-4 space-y-3 rounded-xl border border-border-subtle bg-surface-overlay p-3.5 text-sm">
+                    {task.status === "review" && (
+                      <div className="flex flex-col gap-3 rounded-xl border border-warning/20 bg-warning/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 items-start gap-2.5">
+                          <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning" />
+                          <div>
+                            <p className="font-semibold text-text-primary">{t("tasks.reviewTitle")}</p>
+                            <p className="mt-1 text-xs leading-5 text-text-secondary">{t("tasks.reviewDesc")}</p>
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          onClick={() => void handleApprove([task.id])}
+                          disabled={approvingTaskIds.includes(task.id)}
+                          variant="primary"
+                          size="sm"
+                          className="shrink-0"
+                        >
+                          <CheckCircle size={14} />
+                          {approvingTaskIds.includes(task.id) ? t("tasks.approving") : t("tasks.approveTask")}
+                        </Button>
+                      </div>
+                    )}
                     <p className="font-semibold text-text-secondary truncate" title={task.output_path}>
                       {t("tasks.outputPath")}{task.output_path}
                     </p>
@@ -631,6 +696,8 @@ export default function TasksPage() {
                     return t("tasks.log.pending");
                   case "paused":
                     return t("tasks.log.paused");
+                  case "review":
+                    return t("tasks.log.review");
                   case "done":
                     return t("tasks.log.done");
                   case "error":
