@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
   Cloud,
   Eye,
@@ -48,6 +49,12 @@ const DEFAULTS: Record<TtsProviderProtocol, Pick<SaveTtsProviderRequest, "endpoi
     voice: "21m00Tcm4TlvDq8ikWAM",
     region: "",
   },
+  "edge-tts": {
+    endpoint: "",
+    model: "",
+    voice: "zh-CN-XiaoxiaoNeural",
+    region: "zh-CN",
+  },
 };
 
 function blankDraft(): SaveTtsProviderRequest {
@@ -66,6 +73,7 @@ function secretProviderId(id: string): string {
 }
 
 function resolvedEndpoint(profile: Pick<TtsProviderProfile, "protocol" | "endpoint" | "region">): string {
+  if (profile.protocol === "edge-tts") return "";
   if (profile.protocol === "azure-speech" && !profile.endpoint.trim()) {
     return `https://${profile.region.trim()}.tts.speech.microsoft.com/cognitiveservices/v1`;
   }
@@ -106,8 +114,12 @@ export function CloudTtsPanel() {
 
   useEffect(() => {
     setApiKey("");
-    setKeyConfigured(false);
     if (!selected?.id) return;
+    if (selected.protocol === "edge-tts") {
+      setKeyConfigured(true);
+      return;
+    }
+    setKeyConfigured(false);
     const endpoint = resolvedEndpoint(selected);
     if (!endpoint || endpoint.includes("//.tts.")) return;
     hasProviderSecret(secretProviderId(selected.id), endpoint, "apiKey")
@@ -147,12 +159,14 @@ export function CloudTtsPanel() {
     try {
       const saved = await saveTtsProvider({ ...draft, id: selectedId || undefined });
       const endpoint = resolvedEndpoint(saved);
-      if (apiKey.trim()) {
+      if (saved.protocol !== "edge-tts" && apiKey.trim()) {
         await setProviderSecret(secretProviderId(saved.id), endpoint, "apiKey", apiKey.trim());
       }
-      const configured = apiKey.trim()
+      const configured = saved.protocol === "edge-tts"
         ? true
-        : await hasProviderSecret(secretProviderId(saved.id), endpoint, "apiKey");
+        : apiKey.trim()
+          ? true
+          : await hasProviderSecret(secretProviderId(saved.id), endpoint, "apiKey");
       setKeyConfigured(configured);
       setProfiles((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setSelectedId(saved.id);
@@ -249,7 +263,15 @@ export function CloudTtsPanel() {
                 >
                   <span className="block truncate text-sm font-semibold text-text-primary">{profile.name}</span>
                   <span className="mt-1 flex items-center justify-between gap-2 text-xs text-text-tertiary">
-                    <span>{profile.protocol}</span>
+                    <span>
+                      {profile.protocol === "openai-compatible"
+                        ? t("models.ttsCloudProtocolOpenai")
+                        : profile.protocol === "azure-speech"
+                          ? t("models.ttsCloudProtocolAzure")
+                          : profile.protocol === "elevenlabs"
+                            ? t("models.ttsCloudProtocolElevenlabs")
+                            : t("models.ttsCloudProtocolEdge")}
+                    </span>
                     {profile.text_upload_consent && <CheckCircle2 size={13} className="text-success" />}
                   </span>
                 </button>
@@ -296,22 +318,43 @@ export function CloudTtsPanel() {
             <label className="space-y-1.5 text-sm font-medium text-text-secondary">
               <span>{t("models.ttsCloudProtocol")}</span>
               <Select value={draft.protocol} onChange={(event) => changeProtocol(event.target.value as TtsProviderProtocol)}>
-                <option value="openai-compatible">OpenAI Compatible</option>
-                <option value="azure-speech">Azure Speech</option>
-                <option value="elevenlabs">ElevenLabs</option>
+                <option value="openai-compatible">{t("models.ttsCloudProtocolOpenai")}</option>
+                <option value="azure-speech">{t("models.ttsCloudProtocolAzure")}</option>
+                <option value="elevenlabs">{t("models.ttsCloudProtocolElevenlabs")}</option>
+                <option value="edge-tts">{t("models.ttsCloudProtocolEdge")}</option>
               </Select>
             </label>
+            {draft.protocol === "edge-tts" && (
+              <div className="sm:col-span-2 rounded-2xl border border-warning/25 bg-warning/10 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle size={17} className="mt-0.5 shrink-0 text-warning" />
+                  <div>
+                    <p className="text-sm font-semibold text-text-primary">{t("models.ttsCloudEdgeBadge")}</p>
+                    <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudEdgeDesc")}</p>
+                    <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudEdgeUsageHint")}</p>
+                  </div>
+                </div>
+              </div>
+            )}
             {draft.protocol === "azure-speech" && (
               <label className="space-y-1.5 text-sm font-medium text-text-secondary">
                 <span>Region</span>
                 <Input value={draft.region} onChange={(event) => setDraft({ ...draft, region: event.target.value })} placeholder="japaneast" />
               </label>
             )}
-            <label className={`space-y-1.5 text-sm font-medium text-text-secondary ${draft.protocol === "azure-speech" ? "" : "sm:col-span-2"}`}>
-              <span>{draft.protocol === "azure-speech" ? t("models.ttsCloudEndpointOptional") : "Endpoint"}</span>
-              <Input value={draft.endpoint} onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })} placeholder={draft.protocol === "azure-speech" ? t("models.ttsCloudEndpointAuto") : "https://..."} />
-            </label>
-            {draft.protocol !== "azure-speech" && (
+            {draft.protocol === "edge-tts" && (
+              <label className="space-y-1.5 text-sm font-medium text-text-secondary">
+                <span>{t("models.ttsCloudEdgeRegion")}</span>
+                <Input value={draft.region} onChange={(event) => setDraft({ ...draft, region: event.target.value })} placeholder={t("models.ttsCloudEdgeRegionPlaceholder")} />
+              </label>
+            )}
+            {draft.protocol !== "edge-tts" && (
+              <label className={`space-y-1.5 text-sm font-medium text-text-secondary ${draft.protocol === "azure-speech" ? "" : "sm:col-span-2"}`}>
+                <span>{draft.protocol === "azure-speech" ? t("models.ttsCloudEndpointOptional") : "Endpoint"}</span>
+                <Input value={draft.endpoint} onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })} placeholder={draft.protocol === "azure-speech" ? t("models.ttsCloudEndpointAuto") : "https://..."} />
+              </label>
+            )}
+            {draft.protocol !== "azure-speech" && draft.protocol !== "edge-tts" && (
               <label className="space-y-1.5 text-sm font-medium text-text-secondary">
                 <span>{t("models.ttsCloudModel")}</span>
                 <Input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} />
@@ -319,10 +362,28 @@ export function CloudTtsPanel() {
             )}
             <label className="space-y-1.5 text-sm font-medium text-text-secondary">
               <span>{t("models.ttsCloudVoice")}</span>
-              <Input value={draft.voice} onChange={(event) => setDraft({ ...draft, voice: event.target.value })} />
+              <Input
+                value={draft.voice}
+                onChange={(event) => setDraft({ ...draft, voice: event.target.value })}
+                list={draft.protocol === "edge-tts" ? "finalsub-edge-voices" : undefined}
+              />
+              {draft.protocol === "edge-tts" && (
+                <>
+                  <datalist id="finalsub-edge-voices">
+                    <option value="zh-CN-XiaoxiaoNeural" />
+                    <option value="zh-CN-YunxiNeural" />
+                    <option value="en-US-AriaNeural" />
+                    <option value="en-US-GuyNeural" />
+                    <option value="ja-JP-NanamiNeural" />
+                    <option value="ko-KR-SunHiNeural" />
+                  </datalist>
+                  <span className="block text-xs font-normal leading-5 text-text-tertiary">{t("models.ttsCloudEdgeVoiceHint")}</span>
+                </>
+              )}
             </label>
           </div>
 
+          {draft.protocol !== "edge-tts" ? (
           <div className="rounded-2xl border border-border-subtle bg-surface-overlay p-4">
             <div className="flex items-center justify-between gap-3">
               <span className="inline-flex items-center gap-2 text-sm font-semibold text-text-primary">
@@ -346,6 +407,14 @@ export function CloudTtsPanel() {
             </div>
             <p className="mt-2 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudKeychain")}</p>
           </div>
+          ) : (
+            <div className="rounded-2xl border border-success/20 bg-success/10 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                <CheckCircle2 size={15} className="text-success" /> {t("models.ttsCloudEdgeNoKey")}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudEdgeNoKeyDesc")}</p>
+            </div>
+          )}
 
           <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-warning/20 bg-warning/10 p-4">
             <input
@@ -369,7 +438,7 @@ export function CloudTtsPanel() {
               variant="secondary"
               size="sm"
               onClick={test}
-              disabled={!selectedId || !keyConfigured || !draft.text_upload_consent || busy !== null}
+              disabled={!selectedId || (draft.protocol !== "edge-tts" && !keyConfigured) || !draft.text_upload_consent || busy !== null}
             >
               <Volume2 size={14} /> {busy === "test" ? t("models.ttsCloudTesting") : t("models.ttsCloudTest")}
             </Button>
