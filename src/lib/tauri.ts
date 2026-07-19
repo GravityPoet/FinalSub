@@ -508,6 +508,7 @@ export interface Settings {
   cloud_asr_active_profile_id: string;
   cloud_asr_profiles: CloudAsrProfile[];
   models_path: string;
+  parakeet_models_path: string;
   max_concurrent_tasks: number;
   subtitle_output_format: string;
   source_language: string;
@@ -683,6 +684,7 @@ function createMockSettings(): Settings {
     cloud_asr_active_profile_id: "",
     cloud_asr_profiles: [],
     models_path: "~/Tools/Local-LLM/whisper-models",
+    parakeet_models_path: "~/Tools/Local-LLM/parakeet-models",
     max_concurrent_tasks: 2,
     subtitle_output_format: "srt",
     source_language: "auto",

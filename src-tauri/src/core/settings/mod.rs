@@ -70,6 +70,8 @@ pub struct Settings {
     pub cloud_asr_profiles: Vec<CloudAsrProfile>,
     #[serde(alias = "modelsPath")]
     pub models_path: String,
+    #[serde(alias = "parakeetModelsPath")]
+    pub parakeet_models_path: String,
     #[serde(alias = "maxConcurrentTasks")]
     pub max_concurrent_tasks: u32,
     #[serde(alias = "subtitleOutputFormat")]
@@ -151,6 +153,7 @@ impl Default for Settings {
             cloud_asr_active_profile_id: String::new(),
             cloud_asr_profiles: Vec::new(),
             models_path: default_models_path(),
+            parakeet_models_path: default_parakeet_models_path(),
             max_concurrent_tasks: 1,
             subtitle_output_format: "srt".into(),
             source_language: "auto".into(),
@@ -189,6 +192,14 @@ fn default_models_path() -> String {
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Tools/Local-LLM/whisper-models")
+        .to_string_lossy()
+        .to_string()
+}
+
+fn default_parakeet_models_path() -> String {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Tools/Local-LLM/parakeet-models")
         .to_string_lossy()
         .to_string()
 }
@@ -411,6 +422,11 @@ pub fn validate_settings(settings: &Settings) -> Result<()> {
             "模型路径不能为空".into(),
         ));
     }
+    if settings.parakeet_models_path.trim().is_empty() {
+        return Err(crate::error::FinalSubError::Validation(
+            "Parakeet 模型路径不能为空".into(),
+        ));
+    }
     crate::core::asr::cloud::validate_service_settings(
         &settings.cloud_asr_protocol,
         &settings.cloud_asr_endpoint,
@@ -622,6 +638,7 @@ mod tests {
         let content = serde_json::to_string(&Settings::default()).unwrap();
         assert!(content.contains("asr_engine"));
         assert!(content.contains("models_path"));
+        assert!(content.contains("parakeet_models_path"));
         assert!(!content.contains("asrEngine"));
     }
 
@@ -725,6 +742,7 @@ mod tests {
         let imported = import_config(&dir, legacy).unwrap();
         assert_eq!(imported.asr_engine, "whisper-cpp");
         assert_eq!(imported.models_path, "/tmp/models");
+        assert!(imported.parakeet_models_path.ends_with("parakeet-models"));
         assert_eq!(imported.max_concurrent_tasks, 2);
         assert_eq!(imported.cloud_asr_request_concurrency, 1);
     }

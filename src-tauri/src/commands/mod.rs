@@ -190,7 +190,7 @@ pub fn discover_batch_inputs(
 
 #[tauri::command]
 pub fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
-    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let models_dir = model_storage_dir(&state.app_config_dir, &model_id)?;
     models::delete_managed_model(&models_dir, &model_id).map_err(|e| e.to_string())
 }
 
@@ -391,11 +391,11 @@ pub async fn download_model(
     state: State<'_, AppState>,
     model_id: String,
 ) -> Result<(), String> {
-    let models_dir = whisper_models_dir(&state.app_config_dir)?;
     let normalized = match models::validate_whisper_model_id(&model_id) {
         Ok(id) => id,
         Err(e) => return Err(e.to_string()),
     };
+    let models_dir = model_storage_dir(&state.app_config_dir, &normalized)?;
 
     // 检查是否已经在下载中
     {
@@ -1416,7 +1416,7 @@ pub async fn transcribe_parakeet(
 ) -> Result<String, String> {
     let audio_path = validate_existing_file_path(&req.audio_path, "Audio file")?;
     let output_path = validate_new_output_path(&req.output_path, "Subtitle output path")?;
-    let models_dir = whisper_models_dir(&state.app_config_dir)?;
+    let models_dir = parakeet_models_dir(&state.app_config_dir)?;
     let engine = ParakeetNativeEngine::new(models_dir);
     let model_ref = AsrModelRef {
         engine_id: "parakeet-mlx".into(),
@@ -1839,8 +1839,9 @@ pub fn import_encrypted_config_from_path(
 
 fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> {
     let whisper_dir = whisper_models_dir(&state.app_config_dir)?;
+    let parakeet_dir = parakeet_models_dir(&state.app_config_dir)?;
     let mut catalog = state.models.clone();
-    models::scan_model_status(&mut catalog, &whisper_dir, &whisper_dir);
+    models::scan_model_status(&mut catalog, &whisper_dir, &parakeet_dir);
     let settings = settings::load_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
     if let Some(model) = catalog
         .iter_mut()
@@ -1916,9 +1917,31 @@ fn validate_cloud_asr_readiness(settings: &Settings) -> Result<(), String> {
 }
 pub(crate) fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
     let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
-    let path = expand_home_path(&settings.models_path);
+    validated_model_root(&settings.models_path, "Model")
+}
+
+pub(crate) fn parakeet_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
+    let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
+    validated_model_root(&settings.parakeet_models_path, "Parakeet model")
+}
+
+fn model_storage_dir(app_config_dir: &Path, model_id: &str) -> Result<PathBuf, String> {
+    let normalized = models::validate_whisper_model_id(model_id).map_err(|e| e.to_string())?;
+    let model = models::builtin_model_catalog()
+        .into_iter()
+        .find(|model| model.id == normalized)
+        .ok_or_else(|| format!("Unknown model ID: {normalized}"))?;
+    if model.engine_id == "parakeet-mlx" {
+        parakeet_models_dir(app_config_dir)
+    } else {
+        whisper_models_dir(app_config_dir)
+    }
+}
+
+fn validated_model_root(raw: &str, label: &str) -> Result<PathBuf, String> {
+    let path = expand_home_path(raw);
     if !path.is_absolute() {
-        return Err("Model path must be an absolute path".into());
+        return Err(format!("{label} path must be an absolute path"));
     }
     Ok(path)
 }
@@ -2999,6 +3022,47 @@ mod tests {
         let expanded = expand_home_path("~/Tools/Local-LLM");
         assert!(expanded.is_absolute());
         assert!(expanded.ends_with("Tools/Local-LLM"));
+    }
+
+    #[test]
+    fn parakeet_model_storage_uses_its_dedicated_root() {
+        let config = tempfile::tempdir().unwrap();
+        let whisper = tempfile::tempdir().unwrap();
+        let parakeet = tempfile::tempdir().unwrap();
+        let model_dir = parakeet
+            .path()
+            .join(crate::core::asr::parakeet::PARAKEET_MODEL_ID);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        for name in [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ] {
+            std::fs::write(model_dir.join(name), b"fixture").unwrap();
+        }
+
+        let configured = Settings {
+            models_path: whisper.path().to_string_lossy().into_owned(),
+            parakeet_models_path: parakeet.path().to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        settings::save_settings(config.path(), &configured).unwrap();
+
+        assert_eq!(parakeet_models_dir(config.path()).unwrap(), parakeet.path());
+        assert_eq!(
+            model_storage_dir(config.path(), crate::core::asr::parakeet::PARAKEET_MODEL_ID)
+                .unwrap(),
+            parakeet.path()
+        );
+
+        let mut catalog = models::builtin_model_catalog();
+        models::scan_model_status(&mut catalog, whisper.path(), parakeet.path());
+        let model = catalog
+            .iter()
+            .find(|model| model.id == crate::core::asr::parakeet::PARAKEET_MODEL_ID)
+            .unwrap();
+        assert!(matches!(model.status, ModelStatus::Downloaded));
     }
 
     #[test]
