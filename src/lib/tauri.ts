@@ -158,6 +158,9 @@ function mockOpenDialogPath(options?: OpenDialogOptions): string {
   if (extensions.some((ext) => ["srt", "vtt", "ass", "ssa", "lrc"].includes(ext))) {
     return "/Users/example/Subtitles/demo.srt";
   }
+  if (extensions.some((ext) => ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus"].includes(ext))) {
+    return "/Users/example/Audio/demo-dub.wav";
+  }
   if (extensions.includes("bin")) {
     return "/Users/example/Models/ggml-small.bin";
   }
@@ -381,6 +384,12 @@ export interface BurnSubtitleRequest {
   crf?: number;
   preset?: string;
   soft_subtitle?: boolean;
+  audio_path?: string;
+  audio_mode?: "keep" | "replace" | "mix" | "add-track";
+  subtitle_language?: string;
+  subtitle_title?: string;
+  audio_language?: string;
+  audio_title?: string;
 }
 
 export async function burnSubtitle(req: BurnSubtitleRequest): Promise<string> {
