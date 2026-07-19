@@ -14,8 +14,12 @@ import {
   FolderTree,
   Languages,
   Mic,
+  Pencil,
   Play,
+  Save,
+  ShieldCheck,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import {
@@ -30,12 +34,17 @@ import {
   getSettings,
   checkForUpdate,
   getVideoMetadata,
+  deleteTaskRecipe,
+  listTaskRecipes,
   openDialog,
   openPath,
+  saveTaskRecipe,
   type AppInfo,
   type AppUpdateEvent,
   type AsrModelInfo,
   type TranslationContentMode,
+  type TaskRecipe,
+  type TaskRecipeSnapshot,
   type UpdateInfo,
   type VideoMetadata,
 } from "../lib/tauri";
@@ -155,7 +164,16 @@ export default function HomePage() {
   const [outputFormat, setOutputFormat] = useState("srt");
   const [outputName, setOutputName] = useState("");
   const [stripChinesePunctuation, setStripChinesePunctuation] = useState(false);
+  const [reviewRequired, setReviewRequired] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [recipes, setRecipes] = useState<TaskRecipe[]>([]);
+  const [recipeNotice, setRecipeNotice] = useState("");
+  const [recipeBusy, setRecipeBusy] = useState(false);
+  const [recipeName, setRecipeName] = useState("");
+  const [recipeDialog, setRecipeDialog] = useState<{
+    mode: "create" | "rename" | "delete";
+    recipe?: TaskRecipe;
+  } | null>(null);
 
   const { t } = useI18n();
   const selectedPath = selectedPaths[0] ?? "";
@@ -163,7 +181,14 @@ export default function HomePage() {
   const loadWorkspace = useCallback(async () => {
     setBootstrapState("loading");
     try {
-      const [loadedModels, settings] = await Promise.all([listAsrModels(), getSettings()]);
+      const [loadedModels, settings, loadedRecipes] = await Promise.all([
+        listAsrModels(),
+        getSettings(),
+        listTaskRecipes().catch((recipeError) => {
+          console.error("Failed to load task recipes:", recipeError);
+          return [];
+        }),
+      ]);
       if (loadedModels.length === 0) {
         throw new Error("No ASR engines are available");
       }
@@ -179,6 +204,7 @@ export default function HomePage() {
       ) ?? loadedModels.find((model) => model.engine_id === nextEngineId);
 
       setModels(loadedModels);
+      setRecipes(loadedRecipes);
       setEngineId(nextEngineId);
       setModelId(nextModel?.id ?? "");
       setTargetLanguage(
@@ -363,6 +389,7 @@ export default function HomePage() {
           output_format: outputFormat,
           output_name: resolvedOutputName,
           strip_chinese_punctuation: stripChinesePunctuation,
+          review_required: reviewRequired,
         };
       });
       await createTasks(requests);
@@ -417,6 +444,186 @@ export default function HomePage() {
     } catch (installError) {
       setUpdateProgress(null);
       setUpdateError(installError instanceof Error ? installError.message : String(installError));
+    }
+  };
+
+  const builtInRecipes: Array<{
+    id: string;
+    name: string;
+    description: string;
+    snapshot: TaskRecipeSnapshot;
+  }> = [
+    {
+      id: "offline-fast",
+      name: t("home.recipeOfflineName"),
+      description: t("home.recipeOfflineDesc"),
+      snapshot: {
+        task_type: "generate-only",
+        engine_id: "parakeet-mlx",
+        model_id: "parakeet-tdt-0.6b-v2",
+        source_language: "auto",
+        target_language: "zh",
+        translation_content_mode: "target-only",
+        output_format: "srt",
+        output_name: "",
+        strip_chinese_punctuation: false,
+        review_required: false,
+      },
+    },
+    {
+      id: "bilingual-review",
+      name: t("home.recipeBilingualName"),
+      description: t("home.recipeBilingualDesc"),
+      snapshot: {
+        task_type: "generate-and-translate",
+        engine_id: "parakeet-mlx",
+        model_id: "parakeet-tdt-0.6b-v2",
+        source_language: "auto",
+        target_language: "zh",
+        translation_content_mode: "source-and-target",
+        output_format: "srt",
+        output_name: "",
+        strip_chinese_punctuation: false,
+        review_required: true,
+      },
+    },
+    {
+      id: "translate-review",
+      name: t("home.recipeTranslateName"),
+      description: t("home.recipeTranslateDesc"),
+      snapshot: {
+        task_type: "translate-only",
+        engine_id: "subtitle-translation",
+        model_id: "srt-input",
+        source_language: "auto",
+        target_language: "zh",
+        translation_content_mode: "target-only",
+        output_format: "srt",
+        output_name: "",
+        strip_chinese_punctuation: false,
+        review_required: true,
+      },
+    },
+  ];
+
+  const currentRecipeSnapshot = (): TaskRecipeSnapshot => ({
+    task_type: taskType,
+    engine_id: engineId,
+    model_id: modelId,
+    source_language: sourceLanguage,
+    target_language: targetLanguage,
+    translation_content_mode: translationContentMode,
+    output_format: outputFormat,
+    output_name: outputName,
+    strip_chinese_punctuation: stripChinesePunctuation,
+    review_required: reviewRequired,
+  });
+
+  const applyRecipe = (snapshot: TaskRecipeSnapshot, name: string) => {
+    const nextTaskType = ["generate-only", "generate-and-translate", "translate-only"].includes(
+      snapshot.task_type,
+    ) ? snapshot.task_type : "generate-only";
+    if (isMediaTaskType(taskType) !== isMediaTaskType(nextTaskType)) {
+      setSelectedPaths([]);
+    }
+    setTaskType(nextTaskType);
+
+    let usedFallback = false;
+    if (nextTaskType !== "translate-only") {
+      const isUsable = (model: AsrModelInfo) =>
+        model.engine_id === "custom-command" || model.status === "downloaded";
+      const exactModel = models.find(
+        (model) => model.engine_id === snapshot.engine_id
+          && model.id === snapshot.model_id
+          && isUsable(model),
+      );
+      const fallbackModel = exactModel
+        ?? models.find((model) => model.engine_id === snapshot.engine_id && isUsable(model))
+        ?? models.find(isUsable)
+        ?? models.find(
+          (model) => model.engine_id === snapshot.engine_id && model.id === snapshot.model_id,
+        )
+        ?? models[0];
+      if (fallbackModel) {
+        setEngineId(fallbackModel.engine_id);
+        setModelId(fallbackModel.id);
+        usedFallback = !exactModel;
+        const supportedLanguages = sourceLanguagesForEngine(fallbackModel.engine_id);
+        setSourceLanguage(
+          supportedLanguages.some(({ value }) => value === snapshot.source_language)
+            ? snapshot.source_language
+            : "auto",
+        );
+      }
+    } else {
+      setSourceLanguage(
+        sourceLanguageOptions.some(({ value }) => value === snapshot.source_language)
+          ? snapshot.source_language
+          : "auto",
+      );
+    }
+
+    setTargetLanguage(
+      targetLanguageOptions.some(({ value }) => value === snapshot.target_language)
+        ? snapshot.target_language
+        : "zh",
+    );
+    setTranslationContentMode(snapshot.translation_content_mode);
+    setOutputFormat(
+      outputFormats.some(({ value }) => value === snapshot.output_format)
+        ? snapshot.output_format
+        : "srt",
+    );
+    setOutputName(snapshot.output_name);
+    setStripChinesePunctuation(snapshot.strip_chinese_punctuation);
+    setReviewRequired(snapshot.review_required);
+    setError("");
+    setRecipeNotice(
+      usedFallback
+        ? t("home.recipeModelFallback", { name })
+        : t("home.recipeApplied", { name }),
+    );
+  };
+
+  const openRecipeDialog = (
+    mode: "create" | "rename" | "delete",
+    recipe?: TaskRecipe,
+  ) => {
+    setRecipeName(recipe?.name ?? "");
+    setRecipeDialog({ mode, recipe });
+    setRecipeNotice("");
+  };
+
+  const handleRecipeDialogConfirm = async () => {
+    if (!recipeDialog) return;
+    setRecipeBusy(true);
+    setRecipeNotice("");
+    try {
+      if (recipeDialog.mode === "delete" && recipeDialog.recipe) {
+        await deleteTaskRecipe(recipeDialog.recipe.id);
+        setRecipes((current) => current.filter((recipe) => recipe.id !== recipeDialog.recipe?.id));
+        setRecipeNotice(t("home.recipeDeleted"));
+      } else {
+        const saved = await saveTaskRecipe({
+          id: recipeDialog.recipe?.id,
+          name: recipeName,
+          snapshot: recipeDialog.recipe?.snapshot ?? currentRecipeSnapshot(),
+        });
+        setRecipes((current) => [
+          saved,
+          ...current.filter((recipe) => recipe.id !== saved.id),
+        ]);
+        setRecipeNotice(
+          recipeDialog.mode === "rename"
+            ? t("home.recipeRenamed")
+            : t("home.recipeSaved"),
+        );
+      }
+      setRecipeDialog(null);
+    } catch (recipeError) {
+      setRecipeNotice(recipeError instanceof Error ? recipeError.message : String(recipeError));
+    } finally {
+      setRecipeBusy(false);
     }
   };
 
@@ -540,6 +747,109 @@ export default function HomePage() {
           )}
         </div>
       )}
+
+      <Card className="overflow-hidden p-5 sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <span className="step-label">{t("home.recipeEyebrow")}</span>
+            <h3 className="mt-3 font-display text-[1.35rem] font-bold tracking-[-0.025em] text-text-primary">
+              {t("home.recipeTitle")}
+            </h3>
+            <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
+              {t("home.recipeDesc")}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => openRecipeDialog("create")}
+            className="shrink-0"
+          >
+            <Save size={14} />
+            {t("home.saveCurrentRecipe")}
+          </Button>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {builtInRecipes.map((recipe) => (
+            <button
+              key={recipe.id}
+              type="button"
+              onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
+              className="group rounded-[1.15rem] border border-border-subtle bg-surface-overlay/40 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand/5"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand">
+                  {t("home.builtinRecipe")}
+                </span>
+                {recipe.snapshot.review_required && (
+                  <ShieldCheck size={15} className="text-warning" />
+                )}
+              </div>
+              <p className="mt-2 font-semibold text-text-primary">{recipe.name}</p>
+              <p className="mt-1 text-xs leading-5 text-text-tertiary">{recipe.description}</p>
+              <span className="mt-3 inline-flex text-xs font-semibold text-brand opacity-80 transition group-hover:opacity-100">
+                {t("home.applyRecipe")} →
+              </span>
+            </button>
+          ))}
+
+          {recipes.map((recipe) => (
+            <div
+              key={recipe.id}
+              className="rounded-[1.15rem] border border-border-subtle bg-surface-overlay/40 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-tertiary">
+                    {t("home.userRecipe")}
+                  </span>
+                  <p className="mt-2 truncate font-semibold text-text-primary" title={recipe.name}>{recipe.name}</p>
+                  <p className="mt-1 truncate font-mono text-[11px] text-text-tertiary">
+                    {recipe.snapshot.task_type} · {recipe.snapshot.output_format.toUpperCase()}
+                  </p>
+                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openRecipeDialog("rename", recipe)}
+                    title={t("home.renameRecipe")}
+                    className="rounded-lg p-2 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openRecipeDialog("delete", recipe)}
+                    title={t("home.deleteRecipe")}
+                    className="rounded-lg p-2 text-text-tertiary transition hover:bg-danger/10 hover:text-danger"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
+                className="mt-3 text-xs font-semibold text-brand hover:underline"
+              >
+                {t("home.applyRecipe")} →
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {recipeNotice && (
+          <p className="mt-4 rounded-xl border border-brand/15 bg-brand/8 px-3.5 py-2.5 text-sm text-text-secondary" role="status">
+            {recipeNotice}
+          </p>
+        )}
+      </Card>
 
       <div className="grid items-start gap-5 min-[1120px]:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-5">
@@ -849,6 +1159,19 @@ export default function HomePage() {
                     <span className="mt-0.5 block text-xs text-text-tertiary">{t("home.stripChinesePunctuationHint")}</span>
                   </span>
                 </label>
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-warning/15 bg-warning/5 px-3.5 py-3 text-sm text-text-secondary sm:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={reviewRequired}
+                    onChange={(event) => setReviewRequired(event.target.checked)}
+                    className="h-4 w-4 rounded border-border-strong accent-brand"
+                  />
+                  <ShieldCheck size={17} className="shrink-0 text-warning" />
+                  <span>
+                    <span className="block font-semibold text-text-primary">{t("home.reviewRequired")}</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.reviewRequiredHint")}</span>
+                  </span>
+                </label>
               </div>
 
               {modelPrerequisiteHint && (
@@ -896,6 +1219,12 @@ export default function HomePage() {
                 <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryFormat")}</dt>
                   <dd className="font-mono text-sm font-bold uppercase text-brand">{outputFormat}</dd>
+                </div>
+                <div className="system-row">
+                  <dt className="text-xs text-text-tertiary">{t("home.summaryReview")}</dt>
+                  <dd className={`text-right text-sm font-semibold ${reviewRequired ? "text-warning" : "text-text-primary"}`}>
+                    {reviewRequired ? t("home.reviewGateOn") : t("home.reviewGateOff")}
+                  </dd>
                 </div>
               </dl>
 
@@ -965,6 +1294,76 @@ export default function HomePage() {
           </Card>
         </aside>
       </div>
+
+      {recipeDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recipe-dialog-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !recipeBusy) setRecipeDialog(null);
+          }}
+        >
+          <Card className="w-full max-w-md border border-border-default bg-surface-overlay p-6 shadow-lg">
+            <h3 id="recipe-dialog-title" className="font-display text-h2 font-bold text-text-primary">
+              {recipeDialog.mode === "create"
+                ? t("home.recipeSaveTitle")
+                : recipeDialog.mode === "rename"
+                  ? t("home.recipeRenameTitle")
+                  : t("home.recipeDeleteTitle")}
+            </h3>
+            {recipeDialog.mode === "delete" ? (
+              <p className="mt-3 text-sm leading-6 text-text-secondary">
+                {t("home.recipeDeleteDesc", { name: recipeDialog.recipe?.name ?? "" })}
+              </p>
+            ) : (
+              <div className="mt-5">
+                <label htmlFor="recipe-name" className="mb-2 block text-sm font-medium text-text-secondary">
+                  {t("home.recipeName")}
+                </label>
+                <Input
+                  id="recipe-name"
+                  value={recipeName}
+                  maxLength={80}
+                  autoFocus
+                  onChange={(event) => setRecipeName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && recipeName.trim() && !recipeBusy) {
+                      void handleRecipeDialogConfirm();
+                    }
+                  }}
+                  placeholder={t("home.recipeNamePlaceholder")}
+                />
+              </div>
+            )}
+            <div className="mt-6 flex justify-end gap-2.5">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={recipeBusy}
+                onClick={() => setRecipeDialog(null)}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                type="button"
+                variant={recipeDialog.mode === "delete" ? "danger" : "primary"}
+                size="sm"
+                disabled={recipeBusy || (recipeDialog.mode !== "delete" && !recipeName.trim())}
+                onClick={() => void handleRecipeDialogConfirm()}
+              >
+                {recipeBusy
+                  ? t("home.recipeSaving")
+                  : recipeDialog.mode === "delete"
+                    ? t("common.delete")
+                    : t("common.save")}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

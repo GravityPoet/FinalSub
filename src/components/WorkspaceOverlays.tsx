@@ -185,7 +185,9 @@ export function ActivityCenter({ compact = false }: { compact?: boolean }) {
     };
   }, [open]);
 
-  const activeCount = tasks.filter((task) => task.status === "running" || task.status === "pending").length;
+  const activeCount = tasks.filter(
+    (task) => task.status === "running" || task.status === "pending" || task.status === "review",
+  ).length;
   const recent = [...tasks]
     .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
     .slice(0, 6);

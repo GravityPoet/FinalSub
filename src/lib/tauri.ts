@@ -213,6 +213,8 @@ export interface Task {
   output_format: string;
   output_name: string | null;
   strip_chinese_punctuation: boolean;
+  review_required: boolean;
+  reviewed_at: string | null;
   progress: number;
   status_message: string;
   output_path: string | null;
@@ -306,6 +308,34 @@ export interface CreateTaskRequest {
   output_format?: string;
   output_name?: string;
   strip_chinese_punctuation?: boolean;
+  review_required?: boolean;
+}
+
+export interface TaskRecipeSnapshot {
+  task_type: string;
+  engine_id: string;
+  model_id: string;
+  source_language: string;
+  target_language: string;
+  translation_content_mode: TranslationContentMode;
+  output_format: string;
+  output_name: string;
+  strip_chinese_punctuation: boolean;
+  review_required: boolean;
+}
+
+export interface TaskRecipe {
+  id: string;
+  name: string;
+  snapshot: TaskRecipeSnapshot;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaveTaskRecipeRequest {
+  id?: string;
+  name: string;
+  snapshot: TaskRecipeSnapshot;
 }
 
 export async function createTask(req: CreateTaskRequest): Promise<Task> {
@@ -322,6 +352,26 @@ export async function createPreviewTask(mediaPath: string): Promise<Task> {
 
 export async function listTasks(): Promise<Task[]> {
   return invoke("list_tasks");
+}
+
+export async function listTaskRecipes(): Promise<TaskRecipe[]> {
+  return invoke("list_task_recipes");
+}
+
+export async function saveTaskRecipe(request: SaveTaskRecipeRequest): Promise<TaskRecipe> {
+  return invoke("save_task_recipe", { request });
+}
+
+export async function deleteTaskRecipe(recipeId: string): Promise<string> {
+  return invoke("delete_task_recipe", { recipeId });
+}
+
+export async function approveTask(taskId: string): Promise<Task> {
+  return invoke("approve_task", { taskId });
+}
+
+export async function approveTasks(taskIds: string[]): Promise<Task[]> {
+  return invoke("approve_tasks", { taskIds });
 }
 
 export async function deleteTask(taskId: string): Promise<string> {
@@ -785,6 +835,7 @@ function createMockSettings(): Settings {
 
 let mockSettingsState: Settings | null = null;
 const mockProviderSecrets = new Set<string>();
+let mockTaskRecipes: TaskRecipe[] = [];
 
 function mockSecretIdentity(args?: InvokeArgs): string {
   const providerId = String(args?.providerId ?? "").trim();
@@ -992,6 +1043,8 @@ function createMockTask(): Task {
     output_format: "srt",
     output_name: null,
     strip_chinese_punctuation: false,
+    review_required: false,
+    reviewed_at: null,
     progress: 1,
     status_message: "已完成",
     output_path: "/Users/example/Movies/demo.finalsub.zh.srt",
@@ -1029,7 +1082,40 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
     case "discover_batch_inputs":
       return Array.isArray(args?.paths) ? args.paths : [];
     case "list_tasks":
-      return [createMockTask()];
+      return [
+        {
+          ...createMockTask(),
+          id: "00000000-0000-4000-8000-000000000002",
+          media_name: "needs-review.mp4",
+          status: "review",
+          review_required: true,
+          reviewed_at: null,
+          status_message: "等待人工审核",
+        },
+        createMockTask(),
+      ];
+    case "list_task_recipes":
+      return mockTaskRecipes;
+    case "save_task_recipe": {
+      const request = args?.request as SaveTaskRecipeRequest | undefined;
+      if (!request) throw new Error("Task recipe request is missing");
+      const now = new Date().toISOString();
+      const existing = request.id
+        ? mockTaskRecipes.find((recipe) => recipe.id === request.id)
+        : undefined;
+      const recipe: TaskRecipe = {
+        id: existing?.id ?? `00000000-0000-4000-8000-${String(mockTaskRecipes.length + 101).padStart(12, "0")}`,
+        name: request.name,
+        snapshot: request.snapshot,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      };
+      mockTaskRecipes = [recipe, ...mockTaskRecipes.filter((item) => item.id !== recipe.id)];
+      return recipe;
+    }
+    case "delete_task_recipe":
+      mockTaskRecipes = mockTaskRecipes.filter((recipe) => recipe.id !== args?.recipeId);
+      return String(args?.recipeId ?? "");
     case "get_task_logs":
       return "[dev browser mock] Task log stream is available inside the Tauri app.";
     case "list_translation_providers":
@@ -1124,6 +1210,24 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
     case "resume_task":
     case "retry_task":
       return createMockTask();
+    case "approve_task":
+      return {
+        ...createMockTask(),
+        id: String(args?.taskId ?? createMockTask().id),
+        review_required: true,
+        reviewed_at: new Date().toISOString(),
+        status_message: "审核通过",
+      };
+    case "approve_tasks":
+      return Array.isArray(args?.taskIds)
+        ? args.taskIds.map((taskId) => ({
+            ...createMockTask(),
+            id: String(taskId),
+            review_required: true,
+            reviewed_at: new Date().toISOString(),
+            status_message: "审核通过",
+          }))
+        : [];
     case "create_tasks":
       return Array.isArray(args?.requests)
         ? args.requests.map((request, index) => ({

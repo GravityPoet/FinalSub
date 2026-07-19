@@ -11,6 +11,7 @@ pub enum TaskStatus {
     Running,
     Paused,
     Cancelled,
+    Review,
     Done,
     Error,
 }
@@ -56,6 +57,10 @@ pub struct Task {
     pub output_name: Option<String>,
     #[serde(default)]
     pub strip_chinese_punctuation: bool,
+    #[serde(default)]
+    pub review_required: bool,
+    #[serde(default)]
+    pub reviewed_at: Option<String>,
     pub progress: f32,
     pub status_message: String,
     pub output_path: Option<String>,
@@ -79,6 +84,7 @@ pub struct CreateTaskParams {
     pub output_format: Option<String>,
     pub output_name: Option<String>,
     pub strip_chinese_punctuation: bool,
+    pub review_required: bool,
 }
 
 pub fn create_task(params: CreateTaskParams) -> Task {
@@ -97,6 +103,8 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         output_format: params.output_format.unwrap_or_else(|| "srt".into()),
         output_name: params.output_name,
         strip_chinese_punctuation: params.strip_chinese_punctuation,
+        review_required: params.review_required,
+        reviewed_at: None,
         progress: 0.0,
         status_message: "待处理".into(),
         output_path: None,
@@ -170,6 +178,7 @@ mod tests {
             output_format: Some("srt".into()),
             output_name: None,
             strip_chinese_punctuation: false,
+            review_required: false,
         })
     }
 
@@ -209,5 +218,19 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert!(tasks.contains_key(&existing.id));
         assert!(!tasks.contains_key(&incoming.id));
+    }
+
+    #[test]
+    fn legacy_task_without_review_fields_remains_compatible() {
+        let task = sample_task("legacy");
+        let mut value = serde_json::to_value(task).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("review_required");
+        object.remove("reviewed_at");
+
+        let restored: Task = serde_json::from_value(value).unwrap();
+
+        assert!(!restored.review_required);
+        assert!(restored.reviewed_at.is_none());
     }
 }

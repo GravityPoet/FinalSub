@@ -4,6 +4,7 @@ pub mod batch;
 pub mod glossary;
 pub mod models;
 pub mod opencc;
+pub mod recipes;
 pub mod secrets;
 pub mod settings;
 pub mod subtitle;
