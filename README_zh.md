@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  💡 <strong>FinalSub</strong> 是一款基于 Tauri 2.0 + Rust + React 的桌面字幕工作站，将<strong>本地优先、可选云端的语音识别（ASR）</strong>、<strong>18 个翻译引擎</strong>、<strong>可视化字幕校对</strong>与 <strong>FFmpeg 高质量字幕烧录</strong>融为一体。
+  💡 <strong>FinalSub</strong> 是一款基于 Tauri 2.0 + Rust + React 的桌面字幕工作站，将<strong>本地优先、可选云端的语音识别（ASR）</strong>、<strong>18 个翻译引擎</strong>、<strong>可视化字幕校对</strong>、<strong>可恢复 TTS 配音</strong>与 <strong>FFmpeg 高质量合成</strong>融为一体。
 </p>
 
 ---
@@ -36,7 +36,7 @@
 | **环境门槛** | 🟢 无需配置环境 | ❌ 常需 Python、Conda、Homebrew 与环境变量 | **🟢 本地引擎不依赖 Python 或 uv；FFmpeg 与 Whisper sidecar 随应用提供** |
 | **使用成本** | ❌ 按分钟或按月收费，额度受限，长期使用费用高昂 | 🟢 开源免费，但学习门槛极高 | **🟢 永久免费开源，支持免 API Key 的本地 Ollama 翻译，零成本产出** |
 | **运行性能** | 🟢 占用云端算力，本地省电 | 🟡 纯 CPU 跑效率较低，GPU 配置繁琐 | **🟢 Whisper.cpp 支持 macOS Metal；原生 sherpa-onnx 引擎可完全离线运行** |
-| **全链路闭环** | 🟡 仅转写，导出后需要去其他软件剪辑/烧录 | ❌ 链路断散，需要多个脚本配合运行 | **🟢 音频提取 ➔ 本地转写 ➔ AI 翻译 ➔ 可视化校对 ➔ 一键烧录，一条龙搞定** |
+| **全链路闭环** | 🟡 仅转写，导出后需要去其他软件剪辑/烧录 | ❌ 链路断散，需要多个脚本配合运行 | **🟢 提取 ➔ 转写 ➔ 翻译 ➔ 校对 ➔ 配音 ➔ 合成，一套应用完成** |
 
 ---
 
@@ -67,6 +67,12 @@
 * **极速编辑**：支持字幕行快捷拆分、合并、批量搜索替换。
 * **时间偏移**：支持整轨或选定区域时间轴精准微调，完美解决音画不同步。
 
+### 🎧 可恢复 TTS 配音工作台
+* **本地与云端明确分区**：本地 Kokoro、VITS、ZipVoice 会先扫描并原地复用已有目录；OpenAI 兼容、Azure Speech、ElevenLabs 则放在独立的在线服务区，不会触发模型下载。
+* **原生本地合成**：由 Rust 后端内的 sherpa-onnx 运行，不依赖 Python 或首次启动安装。ZipVoice 可使用本地 WAV 与逐字对应文本，并提供标准/高质量步数；参考音频始终留在设备上。
+* **时间轴会话**：导入 SRT/VTT/ASS/LRC 后，可逐行或批量生成，重启后继续；自动借用静音间隙、保留原字幕重叠，对超过 1.5× 的行显式复核，并导出对齐后的 WAV/MP3。
+* **云端显式授权**：只有保存 endpoint 绑定配置并勾选文本上传授权后才会发送配音文本；API Key 仍只保存在系统 Keychain/凭据管理器。
+
 ### 🎬 FFmpeg 一站式视频合成
 * 内置 Universal 架构静态高版本 `ffmpeg` 侧载程序，无须在系统安装任何音视频依赖。
 * **硬字幕**：将 `SRT`/`VTT`/`ASS` 永久合入画面，支持字体、描边、阴影、背景、九宫格位置、CRF、编码 preset、真实预览、进度和取消。
@@ -86,16 +92,16 @@
 ### 1. 下载与运行
 前往 [Releases 页面](https://github.com/GravityPoet/FinalSub/releases) 下载 macOS Universal 安装包。当前仓库尚未提供经过实机验收的 Windows/Linux 安装包。
 
-### 2. 准备 Whisper 模型
+### 2. 准备本地模型或云端服务
 1. 进入软件的 **“模型管理”** 页面。
-2. 选择所需模型并点击“应用内下载”；下载可取消和断点续传，受管模型会在安装前完成完整性校验。
-3. Whisper 模型也可通过“导入本地”安装；导入后软件会自动扫描并更新状态。
+2. 需要离线 ASR/TTS 时进入 **“本地模型”**。FinalSub 会先扫描现有目录，包括已配置的 Parakeet 与 TTS 目录；结构完整就直接复用，不重复下载或复制。
+3. 只有需要在线 ASR/TTS API 时才进入 **“云端服务”**。这里保存 endpoint 与显式上传授权，不会下载模型。
 
 ### 3. 创建字幕任务
 1. 返回 **“任务”** 页面，拖入您需要制作字幕的视频或音频文件。
 2. 选择识别语言（如 Auto 自动识别或指定语言）。
 3. (可选) 开启“翻译”选项，配置并测试您的 AI 翻译引擎。
-4. 可先套用/保存任务配方并开启人工审核，再点击 **“开始任务”**。在 **“任务队列”** 中查看转写与翻译进度、通过已检查的结果，在 **“字幕校对”** 中微调，再进入 **“视频合成”** 选择硬字幕、软字幕与配音音轨结构。
+4. 可先套用/保存任务配方并开启人工审核，再点击 **“开始任务”**。在 **“任务队列”** 查看转写与翻译、通过已检查结果，在 **“字幕校对”** 微调，在 **“配音工作台”** 生成时间轴音轨，最后进入 **“视频合成”** 选择硬/软字幕与音轨结构。
 
 ---
 
@@ -105,7 +111,7 @@ FinalSub 使用了当前最前沿的桌面开发技术栈，保证了极致的�
 * **核心框架**：[Tauri 2.0](https://tauri.app/) (基于 Rust 的新一代跨平台框架，拒绝 Electron 的臃肿)
 * **前端逻辑**：[React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
 * **样式设计**：[TailwindCSS 4.0](https://tailwindcss.com/)
-* **ASR 引擎**：[Whisper.cpp](https://github.com/ggerganov/whisper.cpp) + [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+* **ASR / TTS 引擎**：[Whisper.cpp](https://github.com/ggerganov/whisper.cpp) + [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 * **媒体引擎**：[FFmpeg 7.x](https://ffmpeg.org/) (已完成签名的静态多架构 Thin Sidecar)
 * **系统安全**：Rust [keyring](https://github.com/hwchen/keyring-rs) 库直连 OS Keychain / 凭据管理器
 
@@ -118,6 +124,7 @@ FinalSub 使用了当前最前沿的桌面开发技术栈，保证了极致的�
 * 默认使用本地 ASR 时，音视频、字幕与任务缓存都保存在本机。
 * 只有当您主动配置云 ASR、勾选音频上传授权并启动对应任务时，软件才会把本机 Silero VAD 切出的语音片段发送到当前配置的 endpoint。
 * 只有当您主动配置并启用云端翻译 API 时，待翻译字幕文本才会发送到对应 endpoint；AI 翻译只会附带当前批次实际命中的术语条目。
+* 只有选择已明确授权的云 TTS 配置时，配音文本才会发送到对应 endpoint；本地 Kokoro、VITS、ZipVoice 合成及 ZipVoice 参考音频始终留在设备上。
 * 自动启动检查更新与匿名崩溃/错误上报均默认关闭。只有您手动检查或开启启动检查时，软件才会访问 GitHub Release 元数据；只有显式开启遥测后才会向 Sentry 发送错误诊断信息。
 
 ---
