@@ -259,7 +259,7 @@ export interface TtsSynthesisResult {
   duration_ms: number;
 }
 
-export type TtsProviderProtocol = "openai-compatible" | "azure-speech" | "elevenlabs";
+export type TtsProviderProtocol = "openai-compatible" | "azure-speech" | "elevenlabs" | "edge-tts";
 
 export interface TtsProviderProfile {
   id: string;
@@ -1094,6 +1094,18 @@ let mockTtsProvidersState: TtsProviderProfile[] = [
     model: "gpt-4o-mini-tts",
     voice: "alloy",
     region: "",
+    text_upload_consent: false,
+    timeout_seconds: 60,
+    request_concurrency: 1,
+  },
+  {
+    id: "00000000-0000-4000-8000-000000000302",
+    name: "Edge TTS 免费试用",
+    protocol: "edge-tts",
+    endpoint: "",
+    model: "",
+    voice: "zh-CN-XiaoxiaoNeural",
+    region: "zh-CN",
     text_upload_consent: false,
     timeout_seconds: 60,
     request_concurrency: 1,

@@ -1,3 +1,4 @@
+use kothok_edge_tts::{EdgeTts, Engine, TtsEvent};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,10 @@ const MAX_PROVIDERS: usize = 32;
 const MAX_TEXT_BYTES: usize = 20_000;
 const MAX_AUDIO_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 16 * 1024;
+const EDGE_PROVIDER_ENDPOINT: &str =
+    "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud";
+const EDGE_OUTAGE_HINT: &str =
+    "Edge TTS 是免费试用通道，依赖非公开 Read Aloud 接口，可能随时断供；请切换本地模型或 OpenAI 兼容服务。";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -23,6 +28,7 @@ pub enum TtsProviderProtocol {
     OpenaiCompatible,
     AzureSpeech,
     Elevenlabs,
+    EdgeTts,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +194,7 @@ pub fn resolved_provider_endpoint(profile: &TtsProviderProfile) -> Result<String
                 .trim_end_matches('/')
                 .to_string())
         }
+        TtsProviderProtocol::EdgeTts => Ok(EDGE_PROVIDER_ENDPOINT.to_string()),
     }
 }
 
@@ -204,10 +211,22 @@ fn validate_profile(profile: &TtsProviderProfile) -> Result<()> {
         ));
     }
     let model = profile.model.trim();
-    if profile.protocol != TtsProviderProtocol::AzureSpeech
-        && (model.is_empty() || model.len() > 160 || model.chars().any(char::is_control))
+    if !matches!(
+        profile.protocol,
+        TtsProviderProtocol::AzureSpeech | TtsProviderProtocol::EdgeTts
+    ) && (model.is_empty() || model.len() > 160 || model.chars().any(char::is_control))
     {
         return Err(FinalSubError::Validation("TTS 模型名称无效".into()));
+    }
+    if profile.protocol == TtsProviderProtocol::EdgeTts {
+        if !profile.endpoint.trim().is_empty() || !model.is_empty() {
+            return Err(FinalSubError::Validation(
+                "Edge TTS 免费试用档不需要 Endpoint 或模型名称".into(),
+            ));
+        }
+        if !profile.region.trim().is_empty() {
+            validate_edge_locale(profile.region.trim())?;
+        }
     }
     validate_voice(&profile.voice)?;
     resolved_provider_endpoint(profile)?;
@@ -230,6 +249,49 @@ fn validate_voice(value: &str) -> Result<String> {
         return Err(FinalSubError::Validation("TTS 音色 ID 无效".into()));
     }
     Ok(voice.to_string())
+}
+
+fn validate_edge_locale(value: &str) -> Result<String> {
+    let locale = value.trim();
+    let mut parts = locale.split('-');
+    let language = parts.next().unwrap_or_default();
+    let region = parts.next().unwrap_or_default();
+    if locale.is_empty()
+        || locale.len() > 35
+        || locale.chars().any(char::is_control)
+        || !(2..=3).contains(&language.len())
+        || !language.bytes().all(|byte| byte.is_ascii_alphabetic())
+        || !(2..=3).contains(&region.len())
+        || !(region.bytes().all(|byte| byte.is_ascii_alphabetic())
+            || region.bytes().all(|byte| byte.is_ascii_digit()))
+        || parts.any(|part| {
+            part.is_empty()
+                || part.len() > 8
+                || !part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+    {
+        return Err(FinalSubError::Validation(
+            "Edge TTS 语言区域必须是类似 zh-CN 或 en-US 的标识".into(),
+        ));
+    }
+    Ok(locale.to_string())
+}
+
+fn edge_locale(profile_locale: &str, voice: &str) -> String {
+    if !profile_locale.trim().is_empty() {
+        return profile_locale.trim().to_string();
+    }
+    let mut parts = voice.split('-');
+    let inferred = match (parts.next(), parts.next()) {
+        (Some(language), Some(region)) => format!("{language}-{region}"),
+        _ => String::new(),
+    };
+    validate_edge_locale(&inferred).unwrap_or_else(|_| "en-US".into())
+}
+
+fn edge_rate(speed: f32) -> String {
+    let percent = ((speed.clamp(0.5, 3.0) - 1.0) * 100.0).round() as i32;
+    format!("{percent:+}%")
 }
 
 pub fn list_providers(app_config_dir: &Path) -> Result<Vec<TtsProviderProfile>> {
@@ -285,9 +347,11 @@ pub fn delete_provider(app_config_dir: &Path, provider_id: &str) -> Result<()> {
         .ok_or_else(|| FinalSubError::Validation("TTS 服务实例不存在".into()))?;
     let profile = store.profiles.remove(index);
     save_store(app_config_dir, &store)?;
-    let endpoint = resolved_provider_endpoint(&profile)?;
-    secrets::delete_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
-        .map_err(FinalSubError::Validation)?;
+    if profile.protocol != TtsProviderProtocol::EdgeTts {
+        let endpoint = resolved_provider_endpoint(&profile)?;
+        secrets::delete_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+            .map_err(FinalSubError::Validation)?;
+    }
     Ok(())
 }
 
@@ -538,6 +602,80 @@ async fn synthesize_elevenlabs(
     response_or_error(response, "ElevenLabs TTS", cancelled).await
 }
 
+fn edge_failure(detail: impl AsRef<str>) -> FinalSubError {
+    let detail = sanitize_provider_detail(detail.as_ref().as_bytes());
+    let suffix = if detail.is_empty() {
+        String::new()
+    } else {
+        format!("：{detail}")
+    };
+    FinalSubError::Validation(format!("Edge TTS 合成失败{suffix}。{EDGE_OUTAGE_HINT}"))
+}
+
+fn collect_edge_audio(events: Vec<TtsEvent>) -> Result<Vec<u8>> {
+    let mut audio = Vec::new();
+    for event in events {
+        let TtsEvent::Audio(chunk) = event else {
+            continue;
+        };
+        let next_len = audio
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| FinalSubError::Validation("Edge TTS 音频过大".into()))?;
+        if next_len > MAX_AUDIO_BYTES {
+            return Err(FinalSubError::Validation(format!(
+                "Edge TTS 音频超过 {} 限制",
+                format_size_limit(MAX_AUDIO_BYTES)
+            )));
+        }
+        audio.extend_from_slice(&chunk);
+    }
+    if audio.is_empty() {
+        return Err(edge_failure("服务端没有返回音频"));
+    }
+    Ok(audio)
+}
+
+async fn synthesize_edge(
+    profile: &TtsProviderProfile,
+    text: &str,
+    voice: &str,
+    speed: f32,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Vec<u8>> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(FinalSubError::Validation("配音已取消".into()));
+    }
+    // kothok-edge-tts 使用 rustls ring provider；重复调用是幂等的。
+    kothok_edge_tts::init_tls();
+    let locale = edge_locale(&profile.region, voice);
+    let rate = edge_rate(speed);
+    let synthesis = EdgeTts.synthesize(text, voice, &rate, &locale);
+    let result = tokio::select! {
+        result = tokio::time::timeout(
+            Duration::from_secs(profile.timeout_seconds as u64),
+            synthesis,
+        ) => result,
+        _ = wait_cancelled(cancelled.clone()) => {
+            return Err(FinalSubError::Validation("配音已取消".into()));
+        }
+    };
+    let events = match result {
+        Ok(Ok(events)) => events,
+        Ok(Err(error)) => return Err(edge_failure(error.to_string())),
+        Err(_) => {
+            return Err(edge_failure(format!(
+                "请求超过 {} 秒",
+                profile.timeout_seconds
+            )));
+        }
+    };
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(FinalSubError::Validation("配音已取消".into()));
+    }
+    collect_edge_audio(events)
+}
+
 fn write_pcm_wav(path: &Path, pcm: &[u8], sample_rate: u32) -> Result<u64> {
     if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
         return Err(FinalSubError::Validation(
@@ -658,12 +796,6 @@ pub async fn synthesize_cloud(
             "该在线 TTS 实例尚未授权发送配音文本".into(),
         ));
     }
-    let endpoint = resolved_provider_endpoint(&profile)?;
-    let api_key =
-        secrets::get_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
-            .map_err(FinalSubError::Validation)?
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| FinalSubError::Validation("该在线 TTS 实例尚未保存 API Key".into()))?;
     let voice = validate_voice(
         request
             .voice
@@ -673,9 +805,20 @@ pub async fn synthesize_cloud(
             .unwrap_or(&profile.voice),
     )?;
     let (output, temporary) = output_paths(&request.output_path)?;
-    let client = http_client(profile.timeout_seconds)?;
     let audio = match profile.protocol {
+        TtsProviderProtocol::EdgeTts => {
+            synthesize_edge(&profile, &text, &voice, speed, cancelled.clone()).await?
+        }
         TtsProviderProtocol::OpenaiCompatible => {
+            let endpoint = resolved_provider_endpoint(&profile)?;
+            let api_key =
+                secrets::get_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+                    .map_err(FinalSubError::Validation)?
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        FinalSubError::Validation("该在线 TTS 实例尚未保存 API Key".into())
+                    })?;
+            let client = http_client(profile.timeout_seconds)?;
             synthesize_openai(
                 &client,
                 &profile,
@@ -688,6 +831,15 @@ pub async fn synthesize_cloud(
             .await?
         }
         TtsProviderProtocol::AzureSpeech => {
+            let endpoint = resolved_provider_endpoint(&profile)?;
+            let api_key =
+                secrets::get_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+                    .map_err(FinalSubError::Validation)?
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        FinalSubError::Validation("该在线 TTS 实例尚未保存 API Key".into())
+                    })?;
+            let client = http_client(profile.timeout_seconds)?;
             synthesize_azure(
                 &client,
                 &profile,
@@ -700,6 +852,15 @@ pub async fn synthesize_cloud(
             .await?
         }
         TtsProviderProtocol::Elevenlabs => {
+            let endpoint = resolved_provider_endpoint(&profile)?;
+            let api_key =
+                secrets::get_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+                    .map_err(FinalSubError::Validation)?
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        FinalSubError::Validation("该在线 TTS 实例尚未保存 API Key".into())
+                    })?;
+            let client = http_client(profile.timeout_seconds)?;
             synthesize_elevenlabs(
                 &client,
                 &profile,
@@ -743,11 +904,18 @@ mod tests {
                 TtsProviderProtocol::OpenaiCompatible => "https://api.openai.com/v1".into(),
                 TtsProviderProtocol::AzureSpeech => String::new(),
                 TtsProviderProtocol::Elevenlabs => "https://api.elevenlabs.io/v1".into(),
+                TtsProviderProtocol::EdgeTts => String::new(),
             },
-            model: "model".into(),
+            model: if protocol == TtsProviderProtocol::EdgeTts {
+                String::new()
+            } else {
+                "model".into()
+            },
             voice: "zh-CN-XiaoxiaoNeural".into(),
             region: if protocol == TtsProviderProtocol::AzureSpeech {
                 "japaneast".into()
+            } else if protocol == TtsProviderProtocol::EdgeTts {
+                "zh-CN".into()
             } else {
                 String::new()
             },
@@ -819,5 +987,78 @@ mod tests {
         let wav = std::fs::read(path).unwrap();
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(wav_duration_ms(&wav), Some(1000));
+    }
+
+    #[test]
+    fn edge_provider_is_zero_config_and_uses_fixed_endpoint() {
+        let profile = save_provider(
+            TempDir::new().unwrap().path(),
+            request(TtsProviderProtocol::EdgeTts),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_provider_endpoint(&profile).unwrap(),
+            EDGE_PROVIDER_ENDPOINT
+        );
+        assert_eq!(profile.endpoint, "");
+        assert_eq!(profile.model, "");
+    }
+
+    #[test]
+    fn edge_rate_and_locale_are_bounded() {
+        assert_eq!(edge_rate(1.0), "+0%");
+        assert_eq!(edge_rate(4.0), "+200%");
+        assert_eq!(edge_rate(0.25), "-50%");
+        assert_eq!(edge_locale("", "zh-CN-XiaoxiaoNeural"), "zh-CN");
+        assert_eq!(edge_locale("ja-JP", "en-US-AriaNeural"), "ja-JP");
+        assert_eq!(edge_locale("", "unknown"), "en-US");
+        assert!(validate_edge_locale("zh").is_err());
+        assert!(validate_edge_locale("zh_CN").is_err());
+    }
+
+    #[test]
+    fn edge_audio_collection_is_bounded_and_ignores_metadata() {
+        let events = vec![
+            TtsEvent::WordBoundary {
+                offset: 0,
+                duration: 1,
+                text: "hello".into(),
+            },
+            TtsEvent::Audio(vec![1, 2]),
+            TtsEvent::Audio(vec![3, 4]),
+            TtsEvent::TurnEnd,
+        ];
+        assert_eq!(collect_edge_audio(events).unwrap(), vec![1, 2, 3, 4]);
+        assert!(collect_edge_audio(vec![TtsEvent::TurnEnd]).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FINALSUB_EDGE_FFMPEG and live Edge Read Aloud access"]
+    async fn edge_provider_real_synthesis_writes_pcm_wav() {
+        let ffmpeg = PathBuf::from(
+            std::env::var("FINALSUB_EDGE_FFMPEG")
+                .expect("set FINALSUB_EDGE_FFMPEG to the ffmpeg executable"),
+        );
+        let config = TempDir::new().unwrap();
+        let profile = save_provider(config.path(), request(TtsProviderProtocol::EdgeTts)).unwrap();
+        let output = config.path().join("edge-preview.wav");
+        let result = synthesize_cloud(
+            config.path(),
+            &ffmpeg,
+            CloudTtsSynthesisRequest {
+                provider_id: profile.id,
+                text: "Hello from FinalSub.".into(),
+                voice: None,
+                speed: Some(1.0),
+                output_path: output.to_string_lossy().to_string(),
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.sample_rate, 24_000);
+        assert!(result.duration_ms > 0);
+        assert!(output.exists());
+        assert!(wav_duration_ms(&std::fs::read(output).unwrap()).is_some());
     }
 }

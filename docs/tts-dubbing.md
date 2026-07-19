@@ -33,13 +33,15 @@ ZipVoice 额外要求：
 - 参考文本必须逐字对应，不超过 4,000 字节；
 - 当前工作台提供 4 步“标准”和 8 步“高质量”两个档位。
 
-云端 TTS 当前支持 OpenAI-compatible、Azure Speech 与 ElevenLabs：
+云端 TTS 当前支持 OpenAI-compatible、Azure Speech、ElevenLabs 与 Edge TTS 免费试用档：
 
 - endpoint 只允许 HTTP(S)，禁用 redirects，拒绝 URL 内嵌账号密码；
 - API Key 使用 `provider id + endpoint + field` 绑定的系统 Keychain 身份；
 - 未勾选文本上传授权时，后端拒绝合成；
 - 音频响应最多 64 MB，错误体最多 16 KB 并移除控制字符；
 - 返回音频统一转换为 24 kHz 单声道 PCM WAV，再进入时间轴层。
+- Edge TTS 不需要 API Key 或模型下载，语言区域可从 voice ID 推断；它使用固定版本的 kothok-edge-tts 访问 Microsoft Edge Read Aloud 非公开 WebSocket，仅作为不承诺稳定性的试用通道。请求同样受超时、取消和 64 MB 音频上限保护，断供错误会引导切换本地模型或 OpenAI 兼容服务。
+- Edge 通道明确标记为在线文本上传；公开或商业发布应优先使用本地模型或 Azure 等服务条款清晰的接口，FinalSub 不把 Edge Read Aloud 当作稳定的商用 API。
 
 ## 受管下载与生命周期
 
@@ -78,7 +80,7 @@ ZipVoice 额外要求：
 ## 当前未覆盖
 
 - ZipVoice 目前可直接使用参考 WAV 与文本合成，但尚无克隆音色实体、录音、自动转写、选段波形、质量评分、降噪、重命名/删除、导入导出与 A/B 试听管理。
-- 尚未接入 Edge TTS、火山豆包 TTS、火山声音复刻与 ElevenLabs IVC 管理。
+- 尚未接入火山豆包 TTS、火山声音复刻与 ElevenLabs IVC 管理。
 - 工作台尚无视频播放联动、逐行文本编辑、逐行音色覆盖和同步字幕重写。
 - 本地 TTS 仍在主 Rust 进程内运行，尚无独立 worker 崩溃隔离和多进程并行。
 - 配音会话尚未纳入 ASR → 翻译 → 审核 → 配音 → compose 的统一阶段编排。
@@ -101,4 +103,12 @@ FINALSUB_TTS_VOCODER=/path/to/vocos_24khz.onnx \
   cargo test --lib core::tts::download::tests::official_zipvoice_archive_installs_with_vocoder -- --ignored
 ```
 
+Edge TTS 的真实在线验收（会访问 Microsoft Edge Read Aloud 试用通道，并需要本机 FFmpeg）：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub
+FINALSUB_EDGE_FFMPEG="$(command -v ffmpeg)" \
+  cargo test --manifest-path src-tauri/Cargo.toml --lib \
+  core::tts::providers::tests::edge_provider_real_synthesis_writes_pcm_wav -- --ignored
+```
 真实付费云服务与本地 TTS 模型仍需在具备相应账号/模型的机器上做最终音质 E2E；单元测试与 FFmpeg 混音冒烟不能替代该验收。
