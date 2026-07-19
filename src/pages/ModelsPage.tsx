@@ -13,7 +13,7 @@ import {
   type AsrModelInfo,
   type ModelDownloadProgress,
 } from "../lib/tauri";
-import { Download, CheckCircle, AlertCircle, Clock, Trash2, RefreshCw, XCircle, FileInput } from "lucide-react";
+import { Download, CheckCircle, AlertCircle, Clock, Trash2, RefreshCw, XCircle, FileInput, Cloud, HardDrive } from "lucide-react";
 
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -101,6 +101,7 @@ function formatDownloadPhase(phase: ModelDownloadProgress["phase"], t: ReturnTyp
 
 export default function ModelsPage() {
   const { t } = useI18n();
+  const [activeSection, setActiveSection] = useState<"local" | "cloud">("local");
   const [models, setModels] = useState<AsrModelInfo[]>([]);
   const [downloads, setDownloads] = useState<Record<string, ModelDownloadProgress>>({});
   const [loading, setLoading] = useState(true);
@@ -267,20 +268,81 @@ export default function ModelsPage() {
     (acc[model.engine_id] ??= []).push(model);
     return acc;
   }, {});
+  Object.values(engineGroups).forEach((engineModels) => {
+    engineModels.sort(
+      (left, right) => Number(right.status === "downloaded") - Number(left.status === "downloaded")
+    );
+  });
+  const installedModels = visibleModels.filter((model) => model.status === "downloaded");
+  const availableModelsCount = visibleModels.length - installedModels.length;
 
   return (
     <div className="page-shell space-y-7">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("models.title")}</h2>
-        <Button
-          onClick={refresh}
-          variant="secondary"
-          size="sm"
-          className="self-start sm:self-auto"
+        {activeSection === "local" && (
+          <Button
+            onClick={refresh}
+            variant="secondary"
+            size="sm"
+            className="self-start sm:self-auto"
+          >
+            <RefreshCw size={15} />
+            <span>{t("models.refreshLocal")}</span>
+          </Button>
+        )}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2" role="tablist" aria-label={t("models.sectionAria")}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSection === "local"}
+          onClick={() => setActiveSection("local")}
+          className={`rounded-2xl border p-4 text-left transition ${
+            activeSection === "local"
+              ? "liquid-selected border-brand/30"
+              : "border-border-default bg-surface-card hover:border-border-strong hover:bg-surface-overlay"
+          }`}
         >
-          <RefreshCw size={15} />
-          <span>{t("models.refresh")}</span>
-        </Button>
+          <span className="flex items-start gap-3">
+            <span className="liquid-icon grid h-10 w-10 shrink-0 place-items-center rounded-xl text-brand">
+              <HardDrive size={19} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-display text-base font-semibold text-text-primary">{t("models.localTab")}</span>
+                <Badge variant="success">{t("models.installedCount", { count: installedModels.length })}</Badge>
+              </span>
+              <span className="mt-1 block text-sm leading-5 text-text-tertiary">{t("models.localTabDesc")}</span>
+            </span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSection === "cloud"}
+          onClick={() => setActiveSection("cloud")}
+          className={`rounded-2xl border p-4 text-left transition ${
+            activeSection === "cloud"
+              ? "liquid-selected border-brand/30"
+              : "border-border-default bg-surface-card hover:border-border-strong hover:bg-surface-overlay"
+          }`}
+        >
+          <span className="flex items-start gap-3">
+            <span className="liquid-icon grid h-10 w-10 shrink-0 place-items-center rounded-xl text-brand">
+              <Cloud size={19} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-display text-base font-semibold text-text-primary">{t("models.cloudTab")}</span>
+                <Badge variant="warning">{t("models.cloudOnDemand")}</Badge>
+              </span>
+              <span className="mt-1 block text-sm leading-5 text-text-tertiary">{t("models.cloudTabDesc")}</span>
+            </span>
+          </span>
+        </button>
       </div>
 
       {message && (
@@ -295,15 +357,48 @@ export default function ModelsPage() {
         </div>
       )}
 
-      <CloudAsrPanel onSaved={refresh} />
+      {activeSection === "cloud" ? (
+        <div className="space-y-4" role="tabpanel">
+          <div className="rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm leading-6 text-text-secondary">
+            <span className="font-semibold text-text-primary">{t("models.cloudTabNoticeTitle")}</span>{" "}
+            {t("models.cloudTabNotice")}
+          </div>
+          <CloudAsrPanel onSaved={refresh} />
+        </div>
+      ) : (
+        <div className="space-y-7" role="tabpanel">
+          <Card className="p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h3 className="font-display text-h3 font-semibold text-text-primary">{t("models.localOverviewTitle")}</h3>
+                <p className="mt-1 text-sm leading-6 text-text-tertiary">{t("models.localOverviewDesc")}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="success">{t("models.installedCount", { count: installedModels.length })}</Badge>
+                <Badge variant="default">{t("models.availableCount", { count: availableModelsCount })}</Badge>
+              </div>
+            </div>
+            {installedModels.length > 0 ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {installedModels.map((model) => (
+                  <span key={model.id} className="inline-flex items-center gap-1.5 rounded-xl border border-success/20 bg-success/10 px-3 py-1.5 text-sm font-medium text-text-primary">
+                    <CheckCircle size={14} className="text-success" />
+                    {model.name}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-text-tertiary">{t("models.noInstalledLocal")}</p>
+            )}
+          </Card>
 
-      {Object.entries(engineGroups).map(([engineId, engineModels]) => (
-        <div key={engineId} className="space-y-4">
-          <h3 className="font-display text-h3 font-semibold text-text-secondary">
-            {engineLabel(engineId)}
-          </h3>
-          <div className="grid gap-3.5">
-            {engineModels.map((model) => {
+          {Object.entries(engineGroups).map(([engineId, engineModels]) => (
+            <div key={engineId} className="space-y-4">
+              <h3 className="font-display text-h3 font-semibold text-text-secondary">
+                {engineLabel(engineId)}
+              </h3>
+              <div className="grid gap-3.5">
+                {engineModels.map((model) => {
               const downloadInfo = downloads[model.id];
               const isDownloading = downloadInfo?.status === "downloading";
               const showProgress = isDownloading && downloadInfo;
@@ -448,10 +543,22 @@ export default function ModelsPage() {
                   )}
                 </Card>
               );
-            })}
-          </div>
+                })}
+              </div>
+            </div>
+          ))}
+
+          <Card className="p-5">
+            <h3 className="font-display text-h3 font-semibold text-text-primary">{t("models.localStorageTitle")}</h3>
+            <div className="mt-3 space-y-1.5 text-sm leading-6 text-text-tertiary">
+              <p>{t("models.pathInfo")}{modelsPath}</p>
+              <p>{t("models.parakeetPathInfo")}{parakeetModelsPath}</p>
+              <p>{t("models.pathDesc")}</p>
+              <p>{t("models.parakeetDesc")}</p>
+            </div>
+          </Card>
         </div>
-      ))}
+      )}
 
       {pendingDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -490,13 +597,6 @@ export default function ModelsPage() {
           </Card>
         </div>
       )}
-
-      <div className="mt-8 space-y-1.5 text-sm leading-6 text-text-tertiary">
-        <p>{t("models.pathInfo")}{modelsPath}</p>
-        <p>{t("models.parakeetPathInfo")}{parakeetModelsPath}</p>
-        <p>{t("models.pathDesc")}</p>
-        <p>{t("models.parakeetDesc")}</p>
-      </div>
     </div>
   );
 }
