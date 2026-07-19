@@ -181,7 +181,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
 - 浏览器 QA（本地 Vite + Playwright）：新建任务已移除旧 `hero-panel`，1440×900 下“选择音视频”距视口顶部约 209 px，390×844 下约 312 px，核心入口不再被品牌大卡片挤走；配音页实测修改第 1 行文本与云端音色、保存后回到待合成、重新生成后已对齐；模型页本地/云端顶层分区、本地 TTS 外部目录“直接复用”、应用内下载/选择已有目录/官方来源、ZipVoice 双工件提示均可见；云端页明确显示“不是下载区 / 不会下载模型”；在线 TTS 面板可见 Edge“免费试用 / 无需 API Key / 仍需文本授权 / 可能断供”分层提示；1440×900 与 390×844 无横向溢出，控制台无 error/warning。
-- 当前 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与运行进程路径唯一通过。DMG SHA-256 `6838e5e8c93ade2fd88fbb9e576378d67943906ef26b7fbb6b2418c15d1919cd`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-055358/FinalSub.app.zip` 并通过完整性检查。
+- 当前提交 `81105e0` 的 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与运行进程路径唯一通过。DMG SHA-256 `6fd6a5a1df72d66f6d904c7dcef5e16191916a87a7cf785c1278a73b84ff65c0`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-081117/FinalSub.app.zip` 并通过完整性检查。
 
 ## 12. 新鲜验证（2026-07-19）
 
