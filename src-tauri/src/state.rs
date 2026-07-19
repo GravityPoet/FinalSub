@@ -14,6 +14,8 @@ pub struct AppState {
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
     pub burn_controls:
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    pub tts_controls: Arc<RwLock<std::collections::HashMap<String, Arc<AtomicBool>>>>,
+    pub tts_engines: crate::core::tts::TtsEngineCache,
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
     pub task_semaphore: Arc<std::sync::Mutex<Arc<tokio::sync::Semaphore>>>,
@@ -48,6 +50,8 @@ impl AppState {
             task_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             model_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             burn_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            tts_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            tts_engines: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,
             task_semaphore,

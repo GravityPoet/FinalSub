@@ -20,6 +20,8 @@ import { Card } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { Progress } from "../components/ui/Progress";
 import { CloudAsrPanel } from "../components/CloudAsrPanel";
+import { LocalTtsModelsPanel } from "../components/LocalTtsModelsPanel";
+import { CloudTtsPanel } from "../components/CloudTtsPanel";
 
 function StatusBadge({
   status,
@@ -110,6 +112,7 @@ export default function ModelsPage() {
   const [modelsPath, setModelsPath] = useState("~/Tools/Local-LLM/whisper-models");
   const [parakeetModelsPath, setParakeetModelsPath] = useState("~/Tools/Local-LLM/parakeet-models");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [localRefreshSignal, setLocalRefreshSignal] = useState(0);
 
   const engineLabel = (engineId: string): string => {
     const labels: Record<string, string> = {
@@ -134,7 +137,10 @@ export default function ModelsPage() {
         setParakeetModelsPath(settings.parakeet_models_path);
       })
       .catch((err) => setMessage({ type: "err", text: `${t("models.scanFailed")}${err}` }))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setLocalRefreshSignal((value) => value + 1);
+      });
   };
 
   useEffect(() => {
@@ -312,7 +318,7 @@ export default function ModelsPage() {
             <span className="min-w-0 flex-1">
               <span className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-display text-base font-semibold text-text-primary">{t("models.localTab")}</span>
-                <Badge variant="success">{t("models.installedCount", { count: installedModels.length })}</Badge>
+                <Badge variant="success">{t("models.localOnDevice")}</Badge>
               </span>
               <span className="mt-1 block text-sm leading-5 text-text-tertiary">{t("models.localTabDesc")}</span>
             </span>
@@ -364,6 +370,7 @@ export default function ModelsPage() {
             {t("models.cloudTabNotice")}
           </div>
           <CloudAsrPanel onSaved={refresh} />
+          <CloudTtsPanel />
         </div>
       ) : (
         <div className="space-y-7" role="tabpanel">
@@ -391,6 +398,11 @@ export default function ModelsPage() {
               <p className="mt-4 text-sm text-text-tertiary">{t("models.noInstalledLocal")}</p>
             )}
           </Card>
+
+          <div>
+            <h3 className="font-display text-h3 font-semibold text-text-secondary">{t("models.asrLocalTitle")}</h3>
+            <p className="mt-1 text-sm leading-6 text-text-tertiary">{t("models.asrLocalDesc")}</p>
+          </div>
 
           {Object.entries(engineGroups).map(([engineId, engineModels]) => (
             <div key={engineId} className="space-y-4">
@@ -547,6 +559,8 @@ export default function ModelsPage() {
               </div>
             </div>
           ))}
+
+          <LocalTtsModelsPanel refreshSignal={localRefreshSignal} />
 
           <Card className="p-5">
             <h3 className="font-display text-h3 font-semibold text-text-primary">{t("models.localStorageTitle")}</h3>

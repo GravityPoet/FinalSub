@@ -1,4 +1,4 @@
-import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import {
   listen as tauriListen,
   type EventCallback,
@@ -15,6 +15,7 @@ import {
 } from "@tauri-apps/plugin-dialog";
 import {
   openPath as tauriOpenPath,
+  openUrl as tauriOpenUrl,
   revealItemInDir as tauriRevealItemInDir,
 } from "@tauri-apps/plugin-opener";
 import {
@@ -133,6 +134,21 @@ export async function openPath(path: string, openWith?: string): Promise<void> {
   throw new Error(`Tauri opener runtime is unavailable for path: ${path}`);
 }
 
+export async function openUrl(url: string): Promise<void> {
+  if (isTauriRuntime()) {
+    return tauriOpenUrl(url);
+  }
+  if (import.meta.env.DEV) {
+    console.info(`[dev browser mock] openUrl(${url})`);
+    return;
+  }
+  throw new Error(`Tauri opener runtime is unavailable for URL: ${url}`);
+}
+
+export function fileAssetUrl(path: string): string {
+  return isTauriRuntime() ? convertFileSrc(path) : "";
+}
+
 export async function revealItemInDir(path: string | string[]): Promise<void> {
   if (isTauriRuntime()) {
     return tauriRevealItemInDir(path);
@@ -194,6 +210,137 @@ export interface AsrModelInfo {
   status: "available" | "downloading" | "downloaded" | "not-ready" | { error: string };
 }
 
+export type TtsModelFamily = "kokoro" | "vits" | "zipvoice";
+export type TtsModelStatus = "ready" | "not-installed" | "incomplete";
+export type TtsModelLocation = "managed" | "external";
+
+export interface TtsVoice {
+  id: string;
+  sid: number;
+  label: string;
+  label_en: string;
+  language: string;
+  gender: string;
+}
+
+export interface TtsModelInfo {
+  id: string;
+  family: TtsModelFamily;
+  name: string;
+  description: string;
+  languages: string[];
+  size_mb: number;
+  download_url: string;
+  extra_download_urls: string[];
+  sample_rate: number;
+  default_voice_id: string;
+  clone_only: boolean;
+  voices: TtsVoice[];
+  status: TtsModelStatus;
+  path: string | null;
+  location: TtsModelLocation | null;
+  missing_files: string[];
+}
+
+export interface LocalTtsSynthesisRequest {
+  model_id: string;
+  text: string;
+  voice_id?: string;
+  speed?: number;
+  output_path: string;
+  reference_audio_path?: string;
+  reference_text?: string;
+  num_steps?: number;
+}
+
+export interface TtsSynthesisResult {
+  output_path: string;
+  sample_rate: number;
+  duration_ms: number;
+}
+
+export type TtsProviderProtocol = "openai-compatible" | "azure-speech" | "elevenlabs";
+
+export interface TtsProviderProfile {
+  id: string;
+  name: string;
+  protocol: TtsProviderProtocol;
+  endpoint: string;
+  model: string;
+  voice: string;
+  region: string;
+  text_upload_consent: boolean;
+  timeout_seconds: number;
+  request_concurrency: number;
+}
+
+export interface SaveTtsProviderRequest extends Omit<TtsProviderProfile, "id"> {
+  id?: string;
+}
+
+export interface CloudTtsSynthesisRequest {
+  provider_id: string;
+  text: string;
+  voice?: string;
+  speed?: number;
+  output_path: string;
+}
+
+export type DubbingCueStatus = "pending" | "synthesizing" | "ready" | "overlong" | "accepted" | "failed";
+export type DubbingEngineSelection =
+  | { kind: "local"; model_id: string }
+  | { kind: "cloud"; provider_id: string };
+
+export interface DubbingRunConfig {
+  engine: DubbingEngineSelection;
+  voice: string;
+  global_speed: number;
+  reference_audio_path: string | null;
+  reference_text: string | null;
+  num_steps: number | null;
+}
+
+export interface DubbingCue {
+  index: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  status: DubbingCueStatus;
+  overlap: boolean;
+  voice_id: string | null;
+  synthesized_ms: number | null;
+  applied_speed: number | null;
+  slot_ms: number;
+  ratio: number | null;
+  wav_path: string | null;
+  error: string | null;
+}
+
+export interface DubbingSession {
+  version: number;
+  id: string;
+  subtitle_path: string;
+  subtitle_hash: string;
+  video_path: string | null;
+  cues: DubbingCue[];
+  last_config: DubbingRunConfig | null;
+  output_path: string | null;
+  created_at: string;
+  updated_at: string;
+  source_changed: boolean;
+}
+
+export interface DubbingSynthesizeCueRequest {
+  session_id: string;
+  cue_index: number;
+  engine: DubbingEngineSelection;
+  voice: string;
+  global_speed: number;
+  reference_audio_path?: string;
+  reference_text?: string;
+  num_steps?: number;
+}
+
 export type TranslationContentMode =
   | "target-only"
   | "source-and-target"
@@ -244,6 +391,95 @@ export async function listAsrModels(): Promise<AsrModelInfo[]> {
 
 export async function scanModels(): Promise<AsrModelInfo[]> {
   return invoke("scan_models");
+}
+
+export async function listTtsModels(): Promise<TtsModelInfo[]> {
+  return invoke("list_tts_models");
+}
+
+export async function registerTtsModelPath(
+  modelId: string,
+  sourcePath: string,
+): Promise<TtsModelInfo> {
+  return invoke("register_tts_model_path", { modelId, sourcePath });
+}
+
+export async function forgetTtsModelPath(modelId: string): Promise<void> {
+  return invoke("forget_tts_model_path", { modelId });
+}
+
+export async function setTtsModelsRoot(modelsRoot: string): Promise<TtsModelInfo[]> {
+  return invoke("set_tts_models_root", { modelsRoot });
+}
+
+export async function synthesizeLocalTts(
+  generationId: string,
+  request: LocalTtsSynthesisRequest,
+): Promise<TtsSynthesisResult> {
+  return invoke("synthesize_local_tts", { generationId, request });
+}
+
+export async function cancelLocalTts(generationId: string): Promise<boolean> {
+  return invoke("cancel_local_tts", { generationId });
+}
+
+export async function listTtsProviders(): Promise<TtsProviderProfile[]> {
+  return invoke("list_tts_providers");
+}
+
+export async function saveTtsProvider(
+  request: SaveTtsProviderRequest,
+): Promise<TtsProviderProfile> {
+  return invoke("save_tts_provider", { request });
+}
+
+export async function deleteTtsProvider(providerId: string): Promise<void> {
+  return invoke("delete_tts_provider", { providerId });
+}
+
+export async function synthesizeCloudTts(
+  generationId: string,
+  request: CloudTtsSynthesisRequest,
+): Promise<TtsSynthesisResult> {
+  return invoke("synthesize_cloud_tts", { generationId, request });
+}
+
+export async function testTtsProvider(providerId: string): Promise<TtsSynthesisResult> {
+  return invoke("test_tts_provider", { providerId });
+}
+
+export async function createDubbingSession(
+  subtitlePath: string,
+  videoPath?: string,
+): Promise<DubbingSession> {
+  return invoke("create_dubbing_session", { subtitlePath, videoPath });
+}
+
+export async function getDubbingSession(sessionId: string): Promise<DubbingSession> {
+  return invoke("get_dubbing_session", { sessionId });
+}
+
+export async function synthesizeDubbingCue(
+  generationId: string,
+  request: DubbingSynthesizeCueRequest,
+): Promise<DubbingSession> {
+  return invoke("synthesize_dubbing_cue", { generationId, request });
+}
+
+export async function acceptDubbingOverflow(
+  generationId: string,
+  sessionId: string,
+  cueIndex: number,
+): Promise<DubbingSession> {
+  return invoke("accept_dubbing_overflow", { generationId, sessionId, cueIndex });
+}
+
+export async function exportDubbingAudio(
+  generationId: string,
+  sessionId: string,
+  outputPath: string,
+): Promise<DubbingSession> {
+  return invoke("export_dubbing_audio", { generationId, sessionId, outputPath });
 }
 
 export async function discoverBatchInputs(
@@ -836,6 +1072,61 @@ function createMockSettings(): Settings {
 let mockSettingsState: Settings | null = null;
 const mockProviderSecrets = new Set<string>();
 let mockTaskRecipes: TaskRecipe[] = [];
+let mockTtsModelsState: TtsModelInfo[] | null = null;
+let mockTtsProvidersState: TtsProviderProfile[] = [
+  {
+    id: "00000000-0000-4000-8000-000000000301",
+    name: "OpenAI TTS 1",
+    protocol: "openai-compatible",
+    endpoint: "https://api.openai.com/v1",
+    model: "gpt-4o-mini-tts",
+    voice: "alloy",
+    region: "",
+    text_upload_consent: false,
+    timeout_seconds: 60,
+    request_concurrency: 1,
+  },
+];
+let mockDubbingSessionState: DubbingSession | null = null;
+
+function createMockDubbingSession(subtitlePath = "/Users/example/Subtitles/demo.srt"): DubbingSession {
+  const now = new Date().toISOString();
+  const texts = [
+    "欢迎来到 FinalSub 配音工作台。",
+    "这一行故意更长，用来展示超过时间槽位后的人工确认流程。",
+    "本地模型不会上传文本。",
+    "在线服务只有授权后才会发送文本。",
+    "重叠字幕会保留原时间轴并分轨混合。",
+    "最后导出 WAV 或 MP3。",
+  ];
+  return {
+    version: 1,
+    id: "00000000-0000-4000-8000-000000000401",
+    subtitle_path: subtitlePath,
+    subtitle_hash: "dev-browser-mock",
+    video_path: "/Users/example/Movies/demo.mp4",
+    cues: texts.map((text, index) => ({
+      index,
+      start_ms: 1000 + index * 2600,
+      end_ms: 3100 + index * 2600,
+      text,
+      status: "pending",
+      overlap: index === 3,
+      voice_id: null,
+      synthesized_ms: null,
+      applied_speed: null,
+      slot_ms: 2600,
+      ratio: null,
+      wav_path: null,
+      error: null,
+    })),
+    last_config: null,
+    output_path: null,
+    created_at: now,
+    updated_at: now,
+    source_changed: false,
+  };
+}
 
 function mockSecretIdentity(args?: InvokeArgs): string {
   const providerId = String(args?.providerId ?? "").trim();
@@ -847,6 +1138,72 @@ function mockSecretIdentity(args?: InvokeArgs): string {
 function currentMockSettings(): Settings {
   mockSettingsState ??= createMockSettings();
   return mockSettingsState;
+}
+
+function createMockTtsModels(): TtsModelInfo[] {
+  return [
+    {
+      id: "kokoro-multi-lang-v1_1",
+      family: "kokoro",
+      name: "Kokoro 多语 v1.1",
+      description: "中英双语、103 个内置音色，原生 sherpa-onnx 离线合成",
+      languages: ["zh", "en"],
+      size_mb: 217,
+      download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2",
+      extra_download_urls: [],
+      sample_rate: 24000,
+      default_voice_id: "10",
+      clone_only: false,
+      voices: [
+        { id: "10", sid: 10, label: "中文女声 08", label_en: "Chinese Female 08", language: "zh", gender: "female" },
+      ],
+      status: "ready",
+      path: "/Users/example/Local-LLM/tts/kokoro-multi-lang-v1_1",
+      location: "external",
+      missing_files: [],
+    },
+    {
+      id: "vits-zh-aishell3",
+      family: "vits",
+      name: "VITS 中文 AIShell3",
+      description: "174 个中文说话人，原生 sherpa-onnx 离线合成",
+      languages: ["zh"],
+      size_mb: 227,
+      download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-icefall-zh-aishell3.tar.bz2",
+      extra_download_urls: [],
+      sample_rate: 8000,
+      default_voice_id: "0",
+      clone_only: false,
+      voices: [],
+      status: "not-installed",
+      path: null,
+      location: null,
+      missing_files: ["model.onnx", "tokens.txt", "lexicon.txt"],
+    },
+    {
+      id: "zipvoice-distill-zh-en",
+      family: "zipvoice",
+      name: "ZipVoice 中英声音克隆",
+      description: "本地零样本声音克隆，无内置音色；参考音频不会离开设备",
+      languages: ["zh", "en"],
+      size_mb: 217,
+      download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2",
+      extra_download_urls: ["https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx"],
+      sample_rate: 24000,
+      default_voice_id: "",
+      clone_only: true,
+      voices: [],
+      status: "not-installed",
+      path: null,
+      location: null,
+      missing_files: ["encoder.int8.onnx", "decoder.int8.onnx", "vocos_24khz.onnx"],
+    },
+  ];
+}
+
+function currentMockTtsModels(): TtsModelInfo[] {
+  mockTtsModelsState ??= createMockTtsModels();
+  return mockTtsModelsState;
 }
 
 function createMockModels(): AsrModelInfo[] {
@@ -1077,6 +1434,117 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
     case "list_asr_models":
     case "scan_models":
       return createMockModels();
+    case "list_tts_models":
+      return currentMockTtsModels();
+    case "register_tts_model_path": {
+      const modelId = String(args?.modelId ?? "");
+      mockTtsModelsState = currentMockTtsModels().map((model) => (
+        model.id === modelId
+          ? {
+              ...model,
+              status: "ready" as const,
+              path: String(args?.sourcePath ?? "/Users/example/Local-LLM/tts/model"),
+              location: "external" as const,
+              missing_files: [],
+            }
+          : model
+      ));
+      return mockTtsModelsState.find((model) => model.id === modelId);
+    }
+    case "forget_tts_model_path":
+      mockTtsModelsState = currentMockTtsModels().map((model) => (
+        model.id === args?.modelId
+          ? { ...model, status: "not-installed" as const, path: null, location: null }
+          : model
+      ));
+      return undefined;
+    case "set_tts_models_root":
+      return currentMockTtsModels();
+    case "synthesize_local_tts":
+      return {
+        output_path: String((args?.request as LocalTtsSynthesisRequest | undefined)?.output_path ?? "/Users/example/FinalSub/preview.wav"),
+        sample_rate: 24000,
+        duration_ms: 1460,
+      } satisfies TtsSynthesisResult;
+    case "cancel_local_tts":
+      return true;
+    case "list_tts_providers":
+      return mockTtsProvidersState;
+    case "save_tts_provider": {
+      const request = args?.request as SaveTtsProviderRequest | undefined;
+      if (!request) throw new Error("TTS provider request is missing");
+      const profile: TtsProviderProfile = {
+        ...request,
+        id: request.id ?? `00000000-0000-4000-8000-${String(mockTtsProvidersState.length + 301).padStart(12, "0")}`,
+      };
+      mockTtsProvidersState = [
+        profile,
+        ...mockTtsProvidersState.filter((item) => item.id !== profile.id),
+      ];
+      return profile;
+    }
+    case "delete_tts_provider":
+      mockTtsProvidersState = mockTtsProvidersState.filter((item) => item.id !== args?.providerId);
+      return undefined;
+    case "synthesize_cloud_tts":
+    case "test_tts_provider":
+      return {
+        output_path: "/Users/example/FinalSub/tts-provider-preview.wav",
+        sample_rate: 24000,
+        duration_ms: 1720,
+      } satisfies TtsSynthesisResult;
+    case "create_dubbing_session":
+      mockDubbingSessionState = createMockDubbingSession(String(args?.subtitlePath ?? "/Users/example/Subtitles/demo.srt"));
+      return mockDubbingSessionState;
+    case "get_dubbing_session":
+      mockDubbingSessionState ??= createMockDubbingSession();
+      return mockDubbingSessionState;
+    case "synthesize_dubbing_cue": {
+      mockDubbingSessionState ??= createMockDubbingSession();
+      const request = args?.request as DubbingSynthesizeCueRequest | undefined;
+      const cueIndex = request?.cue_index ?? 0;
+      mockDubbingSessionState = {
+        ...mockDubbingSessionState,
+        last_config: request ? {
+          engine: request.engine,
+          voice: request.voice,
+          global_speed: request.global_speed,
+          reference_audio_path: request.reference_audio_path ?? null,
+          reference_text: request.reference_text ?? null,
+          num_steps: request.num_steps ?? null,
+        } : null,
+        updated_at: new Date().toISOString(),
+        cues: mockDubbingSessionState.cues.map((cue) => cue.index === cueIndex ? {
+          ...cue,
+          status: cueIndex === 1 ? "overlong" as const : "ready" as const,
+          synthesized_ms: cueIndex === 1 ? 4420 : 2200,
+          applied_speed: request?.global_speed ?? 1,
+          ratio: cueIndex === 1 ? 1.7 : 0.85,
+          wav_path: `/Users/example/FinalSub/dubbing/cue-${cueIndex + 1}.wav`,
+          error: null,
+        } : cue),
+      };
+      return mockDubbingSessionState;
+    }
+    case "accept_dubbing_overflow":
+      mockDubbingSessionState ??= createMockDubbingSession();
+      mockDubbingSessionState = {
+        ...mockDubbingSessionState,
+        cues: mockDubbingSessionState.cues.map((cue) => cue.index === args?.cueIndex ? {
+          ...cue,
+          status: "accepted" as const,
+          synthesized_ms: cue.slot_ms,
+          applied_speed: cue.ratio ?? 1,
+        } : cue),
+      };
+      return mockDubbingSessionState;
+    case "export_dubbing_audio":
+      mockDubbingSessionState ??= createMockDubbingSession();
+      mockDubbingSessionState = {
+        ...mockDubbingSessionState,
+        output_path: String(args?.outputPath ?? "/Users/example/Downloads/finalsub-dubbing.wav"),
+      };
+      return mockDubbingSessionState;
     case "get_model_status":
       return createMockModels().find((model) => model.id === args?.modelId) ?? null;
     case "discover_batch_inputs":

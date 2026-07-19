@@ -11,3 +11,4 @@ pub mod subtitle;
 pub mod task_queue;
 pub mod task_runner;
 pub mod translation;
+pub mod tts;

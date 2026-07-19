@@ -18,6 +18,11 @@ use crate::core::task_queue::{
     self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType, TranslationContentMode,
 };
 use crate::core::translation::{self, TranslationProvider};
+use crate::core::tts::{
+    CloudTtsSynthesisRequest, DubbingEngineSelection, DubbingSession, DubbingSynthesizeCueRequest,
+    LocalTtsSynthesisRequest, SaveTtsProviderRequest, TtsModelInfo, TtsProviderProfile,
+    TtsSynthesisResult,
+};
 use crate::state::AppState;
 use tauri_plugin_fs::FsExt;
 
@@ -178,6 +183,353 @@ pub fn get_model_status(
 #[tauri::command]
 pub fn scan_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, String> {
     scan_models_for_state(&state)
+}
+
+#[tauri::command]
+pub fn list_tts_models(state: State<'_, AppState>) -> Result<Vec<TtsModelInfo>, String> {
+    crate::core::tts::list_models(&state.app_config_dir).map_err(|error| error.to_string())
+}
+
+/// 登记外部 TTS 模型目录。只保存绝对路径，不复制模型，也不会取得源目录删除权。
+#[tauri::command]
+pub fn register_tts_model_path(
+    state: State<'_, AppState>,
+    model_id: String,
+    source_path: String,
+) -> Result<TtsModelInfo, String> {
+    crate::core::tts::register_external_model(&state.app_config_dir, &model_id, &source_path)
+        .map_err(|error| error.to_string())
+}
+
+/// 仅移除外部路径登记；源模型文件永远保留。
+#[tauri::command]
+pub fn forget_tts_model_path(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
+    crate::core::tts::remove_external_registration(&state.app_config_dir, &model_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_tts_models_root(
+    state: State<'_, AppState>,
+    models_root: String,
+) -> Result<Vec<TtsModelInfo>, String> {
+    crate::core::tts::set_models_root(&state.app_config_dir, &models_root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn synthesize_local_tts(
+    state: State<'_, AppState>,
+    generation_id: String,
+    request: LocalTtsSynthesisRequest,
+) -> Result<TtsSynthesisResult, String> {
+    uuid::Uuid::parse_str(&generation_id).map_err(|_| "配音请求 ID 格式无效".to_string())?;
+    let model =
+        crate::core::tts::resolve_ready_model(&state.app_config_dir, request.model_id.trim())
+            .map_err(|error| error.to_string())?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut controls = state.tts_controls.write().await;
+        if controls.contains_key(&generation_id) {
+            return Err("同一配音请求正在运行".into());
+        }
+        controls.insert(generation_id.clone(), cancelled.clone());
+    }
+    let cache = state.tts_engines.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        crate::core::tts::synthesize_local(&cache, model, request, cancelled)
+    })
+    .await;
+    state.tts_controls.write().await.remove(&generation_id);
+    joined
+        .map_err(|error| format!("本地 TTS 工作线程异常：{error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn cancel_local_tts(
+    state: State<'_, AppState>,
+    generation_id: String,
+) -> Result<bool, String> {
+    uuid::Uuid::parse_str(&generation_id).map_err(|_| "配音请求 ID 格式无效".to_string())?;
+    let controls = state.tts_controls.read().await;
+    if let Some(cancelled) = controls.get(&generation_id) {
+        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub fn list_tts_providers(state: State<'_, AppState>) -> Result<Vec<TtsProviderProfile>, String> {
+    crate::core::tts::list_providers(&state.app_config_dir).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn save_tts_provider(
+    state: State<'_, AppState>,
+    request: SaveTtsProviderRequest,
+) -> Result<TtsProviderProfile, String> {
+    crate::core::tts::save_provider(&state.app_config_dir, request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn delete_tts_provider(state: State<'_, AppState>, provider_id: String) -> Result<(), String> {
+    crate::core::tts::delete_provider(&state.app_config_dir, &provider_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn synthesize_cloud_tts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    generation_id: String,
+    request: CloudTtsSynthesisRequest,
+) -> Result<TtsSynthesisResult, String> {
+    uuid::Uuid::parse_str(&generation_id).map_err(|_| "配音请求 ID 格式无效".to_string())?;
+    let ffmpeg = resolve_sidecar(&app, "ffmpeg")?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut controls = state.tts_controls.write().await;
+        if controls.contains_key(&generation_id) {
+            return Err("同一配音请求正在运行".into());
+        }
+        controls.insert(generation_id.clone(), cancelled.clone());
+    }
+    let result =
+        crate::core::tts::synthesize_cloud(&state.app_config_dir, &ffmpeg, request, cancelled)
+            .await
+            .map_err(|error| error.to_string());
+    state.tts_controls.write().await.remove(&generation_id);
+    result
+}
+
+#[tauri::command]
+pub async fn test_tts_provider(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<TtsSynthesisResult, String> {
+    uuid::Uuid::parse_str(&provider_id).map_err(|_| "TTS 服务实例 ID 无效".to_string())?;
+    let generation_id = uuid::Uuid::new_v4().to_string();
+    let output_dir = state.app_config_dir.join("tts").join("previews");
+    std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
+    let output = output_dir.join(format!("provider-{provider_id}.wav"));
+    let ffmpeg = resolve_sidecar(&app, "ffmpeg")?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state
+        .tts_controls
+        .write()
+        .await
+        .insert(generation_id.clone(), cancelled.clone());
+    let result = crate::core::tts::synthesize_cloud(
+        &state.app_config_dir,
+        &ffmpeg,
+        CloudTtsSynthesisRequest {
+            provider_id,
+            text: "Hello，欢迎使用 FinalSub。".into(),
+            voice: None,
+            speed: Some(1.0),
+            output_path: output.to_string_lossy().to_string(),
+        },
+        cancelled,
+    )
+    .await
+    .map_err(|error| error.to_string());
+    state.tts_controls.write().await.remove(&generation_id);
+    result
+}
+
+#[tauri::command]
+pub fn create_dubbing_session(
+    state: State<'_, AppState>,
+    subtitle_path: String,
+    video_path: Option<String>,
+) -> Result<DubbingSession, String> {
+    crate::core::tts::create_dubbing_session(
+        &state.app_config_dir,
+        &subtitle_path,
+        video_path.as_deref(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_dubbing_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<DubbingSession, String> {
+    crate::core::tts::get_dubbing_session(&state.app_config_dir, &session_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn synthesize_dubbing_cue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    generation_id: String,
+    request: DubbingSynthesizeCueRequest,
+) -> Result<DubbingSession, String> {
+    uuid::Uuid::parse_str(&generation_id).map_err(|_| "配音请求 ID 格式无效".to_string())?;
+    let ffmpeg = resolve_sidecar(&app, "ffmpeg")?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut controls = state.tts_controls.write().await;
+        if controls.contains_key(&generation_id) {
+            return Err("同一配音请求正在运行".into());
+        }
+        controls.insert(generation_id.clone(), cancelled.clone());
+    }
+
+    let prepared = match crate::core::tts::prepare_dubbing_cue(&state.app_config_dir, &request) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            state.tts_controls.write().await.remove(&generation_id);
+            return Err(error.to_string());
+        }
+    };
+    let synthesis_result: Result<TtsSynthesisResult, String> = match &prepared.config.engine {
+        DubbingEngineSelection::Local { model_id } => {
+            let model = crate::core::tts::resolve_ready_model(&state.app_config_dir, model_id)
+                .map_err(|error| error.to_string());
+            match model {
+                Ok(model) => {
+                    let cache = state.tts_engines.clone();
+                    let local_request = LocalTtsSynthesisRequest {
+                        model_id: model_id.clone(),
+                        text: prepared.text.clone(),
+                        voice_id: (!prepared.config.voice.is_empty())
+                            .then(|| prepared.config.voice.clone()),
+                        speed: Some(prepared.config.global_speed),
+                        output_path: prepared.output_path.clone(),
+                        reference_audio_path: prepared.config.reference_audio_path.clone(),
+                        reference_text: prepared.config.reference_text.clone(),
+                        num_steps: prepared.config.num_steps,
+                    };
+                    let local_cancelled = cancelled.clone();
+                    let joined = tokio::task::spawn_blocking(move || {
+                        crate::core::tts::synthesize_local(
+                            &cache,
+                            model,
+                            local_request,
+                            local_cancelled,
+                        )
+                    })
+                    .await;
+                    match joined {
+                        Ok(result) => result.map_err(|error| error.to_string()),
+                        Err(error) => Err(format!("本地 TTS 工作线程异常：{error}")),
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        }
+        DubbingEngineSelection::Cloud { provider_id } => crate::core::tts::synthesize_cloud(
+            &state.app_config_dir,
+            &ffmpeg,
+            CloudTtsSynthesisRequest {
+                provider_id: provider_id.clone(),
+                text: prepared.text.clone(),
+                voice: (!prepared.config.voice.is_empty()).then(|| prepared.config.voice.clone()),
+                speed: Some(prepared.config.global_speed),
+                output_path: prepared.output_path.clone(),
+            },
+            cancelled.clone(),
+        )
+        .await
+        .map_err(|error| error.to_string()),
+    };
+
+    let result = match synthesis_result {
+        Ok(audio) => crate::core::tts::complete_dubbing_cue(
+            &state.app_config_dir,
+            &ffmpeg,
+            &prepared,
+            audio.duration_ms,
+            cancelled.clone(),
+        )
+        .await
+        .map_err(|error| error.to_string()),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = &result {
+        let was_cancelled = cancelled.load(std::sync::atomic::Ordering::Relaxed)
+            || error.contains("取消")
+            || error.to_ascii_lowercase().contains("cancel");
+        let _ = crate::core::tts::fail_dubbing_cue(
+            &state.app_config_dir,
+            &prepared.session_id,
+            prepared.cue_index,
+            error,
+            was_cancelled,
+        );
+    }
+    state.tts_controls.write().await.remove(&generation_id);
+    result
+}
+
+#[tauri::command]
+pub async fn accept_dubbing_overflow(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    generation_id: String,
+    session_id: String,
+    cue_index: u32,
+) -> Result<DubbingSession, String> {
+    uuid::Uuid::parse_str(&generation_id).map_err(|_| "配音请求 ID 格式无效".to_string())?;
+    let ffmpeg = resolve_sidecar(&app, "ffmpeg")?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut controls = state.tts_controls.write().await;
+        if controls.contains_key(&generation_id) {
+            return Err("同一配音请求正在运行".into());
+        }
+        controls.insert(generation_id.clone(), cancelled.clone());
+    }
+    let result = crate::core::tts::accept_dubbing_overflow(
+        &state.app_config_dir,
+        &ffmpeg,
+        &session_id,
+        cue_index,
+        cancelled,
+    )
+    .await
+    .map_err(|error| error.to_string());
+    state.tts_controls.write().await.remove(&generation_id);
+    result
+}
+
+#[tauri::command]
+pub async fn export_dubbing_audio(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    generation_id: String,
+    session_id: String,
+    output_path: String,
+) -> Result<DubbingSession, String> {
+    uuid::Uuid::parse_str(&generation_id).map_err(|_| "配音请求 ID 格式无效".to_string())?;
+    let ffmpeg = resolve_sidecar(&app, "ffmpeg")?;
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut controls = state.tts_controls.write().await;
+        if controls.contains_key(&generation_id) {
+            return Err("同一配音请求正在运行".into());
+        }
+        controls.insert(generation_id.clone(), cancelled.clone());
+    }
+    let result = crate::core::tts::export_dubbing_audio(
+        &state.app_config_dir,
+        &ffmpeg,
+        &session_id,
+        &output_path,
+        cancelled,
+    )
+    .await
+    .map_err(|error| error.to_string());
+    state.tts_controls.write().await.remove(&generation_id);
+    result
 }
 
 #[tauri::command]
@@ -2752,6 +3104,7 @@ fn update_blocker<'a>(
     mut tasks: impl Iterator<Item = &'a Task>,
     task_operation_active: bool,
     model_operation_active: bool,
+    tts_operation_active: bool,
     burn_operation_active: bool,
 ) -> Option<&'static str> {
     if task_operation_active
@@ -2760,6 +3113,8 @@ fn update_blocker<'a>(
         Some("有字幕任务正在处理或等待，请先暂停或完成任务后再安装更新。")
     } else if model_operation_active {
         Some("有模型正在下载或安装，请完成或取消模型操作后再安装更新。")
+    } else if tts_operation_active {
+        Some("有配音正在生成、对齐或导出，请完成或取消配音操作后再安装更新。")
     } else if burn_operation_active {
         Some("有视频正在合成字幕，请完成或取消合成后再安装更新。")
     } else {
@@ -2771,11 +3126,13 @@ async fn ensure_update_can_start(state: &AppState) -> std::result::Result<(), St
     let tasks = state.tasks.read().await;
     let task_controls = state.task_controls.read().await;
     let model_controls = state.model_controls.read().await;
+    let tts_controls = state.tts_controls.read().await;
     let burn_controls = state.burn_controls.read().await;
     if let Some(reason) = update_blocker(
         tasks.values(),
         !task_controls.is_empty(),
         !model_controls.is_empty(),
+        !tts_controls.is_empty(),
         !burn_controls.is_empty(),
     ) {
         Err(reason.into())
@@ -2852,15 +3209,17 @@ pub async fn download_and_install_update(
         .map_err(|e| format!("更新包下载或签名验证失败：{e}"))?;
 
     // 下载期间用户仍可操作应用。安装前持有这些读锁并再次检查，确保不会在
-    // 新任务、模型安装或视频合成启动的竞态窗口内替换应用并重启。
+    // 新任务、模型安装、配音或视频合成启动的竞态窗口内替换应用并重启。
     let tasks = state.tasks.read().await;
     let task_controls = state.task_controls.read().await;
     let model_controls = state.model_controls.read().await;
+    let tts_controls = state.tts_controls.read().await;
     let burn_controls = state.burn_controls.read().await;
     if let Some(reason) = update_blocker(
         tasks.values(),
         !task_controls.is_empty(),
         !model_controls.is_empty(),
+        !tts_controls.is_empty(),
         !burn_controls.is_empty(),
     ) {
         return Err(reason.into());
@@ -2871,6 +3230,7 @@ pub async fn download_and_install_update(
         .install(&bytes)
         .map_err(|e| format!("更新包安装失败：{e}"))?;
     drop(burn_controls);
+    drop(tts_controls);
     drop(model_controls);
     drop(task_controls);
     drop(tasks);
@@ -3270,26 +3630,39 @@ mod tests {
 
         task.status = TaskStatus::Paused;
         assert_eq!(
-            update_blocker([&task].into_iter(), false, false, false),
+            update_blocker([&task].into_iter(), false, false, false, false),
             None
         );
 
-        assert!(update_blocker([&task].into_iter(), true, false, false)
-            .unwrap()
-            .contains("字幕任务"));
+        assert!(
+            update_blocker([&task].into_iter(), true, false, false, false)
+                .unwrap()
+                .contains("字幕任务")
+        );
 
         task.status = TaskStatus::Running;
-        assert!(update_blocker([&task].into_iter(), false, false, false)
-            .unwrap()
-            .contains("字幕任务"));
+        assert!(
+            update_blocker([&task].into_iter(), false, false, false, false)
+                .unwrap()
+                .contains("字幕任务")
+        );
 
         task.status = TaskStatus::Done;
-        assert!(update_blocker([&task].into_iter(), false, true, false)
-            .unwrap()
-            .contains("模型"));
-        assert!(update_blocker([&task].into_iter(), false, false, true)
-            .unwrap()
-            .contains("合成"));
+        assert!(
+            update_blocker([&task].into_iter(), false, true, false, false)
+                .unwrap()
+                .contains("模型")
+        );
+        assert!(
+            update_blocker([&task].into_iter(), false, false, true, false)
+                .unwrap()
+                .contains("配音")
+        );
+        assert!(
+            update_blocker([&task].into_iter(), false, false, false, true)
+                .unwrap()
+                .contains("合成")
+        );
     }
 
     #[test]

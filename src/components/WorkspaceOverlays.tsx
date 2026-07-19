@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
+  AudioLines,
   Bot,
   CheckCircle2,
   ChevronLeft,
@@ -33,6 +34,7 @@ const commands: Array<{
   { path: "/tasks", label: "nav.queue", hint: "command.openQueue", icon: ListTodo },
   { path: "/models", label: "nav.models", hint: "command.manageModels", icon: Bot },
   { path: "/translation", label: "nav.translation", hint: "command.configureTranslation", icon: Languages },
+  { path: "/dubbing", label: "nav.dubbing", hint: "command.openDubbing", icon: AudioLines },
   { path: "/proofread", label: "nav.proofread", hint: "command.openProofread", icon: Edit3 },
   { path: "/subtitle-merge", label: "nav.merge", hint: "command.openMerge", icon: Film },
   { path: "/settings", label: "nav.settings", hint: "command.openSettings", icon: Settings },
@@ -59,7 +61,7 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
         setOpen((value) => !value);
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && /^[1-7]$/.test(event.key)) {
+      if ((event.metaKey || event.ctrlKey) && /^[1-8]$/.test(event.key)) {
         event.preventDefault();
         navigate(commands[Number(event.key) - 1].path);
       }
