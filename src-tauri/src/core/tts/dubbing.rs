@@ -86,6 +86,14 @@ pub struct DubbingSynthesizeCueRequest {
     pub num_steps: Option<i32>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateDubbingCueRequest {
+    pub session_id: String,
+    pub cue_index: u32,
+    pub text: Option<String>,
+    pub voice_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PreparedDubbingCue {
     pub session_id: String,
@@ -303,6 +311,84 @@ fn validate_run_config(request: &DubbingSynthesizeCueRequest) -> Result<DubbingR
         reference_text: request.reference_text.clone(),
         num_steps: request.num_steps,
     })
+}
+
+fn validate_cue_text(value: &str) -> Result<String> {
+    let text = value.trim();
+    if text.is_empty() || text.len() > MAX_SUBTITLE_BYTES as usize || text.contains('\0') {
+        return Err(FinalSubError::Validation(
+            "字幕行文本不能为空、不能包含空字符，且不能超过 20 MB".into(),
+        ));
+    }
+    Ok(text.to_string())
+}
+
+fn validate_cue_voice(value: &str) -> Result<Option<String>> {
+    let voice = value.trim();
+    if voice.is_empty() {
+        return Ok(None);
+    }
+    if voice.len() > 200 || voice.chars().any(char::is_control) {
+        return Err(FinalSubError::Validation("字幕行音色 ID 无效".into()));
+    }
+    Ok(Some(voice.to_string()))
+}
+
+pub fn update_dubbing_cue(
+    app_config_dir: &Path,
+    request: UpdateDubbingCueRequest,
+) -> Result<DubbingSession> {
+    let mut session = load_session_raw(app_config_dir, &request.session_id)?;
+    let cue_position = request.cue_index as usize;
+    let next_text = request.text.as_deref().map(validate_cue_text).transpose()?;
+    let next_voice = request
+        .voice_id
+        .as_deref()
+        .map(validate_cue_voice)
+        .transpose()?
+        .flatten();
+    let cue_file_number = session
+        .cues
+        .get(cue_position)
+        .ok_or_else(|| FinalSubError::Validation("配音字幕行不存在".into()))?
+        .index
+        .checked_add(1)
+        .ok_or_else(|| FinalSubError::Validation("配音字幕行索引无效".into()))?;
+    let cues_dir = session_dir(app_config_dir, &session.id)?.join("cues");
+    let expected_wav = cues_dir.join(format!("{cue_file_number:05}.wav"));
+    let cue = session
+        .cues
+        .get_mut(cue_position)
+        .ok_or_else(|| FinalSubError::Validation("配音字幕行不存在".into()))?;
+    if cue.status == DubbingCueStatus::Synthesizing {
+        return Err(FinalSubError::Validation(
+            "当前字幕行正在合成，请稍后再编辑".into(),
+        ));
+    }
+    let changed = next_text.as_ref().is_some_and(|text| text != &cue.text)
+        || request.voice_id.is_some() && next_voice != cue.voice_id;
+    if !changed {
+        return Ok(session);
+    }
+    if expected_wav.is_file() {
+        std::fs::remove_file(&expected_wav)?;
+    }
+    if let Some(text) = next_text {
+        cue.text = text;
+    }
+    if request.voice_id.is_some() {
+        cue.voice_id = next_voice;
+    }
+    cue.status = DubbingCueStatus::Pending;
+    cue.synthesized_ms = None;
+    cue.applied_speed = None;
+    cue.ratio = None;
+    cue.wav_path = None;
+    cue.error = None;
+    session.output_path = None;
+    session.updated_at = chrono::Utc::now().to_rfc3339();
+    save_session(app_config_dir, &session)?;
+    Ok(session)
 }
 
 pub fn prepare_dubbing_cue(
@@ -756,5 +842,101 @@ mod tests {
                 .unwrap()
                 .source_changed
         );
+    }
+
+    #[test]
+    fn cue_edit_persists_text_and_voice_and_invalidates_audio() {
+        let config = TempDir::new().unwrap();
+        let subtitle = config.path().join("demo.srt");
+        std::fs::write(&subtitle, "1\n00:00:01,000 --> 00:00:02,000\nHello\n").unwrap();
+        let created =
+            create_dubbing_session(config.path(), subtitle.to_str().unwrap(), None).unwrap();
+        let wav = config
+            .path()
+            .join("tts/dubbing-sessions")
+            .join(&created.id)
+            .join("cues/00001.wav");
+        std::fs::write(&wav, b"old audio").unwrap();
+        let mut saved = load_session_raw(config.path(), &created.id).unwrap();
+        saved.cues[0].status = DubbingCueStatus::Ready;
+        saved.cues[0].voice_id = Some("alloy".into());
+        saved.cues[0].wav_path = Some(wav.to_string_lossy().to_string());
+        saved.output_path = Some(
+            config
+                .path()
+                .join("export.wav")
+                .to_string_lossy()
+                .to_string(),
+        );
+        save_session(config.path(), &saved).unwrap();
+
+        let updated = update_dubbing_cue(
+            config.path(),
+            UpdateDubbingCueRequest {
+                session_id: created.id.clone(),
+                cue_index: 0,
+                text: Some("你好".into()),
+                voice_id: Some("zh-CN-XiaoxiaoNeural".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.cues[0].text, "你好");
+        assert_eq!(
+            updated.cues[0].voice_id.as_deref(),
+            Some("zh-CN-XiaoxiaoNeural")
+        );
+        assert_eq!(updated.cues[0].status, DubbingCueStatus::Pending);
+        assert!(updated.cues[0].wav_path.is_none());
+        assert!(updated.output_path.is_none());
+        assert!(!wav.exists());
+    }
+
+    #[test]
+    fn cue_edit_rejects_empty_text_and_control_voice() {
+        let config = TempDir::new().unwrap();
+        let subtitle = config.path().join("demo.srt");
+        std::fs::write(&subtitle, "1\n00:00:01,000 --> 00:00:02,000\nHello\n").unwrap();
+        let created =
+            create_dubbing_session(config.path(), subtitle.to_str().unwrap(), None).unwrap();
+        assert!(update_dubbing_cue(
+            config.path(),
+            UpdateDubbingCueRequest {
+                session_id: created.id.clone(),
+                cue_index: 0,
+                text: Some("  ".into()),
+                voice_id: None,
+            },
+        )
+        .is_err());
+        assert!(update_dubbing_cue(
+            config.path(),
+            UpdateDubbingCueRequest {
+                session_id: created.id,
+                cue_index: 0,
+                text: None,
+                voice_id: Some("bad\nvoice".into()),
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cue_edit_rejects_out_of_range_index_without_overflow() {
+        let config = TempDir::new().unwrap();
+        let subtitle = config.path().join("demo.srt");
+        std::fs::write(&subtitle, "1\n00:00:01,000 --> 00:00:02,000\nHello\n").unwrap();
+        let created =
+            create_dubbing_session(config.path(), subtitle.to_str().unwrap(), None).unwrap();
+
+        assert!(update_dubbing_cue(
+            config.path(),
+            UpdateDubbingCueRequest {
+                session_id: created.id,
+                cue_index: u32::MAX,
+                text: Some("你好".into()),
+                voice_id: None,
+            },
+        )
+        .is_err());
     }
 }

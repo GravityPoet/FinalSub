@@ -106,7 +106,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 | 能力 | 状态 | 当前实现与 SmartSub 基线差异 |
 |---|---:|---|
-| 行级配音工作台 | 🟠 | 已支持字幕导入、逐行/批量生成、试听、重生成、状态统计和恢复；尚缺视频播放联动、行内文本编辑与逐行音色覆盖 |
+| 行级配音工作台 | 🟠 | 已支持字幕导入、逐行/批量生成、试听、重生成、状态统计和恢复；可直接修改单行文本、覆盖或恢复全局音色，编辑后只失效对应 WAV 与最终导出；尚缺视频播放联动与同步字幕回写 |
 | 本地 TTS | 🟠 | Rust 原生 sherpa-onnx 已接 Kokoro 103 音色、VITS 174 说话人与 ZipVoice；支持受管下载、取消、最多两个引擎缓存和原子 WAV，但缺真实本地 TTS 模型音质 E2E 与多进程并行 |
 | 云 TTS | 🟠 | OpenAI-compatible、Azure Speech、ElevenLabs 与 Edge TTS 免费试用档已接入；Edge 为固定版本逆向 WebSocket、无需 Key 但不承诺稳定性；仍缺火山豆包与付费账号 E2E |
 | 本地声音克隆 | 🟠 | ZipVoice 已支持参考 WAV + 逐字文本、4/8 步质量档与 30 秒/64 MB 边界；缺录音、ASR 预填、选段/质检、降噪、音色实体、A/B、导入导出 |
@@ -177,11 +177,11 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 - SmartSub 上游审计固定在 `e9ad26f1d4ddde59b8460a453c29ebb9c545a4c8`；确认其仍覆盖 Edge/火山/ElevenLabs 云 TTS、声音克隆资产、模型镜像下载、时间轴预控和统一 pipeline specs。FinalSub 的差距项未被误标为完成。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- TTS 下载器与 Edge provider 单元测试覆盖镜像顺序、固定大小流量上限、归档原子替换、失败保留旧模型、ZipVoice 缺 vocoder 拒绝、空必需文件拒绝、Edge 语速/语言区域/音频上限与零配置实例；`cargo test --lib` 为 234 passed / 0 failed / 8 ignored，`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --check` 通过。
+- TTS 下载器、Edge provider 与配音行级编辑单元测试覆盖镜像顺序、固定大小流量上限、归档原子替换、失败保留旧模型、ZipVoice 缺 vocoder 拒绝、空必需文件拒绝、Edge 语速/语言区域/音频上限、零配置实例、行文本/音色/越界索引与旧音频失效；`cargo test --lib` 为 237 passed / 0 failed / 8 ignored，`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --check` 通过。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
-- 浏览器 QA（本地 Vite + Playwright）：新建任务首屏在 1280×720 视口同时露出“选择音视频 / 任务配置 / 任务概览 / 开始任务”，主视觉不再挤走核心动作；模型页本地/云端顶层分区、本地 TTS 外部目录“直接复用”、应用内下载/选择已有目录/官方来源、ZipVoice 双工件提示均可见；云端页明确显示“不是下载区 / 不会下载模型”；在线 TTS 面板可见 Edge“免费试用 / 无需 API Key / 仍需文本授权 / 可能断供”分层提示，真实合成测试按钮按授权启用；1280×800 与 390×844 无横向溢出，控制台无 error。
-- 当前 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与运行进程路径唯一通过。DMG SHA-256 `19d3c8be8d891b94539429c661611aaafbfd39a9cd53882d0c908d25d73528d9`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-053054/FinalSub.app.zip` 并通过完整性检查。
+- 浏览器 QA（本地 Vite + Playwright）：新建任务已移除旧 `hero-panel`，1440×900 下“选择音视频”距视口顶部约 209 px，390×844 下约 312 px，核心入口不再被品牌大卡片挤走；配音页实测修改第 1 行文本与云端音色、保存后回到待合成、重新生成后已对齐；模型页本地/云端顶层分区、本地 TTS 外部目录“直接复用”、应用内下载/选择已有目录/官方来源、ZipVoice 双工件提示均可见；云端页明确显示“不是下载区 / 不会下载模型”；在线 TTS 面板可见 Edge“免费试用 / 无需 API Key / 仍需文本授权 / 可能断供”分层提示；1440×900 与 390×844 无横向溢出，控制台无 error/warning。
+- 当前 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与运行进程路径唯一通过。DMG SHA-256 `6838e5e8c93ade2fd88fbb9e576378d67943906ef26b7fbb6b2418c15d1919cd`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-055358/FinalSub.app.zip` 并通过完整性检查。
 
 ## 12. 新鲜验证（2026-07-19）
 

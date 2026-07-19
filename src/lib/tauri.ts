@@ -316,6 +316,13 @@ export interface DubbingCue {
   error: string | null;
 }
 
+export interface UpdateDubbingCueRequest {
+  session_id: string;
+  cue_index: number;
+  text?: string;
+  voice_id?: string;
+}
+
 export interface DubbingSession {
   version: number;
   id: string;
@@ -469,6 +476,12 @@ export async function createDubbingSession(
 
 export async function getDubbingSession(sessionId: string): Promise<DubbingSession> {
   return invoke("get_dubbing_session", { sessionId });
+}
+
+export async function updateDubbingCue(
+  request: UpdateDubbingCueRequest,
+): Promise<DubbingSession> {
+  return invoke("update_dubbing_cue", { request });
 }
 
 export async function synthesizeDubbingCue(
@@ -1536,6 +1549,28 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
     case "get_dubbing_session":
       mockDubbingSessionState ??= createMockDubbingSession();
       return mockDubbingSessionState;
+    case "update_dubbing_cue": {
+      mockDubbingSessionState ??= createMockDubbingSession();
+      const request = args?.request as UpdateDubbingCueRequest | undefined;
+      if (!request) throw new Error("Dubbing cue update request is missing");
+      mockDubbingSessionState = {
+        ...mockDubbingSessionState,
+        updated_at: new Date().toISOString(),
+        output_path: null,
+        cues: mockDubbingSessionState.cues.map((cue) => cue.index === request.cue_index ? {
+          ...cue,
+          text: request.text ?? cue.text,
+          voice_id: request.voice_id?.trim() ? request.voice_id.trim() : request.voice_id === undefined ? cue.voice_id : null,
+          status: "pending" as const,
+          synthesized_ms: null,
+          applied_speed: null,
+          ratio: null,
+          wav_path: null,
+          error: null,
+        } : cue),
+      };
+      return mockDubbingSessionState;
+    }
     case "synthesize_dubbing_cue": {
       mockDubbingSessionState ??= createMockDubbingSession();
       const request = args?.request as DubbingSynthesizeCueRequest | undefined;

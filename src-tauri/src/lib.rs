@@ -96,6 +96,7 @@ pub fn run() {
             commands::test_tts_provider,
             commands::create_dubbing_session,
             commands::get_dubbing_session,
+            commands::update_dubbing_cue,
             commands::synthesize_dubbing_cue,
             commands::accept_dubbing_overflow,
             commands::export_dubbing_audio,

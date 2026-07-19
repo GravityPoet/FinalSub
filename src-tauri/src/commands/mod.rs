@@ -21,7 +21,7 @@ use crate::core::translation::{self, TranslationProvider};
 use crate::core::tts::{
     CloudTtsSynthesisRequest, DubbingEngineSelection, DubbingSession, DubbingSynthesizeCueRequest,
     LocalTtsSynthesisRequest, SaveTtsProviderRequest, TtsModelInfo, TtsProviderProfile,
-    TtsSynthesisResult,
+    TtsSynthesisResult, UpdateDubbingCueRequest,
 };
 use crate::state::AppState;
 use tauri_plugin_fs::FsExt;
@@ -464,6 +464,15 @@ pub fn get_dubbing_session(
     session_id: String,
 ) -> Result<DubbingSession, String> {
     crate::core::tts::get_dubbing_session(&state.app_config_dir, &session_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn update_dubbing_cue(
+    state: State<'_, AppState>,
+    request: UpdateDubbingCueRequest,
+) -> Result<DubbingSession, String> {
+    crate::core::tts::update_dubbing_cue(&state.app_config_dir, request)
         .map_err(|error| error.to_string())
 }
 
