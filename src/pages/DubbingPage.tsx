@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   AudioLines,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   Cloud,
+  Download,
+  FileCheck2,
   FileText,
   FolderOpen,
   Gauge,
@@ -16,6 +19,7 @@ import {
   Play,
   RefreshCw,
   Save,
+  ShieldCheck,
   Sparkles,
   Video,
   Volume2,
@@ -34,6 +38,7 @@ import {
   cancelLocalTts,
   createDubbingSession,
   exportDubbingAudio,
+  exportDubbingSubtitle,
   fileAssetUrl,
   getDubbingSession,
   listTtsModels,
@@ -43,6 +48,7 @@ import {
   saveDialog,
   synthesizeDubbingCue,
   updateDubbingCue,
+  writeBackDubbingSubtitle,
   type DubbingCue,
   type DubbingEngineSelection,
   type DubbingSession,
@@ -63,6 +69,17 @@ function formatTime(ms: number): string {
 
 function outputPathFor(subtitlePath: string): string {
   return `${subtitlePath.replace(/\.[^/.]+$/, "")}.finalsub-dub.wav`;
+}
+
+function editedSubtitlePathFor(subtitlePath: string): string {
+  const match = subtitlePath.match(/(\.[^/.]+)$/);
+  const extension = match?.[1] ?? ".srt";
+  return `${subtitlePath.slice(0, match ? -extension.length : undefined)}.finalsub-edited${extension}`;
+}
+
+function subtitleExtension(subtitlePath: string): string {
+  const extension = subtitlePath.split(".").pop()?.toLowerCase() ?? "srt";
+  return ["srt", "vtt", "ass", "ssa", "lrc"].includes(extension) ? extension : "srt";
 }
 
 export default function DubbingPage() {
@@ -86,8 +103,16 @@ export default function DubbingPage() {
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [subtitleSaving, setSubtitleSaving] = useState<"copy" | "source" | null>(null);
+  const [writeBackOpen, setWriteBackOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [subtitleArtifact, setSubtitleArtifact] = useState<{ kind: "copy" | "backup"; path: string } | null>(null);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [videoPlaying, setVideoPlaying] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
   const cancelRequested = useRef(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const cueElements = useRef(new Map<number, HTMLDivElement>());
 
   const readyModels = useMemo(() => models.filter((model) => model.status === "ready"), [models]);
   const selectedLocalModel = useMemo(() => {
@@ -98,6 +123,19 @@ export default function DubbingPage() {
     if (!engineValue.startsWith("cloud:")) return null;
     return providers.find((provider) => provider.id === engineValue.slice("cloud:".length)) ?? null;
   }, [engineValue, providers]);
+  const playbackCue = useMemo(
+    () => session?.cues.find((cue) => currentTimeMs >= cue.start_ms && currentTimeMs < cue.end_ms) ?? null,
+    [currentTimeMs, session],
+  );
+
+  useEffect(() => {
+    if (!videoPlaying || !playbackCue) return;
+    cueElements.current.get(playbackCue.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [playbackCue?.index, videoPlaying]);
+
+  useEffect(() => {
+    if (!loading && !engineValue) setSettingsOpen(true);
+  }, [engineValue, loading]);
 
   const applyDefaultEngine = (loadedModels: TtsModelInfo[], loadedProviders: TtsProviderProfile[]) => {
     const local = loadedModels.find((model) => model.status === "ready" && !model.clone_only)
@@ -188,6 +226,9 @@ export default function DubbingPage() {
     try {
       const created = await createDubbingSession(subtitlePath, videoPath || undefined);
       setSession(created);
+      setCurrentTimeMs(0);
+      setVideoPlaying(false);
+      setSubtitleArtifact(null);
       localStorage.setItem(LAST_SESSION_KEY, created.id);
       setMessage({ type: "ok", text: t("dubbing.sessionCreated", { count: created.cues.length }) });
     } catch (error) {
@@ -202,6 +243,9 @@ export default function DubbingPage() {
     setSession(null);
     setSubtitlePath("");
     setVideoPath("");
+    setCurrentTimeMs(0);
+    setVideoPlaying(false);
+    setSubtitleArtifact(null);
     setMessage(null);
   };
 
@@ -377,6 +421,51 @@ export default function DubbingPage() {
     }
   };
 
+  const exportSubtitleCopy = async () => {
+    if (!session) return;
+    const extension = subtitleExtension(session.subtitle_path);
+    const selected = await saveDialog({
+      defaultPath: editedSubtitlePathFor(session.subtitle_path),
+      filters: [{ name: t("dubbing.subtitleFiles"), extensions: [extension] }],
+    });
+    if (!selected) return;
+    setSubtitleSaving("copy");
+    setMessage(null);
+    try {
+      const output = await exportDubbingSubtitle(session.id, selected);
+      setSubtitleArtifact({ kind: "copy", path: output });
+      setMessage({ type: "ok", text: t("dubbing.subtitleCopySuccess", { path: output }) });
+    } catch (error) {
+      setMessage({ type: "err", text: String(error) });
+    } finally {
+      setSubtitleSaving(null);
+    }
+  };
+
+  const writeBackSubtitle = async () => {
+    if (!session) return;
+    setSubtitleSaving("source");
+    setMessage(null);
+    try {
+      const result = await writeBackDubbingSubtitle(session.id);
+      setSession(result.session);
+      setSubtitleArtifact({ kind: "backup", path: result.backup_path });
+      setWriteBackOpen(false);
+      setMessage({ type: "ok", text: t("dubbing.writeBackSuccess", { path: result.backup_path }) });
+    } catch (error) {
+      setMessage({ type: "err", text: String(error) });
+    } finally {
+      setSubtitleSaving(null);
+    }
+  };
+
+  const seekToCue = (cue: DubbingCue) => {
+    const seconds = cue.start_ms / 1000;
+    if (videoRef.current) videoRef.current.currentTime = seconds;
+    setCurrentTimeMs(cue.start_ms);
+    cueElements.current.get(cue.index)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+
   if (loading) {
     return <div className="page-shell grid min-h-[30rem] place-items-center text-sm text-text-tertiary"><LoaderCircle className="animate-spin" /></div>;
   }
@@ -447,8 +536,21 @@ export default function DubbingPage() {
             </div>
           )}
 
-          <Card className="p-5">
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)]">
+          <Card className="overflow-hidden p-0">
+            <details className="group" open={settingsOpen} onToggle={(event) => setSettingsOpen(event.currentTarget.open)}>
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:content-none">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Gauge size={16} className="text-brand" /> {t("dubbing.settingsTitle")}</p>
+                  <p className="mt-1 truncate text-xs text-text-tertiary">
+                    {selectedLocalModel?.name ?? selectedProvider?.name ?? t("dubbing.chooseEngine")} · {voice || "—"} · {globalSpeed.toFixed(2)}×
+                  </p>
+                </div>
+                <span className="flex shrink-0 items-center gap-2 text-xs font-semibold text-brand">
+                  {t("dubbing.settingsExpand")} <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div className="border-t border-border-subtle p-5">
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)]">
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="success"><HardDrive size={12} className="mr-1" /> {t("dubbing.localBadge")}</Badge>
@@ -526,7 +628,9 @@ export default function DubbingPage() {
                   <div className="rounded-xl bg-warning/10 p-3"><div className="font-display text-lg font-semibold text-warning">{overlongCount + failedCount}</div><div className="text-xs text-text-tertiary">{t("dubbing.attention")}</div></div>
                 </div>
               </div>
-            </div>
+                </div>
+              </div>
+            </details>
           </Card>
 
           <div className="sticky top-3 z-20 rounded-[1.3rem] border border-white/40 bg-surface-card/90 p-3 shadow-lg backdrop-blur-xl">
@@ -544,26 +648,79 @@ export default function DubbingPage() {
                 <Button type="button" variant="secondary" size="sm" onClick={exportAudio} disabled={!canExport || exporting || activeGenerationId !== null}>
                   {exporting ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} {t("dubbing.export")}
                 </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={exportSubtitleCopy} disabled={subtitleSaving !== null || activeGenerationId !== null}>
+                  {subtitleSaving === "copy" ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
+                  {subtitleSaving === "copy" ? t("dubbing.subtitleSaving") : t("dubbing.exportSubtitle")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setWriteBackOpen(true)}
+                  disabled={!session.subtitle_dirty || session.source_changed || subtitleSaving !== null || activeGenerationId !== null}
+                  title={!session.subtitle_dirty ? t("dubbing.writeBackModalDesc") : undefined}
+                >
+                  <FileCheck2 size={14} /> {t("dubbing.writeBackSubtitle")}
+                </Button>
               </div>
             </div>
             {batchRunning && <div className="mt-3"><Progress value={batchProgress} /></div>}
           </div>
 
-          <div className="space-y-3">
-            {session.cues.map((cue) => (
-              <CueCard
-                key={cue.index}
-                cue={cue}
-                active={activeCueIndex === cue.index}
-                disabled={batchRunning || exporting || activeGenerationId !== null}
-                onGenerate={() => generateSingle(cue.index)}
-                onAccept={() => acceptOverflow(cue.index)}
-                onUpdate={editCue}
-                globalVoice={voice}
-                voiceOptions={selectedLocalModel && !selectedLocalModel.clone_only ? selectedLocalModel.voices : []}
-                t={t}
-              />
-            ))}
+          {subtitleArtifact && (
+            <Card className="flex flex-col gap-3 border-brand/15 bg-brand/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                  <ShieldCheck size={16} className="text-brand" />
+                  {subtitleArtifact.kind === "backup" ? t("dubbing.subtitleArtifactBackup") : t("dubbing.subtitleArtifactCopy")}
+                </p>
+                <p className="mt-1 truncate font-mono text-xs text-text-tertiary">{subtitleArtifact.path}</p>
+              </div>
+              <Button type="button" variant="secondary" size="sm" onClick={() => revealItemInDir(subtitleArtifact.path)}>
+                <FolderOpen size={14} /> {t("dubbing.revealSubtitle")}
+              </Button>
+            </Card>
+          )}
+
+          <div className={`grid gap-4 ${session.video_path ? "xl:grid-cols-[minmax(20rem,0.72fr)_minmax(0,1.28fr)] xl:items-start" : ""}`}>
+            {session.video_path && (
+              <div className="xl:sticky xl:top-[6.5rem]">
+                <DubbingVideoPanel
+                  videoPath={session.video_path}
+                  videoRef={videoRef}
+                  currentTimeMs={currentTimeMs}
+                  currentCue={playbackCue}
+                  onTimeUpdate={setCurrentTimeMs}
+                  onPlayingChange={setVideoPlaying}
+                  t={t}
+                />
+              </div>
+            )}
+            <div className="min-w-0 space-y-3">
+              {session.cues.map((cue) => (
+                <div
+                  key={cue.index}
+                  ref={(element) => {
+                    if (element) cueElements.current.set(cue.index, element);
+                    else cueElements.current.delete(cue.index);
+                  }}
+                >
+                  <CueCard
+                    cue={cue}
+                    generating={activeCueIndex === cue.index}
+                    playbackActive={playbackCue?.index === cue.index}
+                    disabled={batchRunning || exporting || subtitleSaving !== null || activeGenerationId !== null}
+                    onGenerate={() => generateSingle(cue.index)}
+                    onAccept={() => acceptOverflow(cue.index)}
+                    onUpdate={editCue}
+                    onSeek={session.video_path ? () => seekToCue(cue) : undefined}
+                    globalVoice={voice}
+                    voiceOptions={selectedLocalModel && !selectedLocalModel.clone_only ? selectedLocalModel.voices : []}
+                    t={t}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
 
           {session.output_path && (
@@ -572,29 +729,142 @@ export default function DubbingPage() {
               <Button type="button" variant="secondary" size="sm" onClick={() => revealItemInDir(session.output_path!)}><FolderOpen size={14} /> {t("dubbing.revealOutput")}</Button>
             </Card>
           )}
+
+          {writeBackOpen && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="dubbing-writeback-title"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget && subtitleSaving !== "source") setWriteBackOpen(false);
+              }}
+            >
+              <Card className="w-full max-w-lg border border-border-default bg-surface-overlay p-6 shadow-2xl">
+                <div className="flex items-start gap-3">
+                  <span className="rounded-full bg-brand/10 p-2 text-brand"><ShieldCheck size={20} /></span>
+                  <div className="min-w-0">
+                    <h3 id="dubbing-writeback-title" className="font-display text-h2 font-bold text-text-primary">{t("dubbing.writeBackModalTitle")}</h3>
+                    <p className="mt-2 text-sm leading-6 text-text-secondary">{t("dubbing.writeBackModalDesc")}</p>
+                  </div>
+                </div>
+                <div className="mt-5 space-y-2 rounded-2xl border border-border-subtle bg-surface-card p-4 text-xs leading-5 text-text-secondary">
+                  <p className="flex gap-2"><CheckCircle2 size={15} className="mt-0.5 shrink-0 text-success" /> {t("dubbing.writeBackGuardChanged")}</p>
+                  <p className="flex gap-2"><CheckCircle2 size={15} className="mt-0.5 shrink-0 text-success" /> {t("dubbing.writeBackGuardBackup")}</p>
+                  <p className="flex gap-2 text-warning"><AlertTriangle size={15} className="mt-0.5 shrink-0" /> {t("dubbing.writeBackFormatNotice")}</p>
+                </div>
+                <p className="mt-4 break-all font-mono text-xs leading-5 text-text-tertiary">{session.subtitle_path}</p>
+                <div className="mt-6 flex justify-end gap-2.5">
+                  <Button type="button" variant="secondary" size="sm" onClick={() => setWriteBackOpen(false)} disabled={subtitleSaving === "source"}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button type="button" variant="primary" size="sm" onClick={writeBackSubtitle} disabled={subtitleSaving === "source"}>
+                    {subtitleSaving === "source" ? <LoaderCircle size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                    {subtitleSaving === "source" ? t("dubbing.subtitleSaving") : t("dubbing.writeBackConfirm")}
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
 
+function DubbingVideoPanel({
+  videoPath,
+  videoRef,
+  currentTimeMs,
+  currentCue,
+  onTimeUpdate,
+  onPlayingChange,
+  t,
+}: {
+  videoPath: string;
+  videoRef: RefObject<HTMLVideoElement | null>;
+  currentTimeMs: number;
+  currentCue: DubbingCue | null;
+  onTimeUpdate: (timeMs: number) => void;
+  onPlayingChange: (playing: boolean) => void;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const [videoError, setVideoError] = useState(false);
+  const videoUrl = useMemo(() => fileAssetUrl(videoPath), [videoPath]);
+
+  useEffect(() => {
+    setVideoError(false);
+    onTimeUpdate(0);
+    onPlayingChange(false);
+  }, [onPlayingChange, onTimeUpdate, videoPath]);
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="flex items-center justify-between gap-3 border-b border-border-subtle px-4 py-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Video size={16} className="text-brand" /> {t("dubbing.playerTitle")}</p>
+          <p className="mt-0.5 truncate text-xs text-text-tertiary" title={videoPath}>{videoPath}</p>
+        </div>
+        <Badge variant="info">{t("dubbing.playerLinked")}</Badge>
+      </div>
+      <div className="relative flex aspect-video max-h-[42vh] items-center justify-center overflow-hidden bg-[#080b12]">
+        {videoUrl && !videoError ? (
+          <video
+            ref={videoRef}
+            src={videoUrl}
+            controls
+            playsInline
+            preload="metadata"
+            className="h-full max-h-[42vh] w-full object-contain"
+            onTimeUpdate={(event) => onTimeUpdate(Math.round(event.currentTarget.currentTime * 1000))}
+            onSeeked={(event) => onTimeUpdate(Math.round(event.currentTarget.currentTime * 1000))}
+            onPlay={() => onPlayingChange(true)}
+            onPause={() => onPlayingChange(false)}
+            onEnded={() => onPlayingChange(false)}
+            onError={() => {
+              setVideoError(true);
+              onPlayingChange(false);
+            }}
+          />
+        ) : (
+          <div className="flex max-w-sm flex-col items-center gap-2 px-6 text-center text-sm leading-6 text-white/60">
+            <Video size={26} className="text-white/45" />
+            {videoError ? t("dubbing.playerLoadError") : t("dubbing.playerNativeOnly")}
+          </div>
+        )}
+      </div>
+      <div className="p-4">
+        <div className="flex items-center justify-between gap-3 text-xs text-text-tertiary">
+          <span className="font-mono">{formatTime(currentTimeMs)}</span>
+          <span>{currentCue ? t("dubbing.currentCue", { index: currentCue.index + 1 }) : t("dubbing.noActiveCue")}</span>
+        </div>
+        {currentCue && <p className="mt-2 line-clamp-3 text-sm font-medium leading-6 text-text-primary">{currentCue.text}</p>}
+      </div>
+    </Card>
+  );
+}
+
 function CueCard({
   cue,
-  active,
+  generating,
+  playbackActive,
   disabled,
   onGenerate,
   onAccept,
   onUpdate,
+  onSeek,
   globalVoice,
   voiceOptions,
   t,
 }: {
   cue: DubbingCue;
-  active: boolean;
+  generating: boolean;
+  playbackActive: boolean;
   disabled: boolean;
   onGenerate: () => void;
   onAccept: () => void;
   onUpdate: (cueIndex: number, text: string, voiceId: string) => Promise<void>;
+  onSeek?: () => void;
   globalVoice: string;
   voiceOptions: TtsVoice[];
   t: ReturnType<typeof useI18n>["t"];
@@ -632,14 +902,29 @@ function CueCard({
   }[cue.status];
   const Icon = status.icon;
   const audioUrl = cue.wav_path ? fileAssetUrl(cue.wav_path) : "";
+  const cueHeading = (
+    <>
+      <span className="flex items-center gap-1.5 font-display text-lg font-semibold text-text-primary">
+        #{cue.index + 1}
+        {onSeek && <Play size={11} className="text-brand opacity-70 transition group-hover:opacity-100" />}
+      </span>
+      <span className="mt-1 block font-mono text-[11px] leading-5 text-text-tertiary">{formatTime(cue.start_ms)}<br />{formatTime(cue.end_ms)}</span>
+    </>
+  );
 
   return (
-    <Card className={`p-4 ${active ? "border-brand/30 shadow-brand-glow" : ""}`}>
-      <div className="grid gap-4 lg:grid-cols-[5.5rem_minmax(0,1fr)_18rem] lg:items-center">
-        <div>
-          <div className="font-display text-lg font-semibold text-text-primary">#{cue.index + 1}</div>
-          <div className="mt-1 font-mono text-[11px] leading-5 text-text-tertiary">{formatTime(cue.start_ms)}<br />{formatTime(cue.end_ms)}</div>
-        </div>
+    <Card
+      className={`p-4 ${playbackActive ? "border-brand/45 bg-brand/5 shadow-brand-glow" : generating ? "border-brand/30" : ""}`}
+      aria-current={playbackActive ? "true" : undefined}
+    >
+      <div className="grid gap-4 sm:grid-cols-[5.5rem_minmax(0,1fr)] sm:items-center 2xl:grid-cols-[5.5rem_minmax(0,1fr)_15rem]">
+        {onSeek ? (
+          <button type="button" onClick={onSeek} className="group rounded-xl p-1 text-left transition hover:bg-brand/8" aria-label={t("dubbing.seekCue", { index: cue.index + 1 })}>
+            {cueHeading}
+          </button>
+        ) : (
+          <div>{cueHeading}</div>
+        )}
         <div className="min-w-0">
           <p className="text-sm font-medium leading-6 text-text-primary">{cue.text}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
@@ -652,7 +937,7 @@ function CueCard({
           </div>
           {cue.error && <p className="mt-2 text-xs leading-5 text-danger">{cue.error}</p>}
         </div>
-        <div className="flex flex-col items-stretch gap-2 lg:items-end">
+        <div className="flex flex-col items-stretch gap-2 sm:col-start-2 2xl:col-start-auto 2xl:items-end">
           {audioUrl && <audio controls preload="none" src={audioUrl} className="h-9 w-full max-w-[17rem]" />}
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="secondary" size="sm" onClick={() => setEditing((current) => !current)} disabled={disabled || saving}>
@@ -665,7 +950,7 @@ function CueCard({
               </Button>
             )}
             <Button type="button" variant={cue.status === "pending" || cue.status === "failed" ? "primary" : "secondary"} size="sm" onClick={onGenerate} disabled={disabled}>
-              {active ? <LoaderCircle size={14} className="animate-spin" /> : <Volume2 size={14} />}
+              {generating ? <LoaderCircle size={14} className="animate-spin" /> : <Volume2 size={14} />}
               {cue.wav_path ? t("dubbing.regenerate") : t("dubbing.generate")}
             </Button>
           </div>

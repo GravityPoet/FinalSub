@@ -19,9 +19,9 @@ use crate::core::task_queue::{
 };
 use crate::core::translation::{self, TranslationProvider};
 use crate::core::tts::{
-    CloudTtsSynthesisRequest, DubbingEngineSelection, DubbingSession, DubbingSynthesizeCueRequest,
-    LocalTtsSynthesisRequest, SaveTtsProviderRequest, TtsModelInfo, TtsProviderProfile,
-    TtsSynthesisResult, UpdateDubbingCueRequest,
+    CloudTtsSynthesisRequest, DubbingEngineSelection, DubbingSession, DubbingSubtitleWriteResult,
+    DubbingSynthesizeCueRequest, LocalTtsSynthesisRequest, SaveTtsProviderRequest, TtsModelInfo,
+    TtsProviderProfile, TtsSynthesisResult, UpdateDubbingCueRequest,
 };
 use crate::state::AppState;
 use tauri_plugin_fs::FsExt;
@@ -473,6 +473,31 @@ pub fn update_dubbing_cue(
     request: UpdateDubbingCueRequest,
 ) -> Result<DubbingSession, String> {
     crate::core::tts::update_dubbing_cue(&state.app_config_dir, request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn export_dubbing_subtitle(
+    state: State<'_, AppState>,
+    session_id: String,
+    output_path: String,
+) -> Result<String, String> {
+    if !state.tts_controls.read().await.is_empty() {
+        return Err("配音合成正在运行，请完成或取消后再导出字幕".into());
+    }
+    crate::core::tts::export_dubbing_subtitle(&state.app_config_dir, &session_id, &output_path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn write_back_dubbing_subtitle(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<DubbingSubtitleWriteResult, String> {
+    if !state.tts_controls.read().await.is_empty() {
+        return Err("配音合成正在运行，请完成或取消后再写回字幕".into());
+    }
+    crate::core::tts::write_back_dubbing_subtitle(&state.app_config_dir, &session_id)
         .map_err(|error| error.to_string())
 }
 
