@@ -335,6 +335,12 @@ export interface DubbingSession {
   created_at: string;
   updated_at: string;
   source_changed: boolean;
+  subtitle_dirty: boolean;
+}
+
+export interface DubbingSubtitleWriteResult {
+  session: DubbingSession;
+  backup_path: string;
 }
 
 export interface DubbingSynthesizeCueRequest {
@@ -482,6 +488,19 @@ export async function updateDubbingCue(
   request: UpdateDubbingCueRequest,
 ): Promise<DubbingSession> {
   return invoke("update_dubbing_cue", { request });
+}
+
+export async function exportDubbingSubtitle(
+  sessionId: string,
+  outputPath: string,
+): Promise<string> {
+  return invoke("export_dubbing_subtitle", { sessionId, outputPath });
+}
+
+export async function writeBackDubbingSubtitle(
+  sessionId: string,
+): Promise<DubbingSubtitleWriteResult> {
+  return invoke("write_back_dubbing_subtitle", { sessionId });
 }
 
 export async function synthesizeDubbingCue(
@@ -1162,6 +1181,7 @@ function createMockDubbingSession(subtitlePath = "/Users/example/Subtitles/demo.
     created_at: now,
     updated_at: now,
     source_changed: false,
+    subtitle_dirty: false,
   };
 }
 
@@ -1553,10 +1573,13 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       mockDubbingSessionState ??= createMockDubbingSession();
       const request = args?.request as UpdateDubbingCueRequest | undefined;
       if (!request) throw new Error("Dubbing cue update request is missing");
+      const previousCue = mockDubbingSessionState.cues.find((cue) => cue.index === request.cue_index);
+      const textChanged = request.text !== undefined && request.text.trim() !== previousCue?.text;
       mockDubbingSessionState = {
         ...mockDubbingSessionState,
         updated_at: new Date().toISOString(),
         output_path: null,
+        subtitle_dirty: mockDubbingSessionState.subtitle_dirty || textChanged,
         cues: mockDubbingSessionState.cues.map((cue) => cue.index === request.cue_index ? {
           ...cue,
           text: request.text ?? cue.text,
@@ -1571,6 +1594,24 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       };
       return mockDubbingSessionState;
     }
+    case "export_dubbing_subtitle":
+      return String(args?.outputPath ?? "/Users/example/Downloads/demo.finalsub-edited.srt");
+    case "write_back_dubbing_subtitle":
+      mockDubbingSessionState ??= createMockDubbingSession();
+      if (!mockDubbingSessionState.subtitle_dirty) {
+        throw new Error("字幕文本没有变化，无需写回源文件");
+      }
+      mockDubbingSessionState = {
+        ...mockDubbingSessionState,
+        subtitle_hash: `dev-browser-mock-${Date.now()}`,
+        subtitle_dirty: false,
+        source_changed: false,
+        updated_at: new Date().toISOString(),
+      };
+      return {
+        session: mockDubbingSessionState,
+        backup_path: "/Users/example/Subtitles/demo.finalsub-backup.srt",
+      } satisfies DubbingSubtitleWriteResult;
     case "synthesize_dubbing_cue": {
       mockDubbingSessionState ??= createMockDubbingSession();
       const request = args?.request as DubbingSynthesizeCueRequest | undefined;

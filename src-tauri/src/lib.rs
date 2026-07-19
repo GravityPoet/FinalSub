@@ -97,6 +97,8 @@ pub fn run() {
             commands::create_dubbing_session,
             commands::get_dubbing_session,
             commands::update_dubbing_cue,
+            commands::export_dubbing_subtitle,
+            commands::write_back_dubbing_subtitle,
             commands::synthesize_dubbing_cue,
             commands::accept_dubbing_overflow,
             commands::export_dubbing_audio,
