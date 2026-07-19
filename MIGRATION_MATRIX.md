@@ -1,7 +1,7 @@
 # FinalSub 功能与发布矩阵
 
 更新时间：2026-07-19
-对照基线：SmartSub `2ea9327f80bd79ec1b950caeb002f17a8722a5e0`（2026-07-18）与 FinalSub `6e0c133a9d890b77be30443e858b8910c2dc33c4` 的源码、单元测试、Universal 生产构建和真实应用 UI。
+对照基线：SmartSub `2ea9327f80bd79ec1b950caeb002f17a8722a5e0`（2026-07-18）与 FinalSub `24e427cd2c87b65f7a85a2fc13560e70354ef6b7` 的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
 
 状态定义：
 
@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、硬字幕合成、模型管理和配置安全主链路已可用于真实生产；在原生离线 ASR、云 ASR 协议广度、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 3.4.0 已把产品边界扩到“转写 → 翻译 → 校对 → TTS 配音 → 声音克隆 → 音轨/字幕封装 → 流水线批处理”。FinalSub 已对齐其术语表和 AI 对齐保护，但 TTS/声音克隆、软字幕与音轨封装、硬件编码、配方/人工闸门和日志中心仍未交付，因此目前尚不能笼统宣称功能全面对齐或超越。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、硬/软字幕合成、配音音轨替换/混音/双轨封装、模型管理和配置安全主链路已可用于真实生产；在原生离线 ASR、云 ASR 协议广度、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 3.4.0 已把产品边界扩到“转写 → 翻译 → 校对 → TTS 配音 → 声音克隆 → 音轨/字幕封装 → 流水线批处理”。FinalSub 已对齐其术语表、AI 对齐保护和统一媒体 compose，但 TTS/声音克隆、时间轴对齐、硬件编码、配方/人工闸门和日志中心仍未交付，因此目前尚不能笼统宣称功能全面对齐或超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -27,8 +27,8 @@ FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动�
 | 任务持久化 | 🟢 | `tasks.json` 临时文件 + rename；重启后未完成任务恢复为可继续状态 |
 | 字幕翻译 | 🟢 | 18 个 provider dispatch；批量大小、并发、间隔、术语表、动态 Schema、回显对齐、定点补翻、提示词模板、自定义 headers/body、代理和模型发现 |
 | 字幕校对 | 🟢 | 视频联动、导入/检测、编辑、拆分、合并、时间偏移、搜索替换、撤销重做、保存及错误恢复 |
-| 视频合字幕 | 🟢 | 进度、取消、10 秒预览、字体/描边/阴影/背景、九宫格位置、CRF、编码 preset |
-| 软字幕 / MKV 封装 | 🔴 | 当前只交付硬字幕烧录；尚缺 stream-copy 软字幕、双音轨 MKV 与音轨元数据 |
+| 视频合成工作台 | 🟢 | 硬/软字幕结构分离，进度、取消、10 秒预览、字体/描边/阴影/背景、九宫格位置、CRF、编码 preset 与配音音轨组合 |
+| 软字幕 / MKV 封装 | 🟢 | stream-copy 视频与原声，SRT/VTT 转 SubRip、ASS 保留 ASS，语言/标题 metadata 与默认轨道 disposition；双音轨自动使用 MKV |
 | TTS 配音与声音克隆 | 🔴 | 尚未交付；见第 5 节 |
 | 端到端流水线 | 🔴 | 尚缺可保存配方、阶段恢复、人工闸门和批量编排；见第 7 节 |
 | 配置导入导出 | 🟢 | 普通 JSON 与 Argon2id + XChaCha20-Poly1305 加密格式；Keychain 密钥不导出 |
@@ -109,7 +109,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 本地声音克隆 | 🔴 | ZipVoice 零样本克隆、参考音频转写、录音、降噪、质量检查与导入导出 |
 | 云声音克隆 | 🔴 | 火山声音复刻 2.0、ElevenLabs IVC、云端音色找回 |
 | 时间轴对齐 | 🔴 | 合成前语速预控、实测复检、静音借时、1.5x 上限与问题行审阅 |
-| 输出模式 | 🔴 | WAV/MP3、替换原音轨、与原音混合、双音轨 MKV、同步输出对齐字幕 |
+| 输出模式 | 🟠 | 视频合成工作台已支持导入音频后替换原声、sidechain ducking 混音与双音轨 MKV；TTS 工作台自身的 WAV/MP3 与同步对齐字幕仍缺 |
 | 引擎进程隔离 | 🟠 | FinalSub 的 ASR 任务边界和 sidecar 已隔离部分故障；TTS/克隆尚无独立 worker 生命周期 |
 
 ## 6. 视频合成与媒体封装
@@ -119,8 +119,8 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 硬字幕烧录 | 🟢 | 样式、九宫格、进度、取消、10 秒预览、CRF 与 preset 已交付 |
 | 实时样式预览 | 🟢 | 可在合成页预览当前样式；最终 FFmpeg 预览为真实 10 秒媒体片段 |
 | 样式预设 | 🟠 | 有完整样式参数，但尚缺命名、保存、重排和复用的个人预设管理 |
-| 软字幕封装 | 🔴 | 尚缺 stream-copy 的可开关字幕轨及语言/标题 metadata |
-| 音轨替换 / 混合 / 新增 | 🔴 | 尚未交付统一 compose builder 与音轨模式 |
+| 软字幕封装 | 🟢 | 软字幕自动使用 MKV；视频/原声 stream copy，可开关轨道携带语言、名称和默认 disposition；真实媒体夹具已读回验证 |
+| 音轨替换 / 混合 / 新增 | 🟢 | 单一 Rust compose builder 覆盖保留、替换、sidechain ducking 混音、双轨；只编码必须处理的流，硬烧+保留原声参数与旧命令逐项相等 |
 | 硬件编码管理 | 🔴 | 尚缺 NVIDIA/AMD/Intel/macOS 能力探测、可选编码器与失败自动 CPU 回退 |
 
 ## 7. 流水线、配方与可观测性
@@ -141,9 +141,9 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 视觉系统 | 🟢 | 深浅主题液态玻璃、统一组件、F 品牌图标、清晰状态色与减少动态效果适配；主题入口集中到设置页 |
 | 响应式 | 🟢 | 桌面侧栏、移动底栏；1200×800 与 390×844 无横向溢出 |
 | 导航效率 | 🟢 | `⌘K` 根级命令面板、`⌘1`–`⌘7`、活动中心、首次引导和可折叠侧栏；选中态使用导轨而非通知圆点 |
-| 国际化 | 🟢 | 中文、英文、日文 786 个 key 完全对齐 |
+| 国际化 | 🟢 | 中文、英文、日文 816 个 key 完全对齐 |
 | 路由体积 | 🟢 | 页面 lazy loading；生产构建按页面拆包 |
-| 浏览器 QA | 🟢 | 本地模型/云端服务分区、深浅主题、云 ASR 多实例与讯飞长表单、桌面/移动端已实测；控制台 0 error |
+| 浏览器 QA | 🟢 | 本地模型/云端服务分区、翻译对齐/术语表、视频 compose 硬/软字幕与音轨结构、深浅主题、桌面/移动端已实测；控制台 0 error |
 
 ## 9. 安全与隐私
 
@@ -171,18 +171,19 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 ## 11. 新鲜验证（2026-07-19）
 
-- `cargo test --lib`：195 passed、0 failed、5 ignored；新增术语优先级/命中、配置迁移、三段结构化输出降级、动态 Schema、回显相似度与嵌套额外字段拒绝测试。
+- `cargo test --lib`：204 passed、0 failed、5 ignored；除翻译对齐测试外，新增 compose 旧命令等价、MKV 约束、流复制、轨道 metadata、sidechain 混音、多音轨单流编码与信任边界测试。
 - `cargo clippy --all-targets --all-features -- -D warnings`：通过。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
-- 中英日 locale：786/786/786，duplicate 0；TypeScript 的 `Record<keyof typeof zh, string>` 同时约束缺失与多余键。
+- 中英日 locale：816/816/816，duplicate 0；TypeScript 的 `Record<keyof typeof zh, string>` 同时约束缺失与多余键。
 - 云端 ASR 聚焦测试：22 passed，覆盖八种协议、签名固定向量、异步续查，以及服务商级闸门的共享、隔离、并发、启动间隔和取消边界。
 - SenseVoice、Paraformer、Qwen3-ASR、FireRedASR2 官方模型真实短 WAV E2E：全部通过。
-- Liquid Glass UI：1440×900、1200×800 与 390×844、深浅主题、控制台 0 error；模型管理默认进入本地模型、已安装模型置顶，云端服务独立成页并明确“无需下载模型”；翻译页新增对齐保护与独立术语表草稿，桌面/移动端无横向溢出，并验证“保存 provider 不会误存术语草稿”；云 ASR 请求控制在桌面为四列/两列、移动端为单列。
+- Compose 真实媒体 E2E：应用内置 FFmpeg 现场生成视频、配音与字幕；“软字幕 + 双音轨”产物读回为 2 条音轨、1 条可开关字幕轨且语言/标题正确，“硬字幕 + sidechain ducking 混音”也真实完成。
+- Liquid Glass UI：1440×900、1200×800 与 390×844、深浅主题、控制台 0 error；模型管理默认进入本地模型、云端服务独立成页并明确“无需下载模型”；翻译页对齐保护与术语草稿隔离通过；视频合成页明确硬/软字幕及保留/替换/混音/双轨结构，软字幕隐藏无效样式区，双轨自动切换 MKV，桌面/移动端均无横向溢出。
 - macOS Universal `.app`：主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，主程序与 Whisper 的两套 slice 均为 `minos 12.0`，深度签名验证通过。
-- Universal DMG：新鲜构建通过 bundle 签名检查；SHA-256 `32d72dc0a1afcbbce9ab7cf21f1dd2fdba1efce83862f39879cbe059fb6bb38d`。
+- Universal DMG：新鲜构建通过 bundle 签名检查；SHA-256 `df251eca28d755341245c8c5168ae636419b2deea726c8c9230646f022149e51`。
 - 签名 updater：使用一次性测试密钥真实生成 `.app.tar.gz` 与 `.sig`，验证 release 配置、官方签名器及产物链路后已物理清理测试密钥、生成配置和临时更新包；生产根密钥仍保持 P0 门控。
 - `/Applications/FinalSub.app`：版本 1.0.10，bundle id `com.gravitypoet.finalsub`，`x86_64 arm64`、deep strict 签名有效，真实启动路径与安装路径一致；文件系统只保留这一份产品 App。
-- 本轮安装前备份：`~/Library/Application Support/FinalSub/Backups/20260719-143937/FinalSub.app.zip`，压缩数据与回滚应用签名均已验证。
+- 本轮安装前备份：`~/Library/Application Support/FinalSub/Backups/20260719-150400/FinalSub.app.zip`，压缩数据与回滚应用签名均已验证。
 - 真实应用 UI：模型管理默认打开“本地模型”，已安装模型置顶，并把 `/Users/moonlitpoet/Tools/Local-LLM/parakeet-models/parakeet-tdt-0.6b-v2` 判定为绿色“已下载”；“云端服务”独立成页并明确标注“无需下载模型”，未触发重复下载。
 
 ## 12. 仍不能宣称完成的事项
@@ -193,5 +194,5 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 4. Linux Secret Service 后端已配置，但尚缺真实 Linux 桌面会话的密钥存取 E2E。
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-7. TTS 配音、声音克隆、时间轴对齐、音轨混合/替换/双音轨 MKV 尚未交付。
-8. 配方、人工闸门、软字幕封装、硬件编码管理和跨任务日志中心尚未达到 SmartSub `2ea9327` 基线。
+7. TTS 配音、声音克隆与时间轴对齐尚未交付；视频合成已能消费外部配音音频，但还不能自行生成。
+8. 配方、人工闸门、硬件编码管理和跨任务日志中心尚未达到 SmartSub `2ea9327` 基线。
