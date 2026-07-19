@@ -945,6 +945,12 @@ pub struct BurnSubtitleRequest {
     pub crf: Option<u8>,
     pub preset: Option<String>,
     pub soft_subtitle: Option<bool>,
+    pub audio_path: Option<String>,
+    pub audio_mode: Option<String>,
+    pub subtitle_language: Option<String>,
+    pub subtitle_title: Option<String>,
+    pub audio_language: Option<String>,
+    pub audio_title: Option<String>,
 }
 
 #[tauri::command]
@@ -957,6 +963,22 @@ pub async fn burn_subtitle(
     let subtitle_path = validate_existing_file_path(&req.subtitle_path, "Subtitle file")?;
     let output_path = validate_new_output_path(&req.output_path, "Video output path")?;
     let burn_id = output_path.to_string_lossy().to_string();
+    let audio_mode = audio::ComposeAudioMode::parse(req.audio_mode.as_deref())?;
+    let audio_path = match audio_mode {
+        audio::ComposeAudioMode::Keep => None,
+        audio::ComposeAudioMode::Replace
+        | audio::ComposeAudioMode::Mix
+        | audio::ComposeAudioMode::AddTrack => {
+            let path = validate_existing_file_path(
+                req.audio_path.as_deref().unwrap_or_default(),
+                "Audio file",
+            )?;
+            validate_audio_input_extension(&path)?;
+            Some(path)
+        }
+    };
+    validate_subtitle_input_extension(&subtitle_path)?;
+    validate_compose_output_extension(&output_path)?;
     validate_burn_style(&req)?;
     let style = audio::BurnInStyleOptions {
         font_name: req.font_name,
@@ -972,57 +994,42 @@ pub async fn burn_subtitle(
         crf: req.crf,
         preset: req.preset,
     };
-    let args = if req.soft_subtitle.unwrap_or(false) {
-        let ext = output_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        let subtitle_codec = if ext == "mp4" {
-            "mov_text"
-        } else if ext == "mkv" {
-            // 根据输入字幕文件的后缀选择编码
-            let sub_ext = subtitle_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if sub_ext == "ass" || sub_ext == "ssa" {
-                "ass"
-            } else {
-                "srt"
-            }
-        } else {
-            "srt"
-        };
-
-        vec![
-            "-i".to_string(),
-            video_path.to_string_lossy().to_string(),
-            "-i".to_string(),
-            subtitle_path.to_string_lossy().to_string(),
-            "-c".to_string(),
-            "copy".to_string(),
-            "-c:s".to_string(),
-            subtitle_codec.to_string(),
-            "-map".to_string(),
-            "0".to_string(),
-            "-map".to_string(),
-            "1".to_string(),
-            "-y".to_string(),
-            output_path.to_string_lossy().to_string(),
-        ]
-    } else {
-        audio::burn_in_args(
-            &video_path.to_string_lossy(),
-            &subtitle_path.to_string_lossy(),
-            &output_path.to_string_lossy(),
-            &style,
-        )
-    };
-
     let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let original_audio_tracks = if matches!(
+        audio_mode,
+        audio::ComposeAudioMode::Mix | audio::ComposeAudioMode::AddTrack
+    ) {
+        probe_audio_track_count(&ffmpeg_path, &video_path).await?
+    } else {
+        0
+    };
+    let subtitle_language =
+        validate_track_language("Subtitle language", req.subtitle_language.as_deref())?
+            .or_else(|| Some("und".into()));
+    let subtitle_title = validate_track_title("Subtitle title", req.subtitle_title.as_deref())?
+        .or_else(|| Some("FinalSub Subtitles".into()));
+    let audio_language = validate_track_language("Audio language", req.audio_language.as_deref())?
+        .or_else(|| Some("und".into()));
+    let audio_title = validate_track_title("Audio title", req.audio_title.as_deref())?
+        .or_else(|| Some("FinalSub Dub".into()));
+    let options = audio::ComposeOptions {
+        soft_subtitle: req.soft_subtitle.unwrap_or(false),
+        audio_mode,
+        audio_path: audio_path.map(|path| path.to_string_lossy().to_string()),
+        subtitle_language,
+        subtitle_title,
+        audio_language,
+        audio_title,
+        original_audio_tracks,
+    };
+    let args = audio::compose_args(
+        &video_path.to_string_lossy(),
+        &subtitle_path.to_string_lossy(),
+        &output_path.to_string_lossy(),
+        &style,
+        &options,
+    )?;
+
     let mut child = tokio::process::Command::new(ffmpeg_path)
         .args(&args)
         .stdout(std::process::Stdio::null())
@@ -1139,6 +1146,23 @@ pub async fn cancel_burn_subtitle(
         let _ = cancel_tx.send(());
     }
     Ok(())
+}
+
+async fn probe_audio_track_count(
+    ffmpeg_path: &std::path::Path,
+    video_path: &std::path::Path,
+) -> Result<usize, String> {
+    let output = tokio::process::Command::new(ffmpeg_path)
+        .arg("-i")
+        .arg(video_path)
+        .output()
+        .await
+        .map_err(|error| format!("Failed to inspect source audio tracks: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Ok(stderr
+        .lines()
+        .filter(|line| line.contains("Stream #") && line.contains("Audio:"))
+        .count())
 }
 
 #[derive(serde::Serialize)]
@@ -2205,6 +2229,74 @@ fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_subtitle_input_extension(path: &std::path::Path) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "srt" | "ass" | "ssa" | "vtt") {
+        Ok(())
+    } else {
+        Err("Subtitle file must use .srt, .ass, .ssa, or .vtt".into())
+    }
+}
+
+fn validate_audio_input_extension(path: &std::path::Path) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(
+        extension.as_str(),
+        "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus"
+    ) {
+        Ok(())
+    } else {
+        Err("Audio file must use WAV, MP3, M4A, AAC, FLAC, OGG, or Opus".into())
+    }
+}
+
+fn validate_compose_output_extension(path: &std::path::Path) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "mp4" | "m4v" | "mov" | "mkv") {
+        Ok(())
+    } else {
+        Err("Video output must use MP4, M4V, MOV, or MKV".into())
+    }
+}
+
+fn validate_track_language(label: &str, value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.len() > 16
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err(format!(
+            "{label} must be an ISO language tag containing only letters, numbers, or hyphens"
+        ));
+    }
+    Ok(Some(value.to_ascii_lowercase()))
+}
+
+fn validate_track_title(label: &str, value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.len() > 128 || value.chars().any(char::is_control) {
+        return Err(format!("{label} must be at most 128 visible characters"));
+    }
+    Ok(Some(value.to_string()))
+}
+
 fn validate_ass_color(label: &str, value: &str) -> Result<(), String> {
     let valid = value.len() == 10
         && value.starts_with("&H")
@@ -2895,6 +2987,43 @@ mod tests {
     fn validate_ass_color_rejects_bad_value() {
         let result = validate_ass_color("Font color", "white");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_compose_extensions_match_the_ui_contract() {
+        for path in [
+            "/tmp/out.mp4",
+            "/tmp/out.m4v",
+            "/tmp/out.mov",
+            "/tmp/out.mkv",
+        ] {
+            assert!(validate_compose_output_extension(std::path::Path::new(path)).is_ok());
+        }
+        assert!(validate_compose_output_extension(std::path::Path::new("/tmp/out.webm")).is_err());
+
+        for path in [
+            "/tmp/dub.wav",
+            "/tmp/dub.mp3",
+            "/tmp/dub.m4a",
+            "/tmp/dub.flac",
+        ] {
+            assert!(validate_audio_input_extension(std::path::Path::new(path)).is_ok());
+        }
+        assert!(validate_audio_input_extension(std::path::Path::new("/tmp/dub.exe")).is_err());
+    }
+
+    #[test]
+    fn validate_track_metadata_rejects_control_characters_and_invalid_language_tags() {
+        assert_eq!(
+            validate_track_language("Language", Some(" ZHO ")).unwrap(),
+            Some("zho".into())
+        );
+        assert!(validate_track_language("Language", Some("zh;rm -rf")).is_err());
+        assert_eq!(
+            validate_track_title("Title", Some("  中文配音  ")).unwrap(),
+            Some("中文配音".into())
+        );
+        assert!(validate_track_title("Title", Some("bad\ntitle")).is_err());
     }
 
     #[test]

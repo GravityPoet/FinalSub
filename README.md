@@ -62,10 +62,11 @@ Translate your transcriptions into elegant, natural bilingual subtitles with the
 * **Speedy Editing**: Easily split, merge, and search-and-replace subtitle cards.
 * **Timeline Shift**: Adjust time offsets for the entire timeline or selected areas to resolve audio-visual sync issues.
 
-### 🎬 One-Click High-Quality Hardsubbing
+### 🎬 One-Stop Video Composition
 * Bundled with Universal architecture static high-version `ffmpeg` sidecars. No need to install FFmpeg globally.
-* Hardsub generated `SRT` or `VTT` files into original videos in one click.
-* Supports fonts, outlines, shadows, backgrounds, nine-position alignment, CRF, encoding presets, style preview, progress, and cancellation.
+* **Hard subtitles**: Permanently render `SRT`, `VTT`, or `ASS` into the picture with font, outline, shadow, background, nine-position alignment, CRF, encoding presets, real preview, progress, and cancellation.
+* **Soft subtitles**: Package a switchable subtitle track in MKV with language/title metadata while stream-copying video and source audio without quality loss.
+* **Dub composition**: Replace source audio, automatically duck and mix it under a dub, or create a switchable source/dub dual-track MKV. Only streams that require processing are re-encoded.
 
 ### 📁 Diverse Format Support
 * Import and export freely between **SRT**, **VTT**, **ASS**, **LRC (lyrics)**, and **TXT (meeting minutes)**.
@@ -89,7 +90,7 @@ Download the macOS Universal package from the [Releases page](https://github.com
 1. Return to the **"Tasks"** page and drop your video or audio file.
 2. Select the input language (or choose Auto-detect).
 3. (Optional) Turn on translation, then configure and test your chosen AI translation engine.
-4. Click **"Start Task"**. Monitor ASR and translation progress in the **"Queue"** page, edit in the **"Proofread"** page, and burn it into the video in the **"Merge"** page!
+4. Click **"Start Task"**. Monitor ASR and translation in **"Queue"**, edit in **"Proofread"**, then use **"Compose"** to choose hard/soft subtitles and the final audio-track structure.
 
 ---
 

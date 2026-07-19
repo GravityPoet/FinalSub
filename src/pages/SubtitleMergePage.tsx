@@ -1,6 +1,12 @@
 import { useState, useEffect } from "react";
-import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2, AudioLines, X } from "lucide-react";
 import { useI18n } from "../lib/i18n";
+import {
+  composeRequiresMkv,
+  defaultComposeOutputPath,
+  replaceMediaExtension,
+  type ComposeAudioMode,
+} from "../lib/compose";
 import {
   burnSubtitle,
   cancelBurnSubtitle,
@@ -77,6 +83,12 @@ export default function SubtitleMergePage() {
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState("");
   const [softSubtitle, setSoftSubtitle] = useState(false);
+  const [audioPath, setAudioPath] = useState("");
+  const [audioMode, setAudioMode] = useState<ComposeAudioMode>("replace");
+  const [subtitleLanguage, setSubtitleLanguage] = useState("und");
+  const [subtitleTitle, setSubtitleTitle] = useState(() => t("merge.subtitleTrackDefaultTitle"));
+  const [audioLanguage, setAudioLanguage] = useState("und");
+  const [audioTitle, setAudioTitle] = useState(() => t("merge.audioTrackDefaultTitle"));
 
   // Progress state
   const [progress, setProgress] = useState<number | null>(null);
@@ -84,6 +96,7 @@ export default function SubtitleMergePage() {
   // Metadata state
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
+  const requiresMkv = composeRequiresMkv(softSubtitle, audioPath, audioMode);
 
   const missingInputs = [
     !videoPath ? t("merge.missingVideo") : "",
@@ -113,6 +126,18 @@ export default function SubtitleMergePage() {
       setMetadata(null);
     }
   }, [videoPath]);
+
+  useEffect(() => {
+    if (metadata?.audio_tracks === 0 && audioMode === "mix") {
+      setAudioMode("replace");
+    }
+  }, [audioMode, metadata]);
+
+  useEffect(() => {
+    if (requiresMkv && outputPath && !outputPath.toLowerCase().endsWith(".mkv")) {
+      setOutputPath(replaceMediaExtension(outputPath, "mkv"));
+    }
+  }, [outputPath, requiresMkv]);
 
   // Listen for burn progress updates
   useEffect(() => {
@@ -151,10 +176,23 @@ export default function SubtitleMergePage() {
     if (typeof selected === "string") setSubtitlePath(selected);
   };
 
+  const handleSelectAudio = async () => {
+    const selected = await openDialog({
+      multiple: false,
+      filters: [{ name: t("merge.audioFiles"), extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus"] }],
+    });
+    if (typeof selected === "string") setAudioPath(selected);
+  };
+
   const handleSelectOutput = async () => {
     const selected = await saveDialog({
-      defaultPath: videoPath ? videoPath.replace(/\.[^.]+$/, "-subtitled.mp4") : "output.mp4",
-      filters: [{ name: "MP4", extensions: ["mp4"] }],
+      defaultPath: defaultComposeOutputPath(videoPath, requiresMkv),
+      filters: requiresMkv
+        ? [{ name: "Matroska Video", extensions: ["mkv"] }]
+        : [
+            { name: "MP4 Video", extensions: ["mp4"] },
+            { name: "Matroska Video", extensions: ["mkv"] },
+          ],
     });
     if (selected) setOutputPath(selected);
   };
@@ -196,6 +234,12 @@ export default function SubtitleMergePage() {
         crf,
         preset: encodingPreset,
         soft_subtitle: softSubtitle,
+        audio_path: audioPath || undefined,
+        audio_mode: audioPath ? audioMode : "keep",
+        subtitle_language: subtitleLanguage,
+        subtitle_title: subtitleTitle,
+        audio_language: audioLanguage,
+        audio_title: audioTitle,
       });
       setResult(out);
     } catch (err) {
@@ -277,6 +321,26 @@ export default function SubtitleMergePage() {
               <span className="truncate font-mono text-sm text-text-secondary">{subtitlePath || t("merge.notSelected")}</span>
             </div>
             <div className="flex items-center gap-3">
+              <Button onClick={handleSelectAudio} disabled={processing} variant="secondary" size="sm">
+                <AudioLines size={14} />
+                <span>{t("merge.selectAudio")}</span>
+              </Button>
+              <span className="min-w-0 flex-1 truncate font-mono text-sm text-text-secondary">
+                {audioPath || t("merge.audioOptional")}
+              </span>
+              {audioPath && (
+                <button
+                  type="button"
+                  onClick={() => setAudioPath("")}
+                  disabled={processing}
+                  aria-label={t("merge.removeAudio")}
+                  className="rounded-lg p-1.5 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary disabled:opacity-50"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
               <Button onClick={handleSelectOutput} disabled={processing} variant="secondary" size="sm">
                 <FolderOpen size={14} />
                 <span>{t("merge.selectOutput")}</span>
@@ -339,28 +403,153 @@ export default function SubtitleMergePage() {
           </Card>
         )}
 
-        {/* 字幕样式 */}
         <Card className="p-6">
-          <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("merge.subtitleStyle")}</h3>
-
-          <div className="mb-6 flex items-center gap-3.5 rounded-xl bg-brand-subtle border border-brand/10 p-4">
-            <input
-              type="checkbox"
-              id="softSubtitle"
-              checked={softSubtitle}
-              disabled={processing}
-              onChange={(e) => setSoftSubtitle(e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-border-default text-brand focus:ring-0 cursor-pointer disabled:opacity-50"
-            />
-            <div className="flex flex-col">
-              <label htmlFor="softSubtitle" className="text-sm font-semibold text-text-primary cursor-pointer select-none">
-                {t("merge.softSubtitleLabel")}
-              </label>
-              <span className="mt-1 text-sm leading-6 text-text-secondary">
-                {t("merge.softSubtitleDesc")}
-              </span>
-            </div>
+          <div className="mb-5">
+            <h3 className="font-display text-h2 font-semibold text-text-primary">{t("merge.composeMode")}</h3>
+            <p className="mt-1.5 text-sm leading-6 text-text-secondary">{t("merge.composeModeDesc")}</p>
           </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              data-testid="compose-mode-hard"
+              aria-pressed={!softSubtitle}
+              disabled={processing}
+              onClick={() => setSoftSubtitle(false)}
+              className={`rounded-2xl border p-4 text-left transition ${!softSubtitle ? "liquid-selected border-brand/30" : "border-border-subtle bg-surface-overlay hover:border-border-strong"}`}
+            >
+              <span className="block text-sm font-semibold text-text-primary">{t("merge.hardSubtitleLabel")}</span>
+              <span className="mt-1.5 block text-sm leading-6 text-text-secondary">{t("merge.hardSubtitleDesc")}</span>
+            </button>
+            <button
+              type="button"
+              data-testid="compose-mode-soft"
+              aria-pressed={softSubtitle}
+              disabled={processing}
+              onClick={() => setSoftSubtitle(true)}
+              className={`rounded-2xl border p-4 text-left transition ${softSubtitle ? "liquid-selected border-brand/30" : "border-border-subtle bg-surface-overlay hover:border-border-strong"}`}
+            >
+              <span className="block text-sm font-semibold text-text-primary">{t("merge.softSubtitleLabel")}</span>
+              <span className="mt-1.5 block text-sm leading-6 text-text-secondary">{t("merge.softSubtitleDesc")}</span>
+            </button>
+          </div>
+
+          {softSubtitle && (
+            <div className="mt-4 grid gap-4 rounded-2xl border border-border-subtle bg-surface-overlay p-4 sm:grid-cols-[minmax(0,0.38fr)_minmax(0,1fr)]">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackLanguage")}</label>
+                <Input
+                  value={subtitleLanguage}
+                  maxLength={16}
+                  disabled={processing}
+                  onChange={(event) => setSubtitleLanguage(event.target.value)}
+                  placeholder="zho / eng / und"
+                  className="h-9 font-mono"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackTitle")}</label>
+                <Input
+                  value={subtitleTitle}
+                  maxLength={128}
+                  disabled={processing}
+                  onChange={(event) => setSubtitleTitle(event.target.value)}
+                  className="h-9"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 border-t border-border-subtle pt-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-text-primary">{t("merge.audioCompose")}</h4>
+                <p className="mt-1 text-sm leading-6 text-text-secondary">
+                  {audioPath ? t("merge.audioComposeReady") : t("merge.audioComposeEmpty")}
+                </p>
+              </div>
+              {!audioPath && (
+                <Button onClick={handleSelectAudio} disabled={processing} variant="secondary" size="sm">
+                  <AudioLines size={14} />
+                  <span>{t("merge.selectAudio")}</span>
+                </Button>
+              )}
+            </div>
+
+            {audioPath && (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-xl border border-border-subtle bg-surface-overlay px-3.5 py-2.5 font-mono text-xs text-text-secondary">
+                  {audioPath}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {(["replace", "mix", "add-track"] as const).map((mode) => {
+                    const mixUnavailable = mode === "mix" && metadata?.audio_tracks === 0;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        data-testid={`compose-audio-mode-${mode}`}
+                        aria-pressed={audioMode === mode}
+                        disabled={processing || mixUnavailable}
+                        onClick={() => setAudioMode(mode)}
+                        className={`rounded-xl border px-3.5 py-3 text-left transition ${audioMode === mode ? "liquid-selected border-brand/30" : "border-border-subtle bg-surface-overlay hover:border-border-strong"} disabled:cursor-not-allowed disabled:opacity-45`}
+                      >
+                        <span className="block text-sm font-semibold text-text-primary">{t(`merge.audioMode.${mode}` as any)}</span>
+                        <span className="mt-1 block text-xs leading-5 text-text-secondary">{t(`merge.audioMode.${mode}Desc` as any)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {metadata?.audio_tracks === 0 && (
+                  <p className="text-xs leading-5 text-warning">{t("merge.mixNeedsSourceAudio")}</p>
+                )}
+                <div className="grid gap-4 sm:grid-cols-[minmax(0,0.38fr)_minmax(0,1fr)]">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackLanguage")}</label>
+                    <Input
+                      value={audioLanguage}
+                      maxLength={16}
+                      disabled={processing}
+                      onChange={(event) => setAudioLanguage(event.target.value)}
+                      placeholder="zho / eng / und"
+                      className="h-9 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackTitle")}</label>
+                    <Input
+                      value={audioTitle}
+                      maxLength={128}
+                      disabled={processing}
+                      onChange={(event) => setAudioTitle(event.target.value)}
+                      className="h-9"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2 border-t border-border-subtle pt-4 text-xs font-semibold">
+            <span className="rounded-full bg-surface-overlay px-3 py-1.5 text-text-secondary">
+              {softSubtitle ? t("merge.summary.videoCopy") : t("merge.summary.videoEncode")}
+            </span>
+            <span className="rounded-full bg-surface-overlay px-3 py-1.5 text-text-secondary">
+              {softSubtitle ? t("merge.summary.subtitleSwitchable") : t("merge.summary.subtitlePermanent")}
+            </span>
+            <span className="rounded-full bg-surface-overlay px-3 py-1.5 text-text-secondary">
+              {audioPath ? t(`merge.summary.audio.${audioMode}` as any) : t("merge.summary.audio.keep")}
+            </span>
+            <span className="rounded-full bg-brand-subtle px-3 py-1.5 text-brand-text">
+              {requiresMkv ? "MKV" : "MP4 / MKV"}
+            </span>
+          </div>
+        </Card>
+
+        {/* 字幕样式 */}
+        {!softSubtitle && (
+          <Card className="p-6">
+          <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("merge.subtitleStyle")}</h3>
 
           <div className="mb-5">
             <label className="mb-2 block text-sm font-medium text-text-secondary">{t("merge.preset")}</label>
@@ -475,16 +664,12 @@ export default function SubtitleMergePage() {
               >
                 {t("merge.previewPlaceholder")}
               </div>
-              {softSubtitle && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/85 text-sm font-medium text-text-tertiary backdrop-blur-[1px]">
-                  {t("merge.softSubtitlePlayerHint")}
-                </div>
-              )}
             </div>
           </div>
-        </Card>
+          </Card>
+        )}
 
-        {/* 烧录执行与状态 */}
+        {/* 合成执行与状态 */}
         <Card className="p-6">
           {error && (
             <div className="mb-4 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm leading-6 text-danger">
@@ -547,7 +732,7 @@ export default function SubtitleMergePage() {
               </Button>
             )}
 
-            {!processing && (
+            {!processing && !softSubtitle && (
               <Button
                 onClick={handlePreview}
                 disabled={previewing || !videoPath || !subtitlePath}
