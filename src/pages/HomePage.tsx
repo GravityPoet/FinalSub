@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
-  AudioLines,
   CheckCircle,
   ChevronRight,
   Cloud,
@@ -106,8 +105,6 @@ function sourceLanguagesForEngine(engineId: string) {
       return sourceLanguageOptions;
   }
 }
-
-const waveformBars = [26, 44, 68, 38, 82, 56, 92, 64, 42, 72, 48, 30];
 
 const translationContentModes: Array<{
   value: TranslationContentMode;
@@ -645,57 +642,42 @@ export default function HomePage() {
     : (workspaceStatus === "loading" ? t("home.loadingWorkspace") : t("home.workspaceNeedsAttention"));
 
   return (
-    <div className="page-shell space-y-6">
-      <section className="hero-panel rounded-[1.9rem] px-5 py-6 sm:px-7 sm:py-8">
-        <div className="relative z-10 flex items-end justify-between gap-8">
-          <div className="max-w-3xl">
-            <div className="eyebrow-chip text-[11px] font-bold uppercase tracking-[0.14em]">
-              <Sparkles size={13} />
-              {t("home.workspaceEyebrow")}
-            </div>
-            <h2 className="mt-5 max-w-3xl font-display text-[clamp(2rem,4.6vw,3.65rem)] font-bold leading-[1.04] tracking-[-0.048em] text-text-primary">
-              {t("home.workspaceTitle")}
-            </h2>
-            <p className="mt-4 max-w-2xl text-[0.98rem] leading-7 text-text-secondary sm:text-[1.04rem]">
-              {t("home.workspaceSubtitle")}
-            </p>
-            <div className="mt-6 flex flex-wrap items-center gap-2.5">
-              <span className="status-chip text-xs font-semibold">
-                <span
-                  className={`status-dot ${workspaceStatus === "loading" ? "status-dot-pending" : ""} ${workspaceStatus === "error" ? "status-dot-error" : ""}`}
-                  aria-hidden="true"
-                />
-                {workspaceStatusLabel}
-              </span>
-              {bootstrapState === "error" && (
-                <button
-                  type="button"
-                  onClick={() => void loadWorkspace()}
-                  className="status-chip text-xs font-semibold text-brand transition hover:border-brand/35 hover:text-brand"
-                >
-                  {t("home.retrySetup")}
-                </button>
-              )}
-              <span className="status-chip max-w-full text-xs font-semibold">
-                <Cpu size={13} className="shrink-0 text-brand" />
-                <span className="truncate">{engineId}</span>
-              </span>
-            </div>
+    <div className="page-shell space-y-5">
+      <section className="flex flex-col gap-4 px-1 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0 max-w-3xl">
+          <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-brand">
+            <Sparkles size={13} />
+            {t("home.workspaceEyebrow")}
           </div>
+          <h2 className="mt-2 font-display text-[clamp(1.85rem,3.2vw,2.7rem)] font-bold leading-[1.08] tracking-[-0.04em] text-text-primary">
+            {t("home.newTask")}
+          </h2>
+          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
+            {taskType === "translate-only" ? t("home.sourceHintSubtitle") : t("home.sourceHintMedia")}
+          </p>
+        </div>
 
-          <div className="liquid-control relative hidden h-32 w-64 shrink-0 items-center justify-center overflow-hidden rounded-[1.6rem] xl:flex" aria-hidden="true">
-            <span className="pipeline-glow" />
-            <div className="relative z-10 flex h-[4.8rem] items-center gap-1.5">
-              {waveformBars.map((height, index) => (
-                <span
-                  key={`${height}-${index}`}
-                  className="w-1.5 rounded-full bg-brand shadow-[0_0_18px_color-mix(in_srgb,var(--color-brand)_36%,transparent)]"
-                  style={{ height: `${height}%`, opacity: 0.48 + (index % 4) * 0.13 }}
-                />
-              ))}
-            </div>
-            <AudioLines className="absolute bottom-3 right-4 text-brand/45" size={17} />
-          </div>
+        <div className="flex max-w-full flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
+          <span className="status-chip text-xs font-semibold">
+            <span
+              className={`status-dot ${workspaceStatus === "loading" ? "status-dot-pending" : ""} ${workspaceStatus === "error" ? "status-dot-error" : ""}`}
+              aria-hidden="true"
+            />
+            {workspaceStatusLabel}
+          </span>
+          {bootstrapState === "error" && (
+            <button
+              type="button"
+              onClick={() => void loadWorkspace()}
+              className="status-chip text-xs font-semibold text-brand transition hover:border-brand/35 hover:text-brand"
+            >
+              {t("home.retrySetup")}
+            </button>
+          )}
+          <span className="status-chip max-w-full text-xs font-semibold">
+            <Cpu size={13} className="shrink-0 text-brand" />
+            <span className="truncate">{engineId}</span>
+          </span>
         </div>
       </section>
 
@@ -747,109 +729,6 @@ export default function HomePage() {
           )}
         </div>
       )}
-
-      <Card className="overflow-hidden p-5 sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <span className="step-label">{t("home.recipeEyebrow")}</span>
-            <h3 className="mt-3 font-display text-[1.35rem] font-bold tracking-[-0.025em] text-text-primary">
-              {t("home.recipeTitle")}
-            </h3>
-            <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
-              {t("home.recipeDesc")}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => openRecipeDialog("create")}
-            className="shrink-0"
-          >
-            <Save size={14} />
-            {t("home.saveCurrentRecipe")}
-          </Button>
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {builtInRecipes.map((recipe) => (
-            <button
-              key={recipe.id}
-              type="button"
-              onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
-              className="group rounded-[1.15rem] border border-border-subtle bg-surface-overlay/40 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand/5"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand">
-                  {t("home.builtinRecipe")}
-                </span>
-                {recipe.snapshot.review_required && (
-                  <ShieldCheck size={15} className="text-warning" />
-                )}
-              </div>
-              <p className="mt-2 font-semibold text-text-primary">{recipe.name}</p>
-              <p className="mt-1 text-xs leading-5 text-text-tertiary">{recipe.description}</p>
-              <span className="mt-3 inline-flex text-xs font-semibold text-brand opacity-80 transition group-hover:opacity-100">
-                {t("home.applyRecipe")} →
-              </span>
-            </button>
-          ))}
-
-          {recipes.map((recipe) => (
-            <div
-              key={recipe.id}
-              className="rounded-[1.15rem] border border-border-subtle bg-surface-overlay/40 p-4"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-tertiary">
-                    {t("home.userRecipe")}
-                  </span>
-                  <p className="mt-2 truncate font-semibold text-text-primary" title={recipe.name}>{recipe.name}</p>
-                  <p className="mt-1 truncate font-mono text-[11px] text-text-tertiary">
-                    {recipe.snapshot.task_type} · {recipe.snapshot.output_format.toUpperCase()}
-                  </p>
-                </button>
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => openRecipeDialog("rename", recipe)}
-                    title={t("home.renameRecipe")}
-                    className="rounded-lg p-2 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openRecipeDialog("delete", recipe)}
-                    title={t("home.deleteRecipe")}
-                    className="rounded-lg p-2 text-text-tertiary transition hover:bg-danger/10 hover:text-danger"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
-                className="mt-3 text-xs font-semibold text-brand hover:underline"
-              >
-                {t("home.applyRecipe")} →
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {recipeNotice && (
-          <p className="mt-4 rounded-xl border border-brand/15 bg-brand/8 px-3.5 py-2.5 text-sm text-text-secondary" role="status">
-            {recipeNotice}
-          </p>
-        )}
-      </Card>
 
       <div className="grid items-start gap-5 min-[1120px]:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-5">
@@ -1195,13 +1074,13 @@ export default function HomePage() {
         </div>
 
         <aside className="space-y-5 min-[1120px]:sticky min-[1120px]:top-0">
-          <Card className="relative overflow-hidden p-5 sm:p-6">
+          <Card className="relative overflow-hidden p-5">
             <span className="pipeline-glow" />
             <div className="relative z-10">
               <span className="step-label">03 · {t("home.summaryStep")}</span>
-              <h3 className="mt-3 font-display text-h2 font-bold text-text-primary">{t("home.summaryTitle")}</h3>
+              <h3 className="mt-2.5 font-display text-h2 font-bold text-text-primary">{t("home.summaryTitle")}</h3>
 
-              <dl className="mt-5">
+              <dl className="mt-4">
                 <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryTask")}</dt>
                   <dd className="text-right text-sm font-semibold text-text-primary">{activeTaskType ? t(activeTaskType.labelKey) : taskType}</dd>
@@ -1228,12 +1107,12 @@ export default function HomePage() {
                 </div>
               </dl>
 
-              <div className={`mt-5 flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs leading-5 ${taskReady ? "border-success/18 bg-success/8 text-success" : "border-warning/18 bg-warning/8 text-warning"}`}>
+              <div className={`mt-4 flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs leading-5 ${taskReady ? "border-success/18 bg-success/8 text-success" : "border-warning/18 bg-warning/8 text-warning"}`}>
                 <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${taskReady ? "bg-success shadow-[0_0_10px_color-mix(in_srgb,var(--color-success)_55%,transparent)]" : "bg-warning"}`} />
                 <span>{readinessHint}</span>
               </div>
 
-              <div className="mt-5 grid gap-2.5">
+              <div className="mt-4 grid gap-2.5">
                 <Button
                   type="button"
                   onClick={handleCreate}
@@ -1294,6 +1173,109 @@ export default function HomePage() {
           </Card>
         </aside>
       </div>
+
+      <Card className="overflow-hidden p-5 sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <span className="step-label">{t("home.recipeEyebrow")}</span>
+            <h3 className="mt-3 font-display text-[1.35rem] font-bold tracking-[-0.025em] text-text-primary">
+              {t("home.recipeTitle")}
+            </h3>
+            <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
+              {t("home.recipeDesc")}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => openRecipeDialog("create")}
+            className="shrink-0"
+          >
+            <Save size={14} />
+            {t("home.saveCurrentRecipe")}
+          </Button>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {builtInRecipes.map((recipe) => (
+            <button
+              key={recipe.id}
+              type="button"
+              onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
+              className="group rounded-[1.15rem] border border-border-subtle bg-surface-overlay/40 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand/5"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-brand">
+                  {t("home.builtinRecipe")}
+                </span>
+                {recipe.snapshot.review_required && (
+                  <ShieldCheck size={15} className="text-warning" />
+                )}
+              </div>
+              <p className="mt-2 font-semibold text-text-primary">{recipe.name}</p>
+              <p className="mt-1 text-xs leading-5 text-text-tertiary">{recipe.description}</p>
+              <span className="mt-3 inline-flex text-xs font-semibold text-brand opacity-80 transition group-hover:opacity-100">
+                {t("home.applyRecipe")} →
+              </span>
+            </button>
+          ))}
+
+          {recipes.map((recipe) => (
+            <div
+              key={recipe.id}
+              className="rounded-[1.15rem] border border-border-subtle bg-surface-overlay/40 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-text-tertiary">
+                    {t("home.userRecipe")}
+                  </span>
+                  <p className="mt-2 truncate font-semibold text-text-primary" title={recipe.name}>{recipe.name}</p>
+                  <p className="mt-1 truncate font-mono text-[11px] text-text-tertiary">
+                    {recipe.snapshot.task_type} · {recipe.snapshot.output_format.toUpperCase()}
+                  </p>
+                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openRecipeDialog("rename", recipe)}
+                    title={t("home.renameRecipe")}
+                    className="rounded-lg p-2 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openRecipeDialog("delete", recipe)}
+                    title={t("home.deleteRecipe")}
+                    className="rounded-lg p-2 text-text-tertiary transition hover:bg-danger/10 hover:text-danger"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => applyRecipe(recipe.snapshot, recipe.name)}
+                className="mt-3 text-xs font-semibold text-brand hover:underline"
+              >
+                {t("home.applyRecipe")} →
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {recipeNotice && (
+          <p className="mt-4 rounded-xl border border-brand/15 bg-brand/8 px-3.5 py-2.5 text-sm text-text-secondary" role="status">
+            {recipeNotice}
+          </p>
+        )}
+      </Card>
 
       {recipeDialog && (
         <div
