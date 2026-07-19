@@ -16,7 +16,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/
 
 ## 当前发布边界（更新于 2026-07-15）
 
-旧版记录中的模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、批量翻译、持久任务队列、校对、合成进度/预览/取消和 Universal 构建均已交付。当前剩余边界是外部环境验收：Apple Developer ID 与 notarization 凭据、Windows/Linux runner 安装启动、Linux Secret Service 桌面会话，以及付费云服务真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)。
+模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、动态结构化批量翻译、术语表、回声对齐、持久任务队列、校对、合成进度/预览/取消和 Universal 构建均已交付。对齐 SmartSub 的剩余产品边界主要是 TTS/声音克隆、音轨与软字幕封装、可保存流水线配方/人工闸门和跨任务日志中心；外部环境仍需 Apple Developer ID 与 notarization、Windows/Linux 安装启动、Linux Secret Service 桌面会话及付费云服务真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)。
 
 ## 验收命令
 

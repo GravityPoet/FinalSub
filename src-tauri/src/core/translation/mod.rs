@@ -341,7 +341,7 @@ pub fn builtin_providers() -> Vec<TranslationProvider> {
     ]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranslateRequest {
     pub text: String,
     pub source_language: String,
@@ -361,6 +361,12 @@ pub struct TranslateRequest {
     pub custom_headers: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     pub custom_body: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub structured_output: Option<String>,
+    #[serde(default)]
+    pub response_json_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub glossary_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,6 +378,44 @@ pub struct TranslateResponse {
 }
 
 pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse> {
+    let requested_mode = req
+        .structured_output
+        .as_deref()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty());
+    if let Some(mode) = requested_mode {
+        if !matches!(mode, "disabled" | "json_object" | "json_schema") {
+            return Err(FinalSubError::Validation(format!(
+                "不支持的结构化输出模式：{mode}"
+            )));
+        }
+    }
+
+    let chain: &[&str] = match requested_mode {
+        Some("json_schema") => &["json_schema", "json_object", "disabled"],
+        Some("json_object") => &["json_object", "disabled"],
+        Some("disabled") | None => &["disabled"],
+        Some(_) => unreachable!(),
+    };
+    for (index, mode) in chain.iter().enumerate() {
+        let mut attempt = req.clone();
+        attempt.structured_output = Some((*mode).to_string());
+        match translate_text_once(&attempt).await {
+            Ok(response) => return Ok(response),
+            Err(error)
+                if index + 1 < chain.len() && is_structured_output_unsupported_error(&error) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(FinalSubError::Validation(
+        "结构化翻译请求没有可用的回退模式".into(),
+    ))
+}
+
+async fn translate_text_once(req: &TranslateRequest) -> Result<TranslateResponse> {
     let provider_info = provider_info(&req.provider).ok_or_else(|| {
         FinalSubError::Validation(format!("翻译 provider '{}' 暂未接入", req.provider))
     })?;
@@ -651,14 +695,147 @@ fn render_prompt_template(template: &str, req: &TranslateRequest) -> String {
 }
 
 fn translation_system_prompt(req: &TranslateRequest) -> String {
-    configured_str(req.system_prompt.as_deref())
+    let mut prompt = configured_str(req.system_prompt.as_deref())
         .map(|template| render_prompt_template(template, req))
         .unwrap_or_else(|| {
             format!(
                 "You are a professional subtitle translator. Translate from {} to {}. Only output the translation, preserve line breaks and structured batch keys, and do not add explanations.",
                 req.source_language, req.target_language
             )
-        })
+        });
+    if let Some(glossary) = configured_str(req.glossary_prompt.as_deref()) {
+        prompt.push_str("\n\n");
+        prompt.push_str(glossary);
+    }
+    prompt
+}
+
+fn is_structured_output_unsupported_error(error: &FinalSubError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    let mentions_format = message.contains("response_format")
+        || message.contains("responseformat")
+        || message.contains("responsejsonschema")
+        || message.contains("json_schema")
+        || message.contains("json_object")
+        || message.contains("structured output")
+        || message.contains("结构化输出");
+    mentions_format
+        && [
+            "unsupported",
+            "not support",
+            "invalid",
+            "unrecognized",
+            "unknown",
+            "not allowed",
+            "extra_forbidden",
+            "不支持",
+            "无效",
+            "未知",
+            "不允许",
+        ]
+        .iter()
+        .any(|keyword| message.contains(keyword))
+}
+
+fn apply_openai_structured_output(
+    mut body: serde_json::Value,
+    req: &TranslateRequest,
+) -> Result<serde_json::Value> {
+    let Some(mode) = configured_str(req.structured_output.as_deref()) else {
+        return Ok(body);
+    };
+    let response_format = match mode {
+        "disabled" => return Ok(body),
+        "json_object" => serde_json::json!({"type": "json_object"}),
+        "json_schema" => {
+            let schema = req.response_json_schema.clone().ok_or_else(|| {
+                FinalSubError::Validation("json_schema 结构化输出缺少 response JSON Schema".into())
+            })?;
+            serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "subtitle_translation_batch",
+                    "strict": true,
+                    "schema": schema
+                }
+            })
+        }
+        other => {
+            return Err(FinalSubError::Validation(format!(
+                "不支持的结构化输出模式：{other}"
+            )))
+        }
+    };
+    body.as_object_mut()
+        .ok_or_else(|| FinalSubError::Validation("翻译请求体必须是 JSON 对象".into()))?
+        .insert("response_format".into(), response_format);
+    Ok(body)
+}
+
+fn apply_ollama_structured_output(
+    mut body: serde_json::Value,
+    req: &TranslateRequest,
+) -> Result<serde_json::Value> {
+    let Some(mode) = configured_str(req.structured_output.as_deref()) else {
+        return Ok(body);
+    };
+    let format = match mode {
+        "disabled" => return Ok(body),
+        "json_object" => serde_json::Value::String("json".into()),
+        "json_schema" => req.response_json_schema.clone().ok_or_else(|| {
+            FinalSubError::Validation("Ollama json_schema 请求缺少 response JSON Schema".into())
+        })?,
+        other => {
+            return Err(FinalSubError::Validation(format!(
+                "不支持的结构化输出模式：{other}"
+            )))
+        }
+    };
+    body.as_object_mut()
+        .ok_or_else(|| FinalSubError::Validation("Ollama 请求体必须是 JSON 对象".into()))?
+        .insert("format".into(), format);
+    Ok(body)
+}
+
+fn apply_gemini_structured_output(
+    mut body: serde_json::Value,
+    req: &TranslateRequest,
+) -> Result<serde_json::Value> {
+    let Some(mode) = configured_str(req.structured_output.as_deref()) else {
+        return Ok(body);
+    };
+    if mode == "disabled" {
+        return Ok(body);
+    }
+    let generation_config = body
+        .as_object_mut()
+        .ok_or_else(|| FinalSubError::Validation("Gemini 请求体必须是 JSON 对象".into()))?
+        .entry("generationConfig")
+        .or_insert_with(|| serde_json::json!({}));
+    let config = generation_config.as_object_mut().ok_or_else(|| {
+        FinalSubError::Validation("Gemini generationConfig 必须是 JSON 对象".into())
+    })?;
+    config.insert(
+        "responseMimeType".into(),
+        serde_json::Value::String("application/json".into()),
+    );
+    match mode {
+        "json_object" => {
+            config.remove("responseJsonSchema");
+        }
+        "json_schema" => {
+            let schema = req.response_json_schema.clone().ok_or_else(|| {
+                FinalSubError::Validation("Gemini json_schema 请求缺少 response JSON Schema".into())
+            })?;
+            config.insert("responseJsonSchema".into(), schema);
+        }
+        other => {
+            return Err(FinalSubError::Validation(format!(
+                "不支持的结构化输出模式：{other}"
+            )))
+        }
+    }
+    Ok(body)
 }
 
 fn translation_user_prompt(req: &TranslateRequest) -> String {
@@ -992,10 +1169,15 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
             "model": model,
             "prompt": prompt,
             "stream": false,
+            "options": {
+                "temperature": 0.2,
+                "num_ctx": 8192
+            }
         }),
         req,
         &["model", "prompt", "stream"],
     )?;
+    let body = apply_ollama_structured_output(body, req)?;
 
     let builder = apply_custom_headers(client.post(api_url), req)?;
     let resp = builder
@@ -1060,6 +1242,7 @@ async fn translate_openai_compatible(
         req,
         &["model", "messages"],
     )?;
+    let body = apply_openai_structured_output(body, req)?;
 
     let builder = client
         .post(&api_url)
@@ -1135,6 +1318,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         req,
         &["systemInstruction", "contents"],
     )?;
+    let body = apply_gemini_structured_output(body, req)?;
 
     let builder = client
         .post(&api_url)
@@ -1409,6 +1593,7 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         req,
         &["messages"],
     )?;
+    let body = apply_openai_structured_output(body, req)?;
 
     let builder = client
         .post(&url)
@@ -2002,8 +2187,37 @@ fn map_lang_xunfei(lang: &str) -> String {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::thread;
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).unwrap();
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if bytes.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        String::from_utf8(bytes).unwrap()
+    }
 
     fn base_test_request() -> TranslateRequest {
         TranslateRequest {
@@ -2023,6 +2237,9 @@ mod tests {
             proxy_url: None,
             custom_headers: None,
             custom_body: None,
+            structured_output: None,
+            response_json_schema: None,
+            glossary_prompt: None,
         }
     }
 
@@ -2097,6 +2314,7 @@ mod tests {
             proxy_url: None,
             custom_headers: None,
             custom_body: None,
+            ..TranslateRequest::default()
         };
 
         assert_eq!(request_api_key(&req), Some("stored-key"));
@@ -2131,6 +2349,7 @@ mod tests {
             proxy_url: None,
             custom_headers: None,
             custom_body: None,
+            ..TranslateRequest::default()
         };
 
         let err = translate_text(&req).await.unwrap_err();
@@ -2253,6 +2472,167 @@ mod tests {
         .is_err());
     }
 
+    #[test]
+    fn provider_request_bodies_apply_dynamic_structured_output() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"1": {"type": "string"}},
+            "required": ["1"],
+            "additionalProperties": false
+        });
+        let request = TranslateRequest {
+            structured_output: Some("json_schema".into()),
+            response_json_schema: Some(schema.clone()),
+            ..base_test_request()
+        };
+
+        let openai = apply_openai_structured_output(serde_json::json!({}), &request).unwrap();
+        assert_eq!(openai["response_format"]["type"], "json_schema");
+        assert_eq!(openai["response_format"]["json_schema"]["schema"], schema);
+        assert_eq!(openai["response_format"]["json_schema"]["strict"], true);
+
+        let ollama = apply_ollama_structured_output(serde_json::json!({}), &request).unwrap();
+        assert_eq!(ollama["format"]["required"], serde_json::json!(["1"]));
+
+        let gemini = apply_gemini_structured_output(
+            serde_json::json!({"generationConfig": {"temperature": 0.2}}),
+            &request,
+        )
+        .unwrap();
+        assert_eq!(
+            gemini["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert_eq!(
+            gemini["generationConfig"]["responseJsonSchema"]["required"],
+            serde_json::json!(["1"])
+        );
+    }
+
+    #[test]
+    fn glossary_block_is_appended_after_rendering_custom_system_prompt() {
+        let request = TranslateRequest {
+            system_prompt: Some("Translate {source} to {target}.".into()),
+            glossary_prompt: Some("# Terminology\n[]".into()),
+            ..base_test_request()
+        };
+
+        assert_eq!(
+            translation_system_prompt(&request),
+            "Translate en to zh.\n\n# Terminology\n[]"
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_json_schema_falls_back_to_json_object() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                let body = request.split_once("\r\n\r\n").unwrap().1;
+                let json: serde_json::Value = serde_json::from_str(body).unwrap();
+                if attempt == 0 {
+                    assert_eq!(json["response_format"]["type"], "json_schema");
+                    let response =
+                        r#"{"error":{"message":"response_format json_schema unsupported"}}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                } else {
+                    assert_eq!(json["response_format"]["type"], "json_object");
+                    let response = r#"{"choices":[{"message":{"content":"{\"1\":\"你好\"}"}}]}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                }
+            }
+        });
+
+        let request = TranslateRequest {
+            api_url: Some(format!("http://{endpoint}/v1")),
+            structured_output: Some("json_schema".into()),
+            response_json_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"1": {"type": "string"}},
+                "required": ["1"],
+                "additionalProperties": false
+            })),
+            ..base_test_request()
+        };
+        let response = translate_text(&request).await.unwrap();
+
+        server.join().unwrap();
+        assert_eq!(response.translated_text, "{\"1\":\"你好\"}");
+    }
+
+    #[tokio::test]
+    async fn unsupported_structured_modes_fall_back_to_plain_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for attempt in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                let body = request.split_once("\r\n\r\n").unwrap().1;
+                let json: serde_json::Value = serde_json::from_str(body).unwrap();
+                if attempt < 2 {
+                    assert_eq!(
+                        json["response_format"]["type"],
+                        if attempt == 0 {
+                            "json_schema"
+                        } else {
+                            "json_object"
+                        }
+                    );
+                    let response = r#"{"error":{"message":"response_format is not supported"}}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                } else {
+                    assert!(json.get("response_format").is_none());
+                    let response = r#"{"choices":[{"message":{"content":"{\"1\":\"你好\"}"}}]}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                }
+            }
+        });
+
+        let request = TranslateRequest {
+            api_url: Some(format!("http://{endpoint}/v1")),
+            structured_output: Some("json_schema".into()),
+            response_json_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"1": {"type": "string"}},
+                "required": ["1"],
+                "additionalProperties": false
+            })),
+            ..base_test_request()
+        };
+        let response = translate_text(&request).await.unwrap();
+
+        server.join().unwrap();
+        assert_eq!(response.translated_text, "{\"1\":\"你好\"}");
+    }
+
     #[tokio::test]
     async fn proxy_probe_uses_the_configured_http_proxy() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2295,6 +2675,7 @@ mod tests {
             proxy_url: None,
             custom_headers: None,
             custom_body: None,
+            ..TranslateRequest::default()
         };
 
         let err = translate_custom_openai_compatible(&req).await.unwrap_err();

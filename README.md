@@ -52,6 +52,8 @@ Translate your transcriptions into elegant, natural bilingual subtitles with the
 * **LLM Integration**: Supports **DeepSeek (V3/R1)**, **Doubao (Volcano Engine)**, **Gemini**, **Qwen (Tongyi Qianwen)**, **SiliconFlow**, **Azure OpenAI**, and custom OpenAI-compatible endpoints.
 * **Zero-Cost Local AI**: Deep integration with **Ollama**. If you run Ollama locally, you can call your local models for high-quality translation completely free of charge—no API key required.
 * **Professional Translators**: Access **DeepLX (built-in, keyless, zero-config)**, Microsoft Translator, Google Translate, Baidu, Tencent, Volcano, Xiaoniu, Xunfei, and more.
+* **Reliable Batch Alignment**: Dynamic JSON Schema locks each cue ID, source-echo similarity detects shifted or merged lines, and FinalSub retries the batch before repairing only the affected cues with neighboring context.
+* **Prioritized Glossaries**: Maintain multiple enabled glossaries with deterministic conflict resolution, CSV/TXT import and CSV export. Only terms matched in the current batch are added to the AI prompt.
 * **Secure Key Storage**: Secrets are stored in the OS credential store and bound to provider, endpoint, and field. Changing an endpoint never silently reuses its old secret, and secrets are not returned to the frontend over IPC.
 
 ### ✏️ Interactive Subtitle Proofreader
@@ -109,7 +111,7 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 * **FinalSub is a 100% local client application.**
 * With local ASR, media, subtitles, and task caches stay on your device.
 * Audio is sent only when you configure cloud ASR, grant upload consent, and start a matching task. FinalSub uploads speech chunks produced locally by Silero VAD to the configured endpoint.
-* Subtitle text is sent only when you explicitly configure and enable a cloud translation API.
+* Subtitle text is sent only when you explicitly configure and enable a cloud translation API. For AI translation, only glossary entries matched in the current batch accompany that subtitle text.
 * Automatic startup update checks and anonymous crash/error reporting are off by default. FinalSub contacts GitHub Release metadata only when you manually check or enable startup checks; diagnostics are sent to Sentry only after explicit opt-in.
 
 ---

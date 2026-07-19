@@ -13,6 +13,9 @@ use crate::core::asr::parakeet::ParakeetNativeEngine;
 use crate::core::asr::sherpa_native::{SherpaNativeEngine, SherpaNativeKind};
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, ProgressUpdate, TranscribeJob};
+use crate::core::glossary::{
+    build_glossary_prompt_block, match_glossary_entries, resolve_enabled_glossaries,
+};
 use crate::core::subtitle::{Cue, SubtitleTrack};
 use crate::core::task_queue::{Task, TaskStatus, TaskType, TranslationContentMode};
 use crate::core::translation::{
@@ -28,9 +31,40 @@ const TRANSLATION_PROGRESS_START: f32 = 0.80;
 const TRANSLATION_ONLY_PROGRESS_START: f32 = 0.05;
 const TRANSLATION_PROGRESS_END: f32 = 0.95;
 const AI_TRANSLATION_MAX_BATCH_CHARS: usize = 4_000;
+const ECHO_SIMILARITY_THRESHOLD: f64 = 0.75;
+const ALIGNMENT_REPAIR_MAX_ATTEMPTS: usize = 3;
 
 enum TranslationAttemptResult {
     Success(String),
+    Cancelled,
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+struct ParsedBatchTranslation {
+    echoed_source: Option<String>,
+    translation: String,
+}
+
+#[derive(Debug, Default)]
+struct BatchAlignmentValidation {
+    accepted: HashMap<String, String>,
+    flagged: Vec<String>,
+    echo_checked: usize,
+}
+
+#[derive(Debug)]
+struct AlignedBatchReport {
+    translations: Vec<String>,
+    echo_checked: usize,
+    flagged: usize,
+    repaired: usize,
+    unresolved: usize,
+    alignment_retry_used: bool,
+}
+
+enum AlignedBatchResult {
+    Success(AlignedBatchReport),
     Cancelled,
     Failed(String),
 }
@@ -726,6 +760,40 @@ async fn run_task_impl(
         let batch_size = settings.translate_batch_size as usize;
         let translation_concurrency = settings.translate_concurrency as usize;
         let request_interval_ms = settings.translate_request_interval_ms;
+        let structured_output = settings
+            .translate_structured_output
+            .get(&provider)
+            .map(String::as_str)
+            .filter(|mode| matches!(*mode, "disabled" | "json_object" | "json_schema"))
+            .unwrap_or("json_schema")
+            .to_string();
+        let echo_anchoring = settings
+            .translate_echo_anchoring
+            .get(&provider)
+            .copied()
+            .unwrap_or(true);
+        let glossary_resolution = if provider_info
+            .as_ref()
+            .map(|info| info.is_ai)
+            .unwrap_or(false)
+        {
+            resolve_enabled_glossaries(&settings.translation_glossaries)
+        } else {
+            Default::default()
+        };
+        if !glossary_resolution.conflicts.is_empty() {
+            write_task_log(
+                app,
+                &app_config_dir,
+                task_id,
+                &format!(
+                    "启用的术语表存在 {} 组重复原文，已按术语表优先级使用第一条",
+                    glossary_resolution.conflicts.len()
+                ),
+            )
+            .await;
+        }
+        let glossary_entries = glossary_resolution.entries;
 
         let mut secret_fields = std::collections::HashMap::new();
         if let Some(p) = &provider_info {
@@ -788,7 +856,7 @@ async fn run_task_impl(
             }
         }
 
-        let mut batch_translation_enabled = translation_supports_batch(provider_info.as_ref());
+        let batch_translation_enabled = translation_supports_batch(provider_info.as_ref());
         let mut next_cue_index = start_cue_index;
         while next_cue_index < total_cues {
             if check_cancelled(cancel_rx) {
@@ -823,6 +891,9 @@ async fn run_task_impl(
                         proxy_url: proxy_url.clone(),
                         custom_headers: custom_headers.clone(),
                         custom_body: custom_body.clone(),
+                        structured_output: None,
+                        response_json_schema: None,
+                        glossary_prompt: None,
                     };
                     let mut child_cancel = cancel_rx.clone();
                     requests.spawn(async move {
@@ -896,11 +967,14 @@ async fn run_task_impl(
                 (next_cue_index + 1).min(total_cues)
             };
             if batch_translation_enabled && batch_end - next_cue_index > 1 {
-                let batch_cues = &track.cues[next_cue_index..batch_end];
-                let (batch_prompt, batch_keys) =
-                    build_batch_translation_prompt(&source_lang, &target_lang, batch_cues);
+                let source_texts = track.cues[next_cue_index..batch_end]
+                    .iter()
+                    .map(|cue| cue.text.clone())
+                    .collect::<Vec<_>>();
+                let glossary_matches = match_glossary_entries(&glossary_entries, &source_texts);
+                let glossary_prompt = build_glossary_prompt_block(&glossary_matches);
                 let batch_req = TranslateRequest {
-                    text: batch_prompt,
+                    text: String::new(),
                     source_language: source_lang.clone(),
                     target_language: target_lang.clone(),
                     provider: provider.clone(),
@@ -913,67 +987,68 @@ async fn run_task_impl(
                     proxy_url: proxy_url.clone(),
                     custom_headers: custom_headers.clone(),
                     custom_body: custom_body.clone(),
+                    structured_output: Some(structured_output.clone()),
+                    response_json_schema: None,
+                    glossary_prompt: (!glossary_prompt.is_empty()).then_some(glossary_prompt),
                 };
 
-                match translate_with_retries(&batch_req, retry_times, cancel_rx).await {
-                    TranslationAttemptResult::Success(raw_text) => {
-                        match parse_batch_translation_response(&raw_text, &batch_keys) {
-                            Ok(translated_batch) => {
-                                for (offset, translated_text) in
-                                    translated_batch.into_iter().enumerate()
-                                {
-                                    track.cues[next_cue_index + offset].text = translated_text;
-                                }
-
-                                next_cue_index = batch_end;
-                                save_translation_checkpoint(
-                                    &temp_translated_path,
-                                    &track,
-                                    next_cue_index,
-                                );
-                                let progress = translation_progress_for(
-                                    task.task_type,
-                                    next_cue_index,
-                                    total_cues,
-                                );
-                                let msg = format!(
-                                    "正在批量翻译字幕... ({}/{})",
-                                    next_cue_index, total_cues
-                                );
-                                update_task_progress(app, tasks.clone(), task_id, progress, &msg)
-                                    .await;
-                                if !wait_translation_interval(request_interval_ms, cancel_rx).await
-                                {
-                                    handle_translation_stop(
-                                        app,
-                                        tasks.clone(),
-                                        &app_config_dir,
-                                        task_id,
-                                        &temp_translated_path,
-                                        &track,
-                                        next_cue_index,
-                                    )
-                                    .await;
-                                    return Ok(());
-                                }
-                                continue;
-                            }
-                            Err(parse_err) => {
-                                batch_translation_enabled = false;
-                                write_task_log(
-                                    app,
-                                    &app_config_dir,
-                                    task_id,
-                                    &format!(
-                                        "批量翻译响应无法对齐，降级逐条翻译当前批次：{}",
-                                        parse_err
-                                    ),
-                                )
-                                .await;
-                            }
+                match translate_aligned_batch(
+                    &batch_req,
+                    &source_texts,
+                    &structured_output,
+                    echo_anchoring,
+                    retry_times,
+                    cancel_rx,
+                )
+                .await
+                {
+                    AlignedBatchResult::Success(report) => {
+                        for (offset, translated_text) in report.translations.into_iter().enumerate()
+                        {
+                            track.cues[next_cue_index + offset].text = translated_text;
                         }
+
+                        next_cue_index = batch_end;
+                        save_translation_checkpoint(&temp_translated_path, &track, next_cue_index);
+                        let progress =
+                            translation_progress_for(task.task_type, next_cue_index, total_cues);
+                        let msg =
+                            format!("正在校验并翻译字幕... ({}/{})", next_cue_index, total_cues);
+                        update_task_progress(app, tasks.clone(), task_id, progress, &msg).await;
+                        write_task_log(
+                            app,
+                            &app_config_dir,
+                            task_id,
+                            &format!(
+                                "批量翻译对齐完成：回显校验 {} 条，检出 {} 条，定点修复 {} 条，未解决 {} 条{}",
+                                report.echo_checked,
+                                report.flagged,
+                                report.repaired,
+                                report.unresolved,
+                                if report.alignment_retry_used {
+                                    "，已执行一次整批对齐重试"
+                                } else {
+                                    ""
+                                }
+                            ),
+                        )
+                        .await;
+                        if !wait_translation_interval(request_interval_ms, cancel_rx).await {
+                            handle_translation_stop(
+                                app,
+                                tasks.clone(),
+                                &app_config_dir,
+                                task_id,
+                                &temp_translated_path,
+                                &track,
+                                next_cue_index,
+                            )
+                            .await;
+                            return Ok(());
+                        }
+                        continue;
                     }
-                    TranslationAttemptResult::Cancelled => {
+                    AlignedBatchResult::Cancelled => {
                         handle_translation_stop(
                             app,
                             tasks.clone(),
@@ -986,21 +1061,33 @@ async fn run_task_impl(
                         .await;
                         return Ok(());
                     }
-                    TranslationAttemptResult::Failed(batch_err) => {
-                        batch_translation_enabled = false;
+                    AlignedBatchResult::Failed(batch_err) => {
                         write_task_log(
                             app,
                             &app_config_dir,
                             task_id,
-                            &format!("批量翻译失败，降级逐条翻译当前批次：{}", batch_err),
+                            &format!("批量翻译请求失败，当前条目降级逐条翻译：{}", batch_err),
                         )
                         .await;
                     }
                 }
             }
 
+            let single_source = track.cues[next_cue_index].text.clone();
+            let single_glossary_prompt = if provider_info
+                .as_ref()
+                .map(|info| info.is_ai)
+                .unwrap_or(false)
+            {
+                let matches =
+                    match_glossary_entries(&glossary_entries, std::slice::from_ref(&single_source));
+                let block = build_glossary_prompt_block(&matches);
+                (!block.is_empty()).then_some(block)
+            } else {
+                None
+            };
             let req = TranslateRequest {
-                text: track.cues[next_cue_index].text.clone(),
+                text: single_source,
                 source_language: source_lang.clone(),
                 target_language: target_lang.clone(),
                 provider: provider.clone(),
@@ -1013,6 +1100,9 @@ async fn run_task_impl(
                 proxy_url: proxy_url.clone(),
                 custom_headers: custom_headers.clone(),
                 custom_body: custom_body.clone(),
+                structured_output: None,
+                response_json_schema: None,
+                glossary_prompt: single_glossary_prompt,
             };
 
             let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await {
@@ -1336,32 +1426,86 @@ fn save_translation_checkpoint(path: &Path, track: &SubtitleTrack, completed_cue
 fn build_batch_translation_prompt(
     source_language: &str,
     target_language: &str,
-    cues: &[Cue],
+    source_texts: &[String],
+    echo_anchoring: bool,
+    alignment_retry: bool,
 ) -> (String, Vec<String>) {
     let mut input = serde_json::Map::new();
-    let mut keys = Vec::with_capacity(cues.len());
-    for (offset, cue) in cues.iter().enumerate() {
+    let mut keys = Vec::with_capacity(source_texts.len());
+    for (offset, source_text) in source_texts.iter().enumerate() {
         let key = (offset + 1).to_string();
         keys.push(key.clone());
-        input.insert(key, serde_json::Value::String(cue.text.clone()));
+        input.insert(key, serde_json::Value::String(source_text.clone()));
     }
 
     let input_json = serde_json::to_string(&serde_json::Value::Object(input))
         .unwrap_or_else(|_| "{}".to_string());
+    let output_contract = if echo_anchoring {
+        "For every input key, return an object with exactly two string fields: \
+{\"src\": the source text copied verbatim from that same key, \"tr\": the translation}. \
+The src field must remain in the source language and must never contain the translation."
+    } else {
+        "For every input key, return its translated text as a JSON string value."
+    };
+    let retry_notice = if alignment_retry {
+        "\nThe previous response was missing, merged, or shifted across subtitle IDs. \
+This is a strict alignment retry: copy each src from its own key and never merge, split, or reorder entries."
+    } else {
+        ""
+    };
     let prompt = format!(
         "Translate each JSON value from {source_language} to {target_language}. \
-Return only a valid JSON object with exactly the same keys. \
-Do not add Markdown fences, comments, explanations, or extra keys. \
-Preserve line breaks inside each value.\n\nInput JSON:\n{input_json}"
+{output_contract} Return only one valid JSON object with exactly the same keys. \
+Do not add Markdown fences, comments, explanations, thinking, or extra keys. \
+Preserve line breaks inside each value and never merge, split, or reorder subtitle entries.\
+{retry_notice}\n\nInput JSON:\n{input_json}"
     );
 
     (prompt, keys)
 }
 
+fn make_batch_translation_schema(
+    expected_keys: &[String],
+    echo_anchoring: bool,
+) -> serde_json::Value {
+    let value_schema = if echo_anchoring {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "src": {
+                    "type": "string",
+                    "description": "Copy the source subtitle for this exact ID verbatim; keep the source language and never put the translation here."
+                },
+                "tr": {
+                    "type": "string",
+                    "description": "Translation for this exact subtitle ID."
+                }
+            },
+            "required": ["src", "tr"],
+            "additionalProperties": false
+        })
+    } else {
+        serde_json::json!({
+            "type": "string",
+            "description": "Translation for this exact subtitle ID."
+        })
+    };
+    let properties = expected_keys
+        .iter()
+        .map(|key| (key.clone(), value_schema.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": expected_keys,
+        "additionalProperties": false
+    })
+}
+
 fn parse_batch_translation_response(
     raw_text: &str,
     expected_keys: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<HashMap<String, ParsedBatchTranslation>, String> {
     let cleaned =
         extract_json_object(raw_text).ok_or_else(|| "响应中没有 JSON 对象".to_string())?;
     let value: serde_json::Value =
@@ -1370,16 +1514,279 @@ fn parse_batch_translation_response(
         .as_object()
         .ok_or_else(|| "响应不是 JSON 对象".to_string())?;
 
-    let mut translated = Vec::with_capacity(expected_keys.len());
-    for key in expected_keys {
-        let text = object
-            .get(key)
-            .and_then(|item| item.as_str())
-            .ok_or_else(|| format!("缺少键 {key} 的字符串译文"))?;
-        translated.push(text.trim().to_string());
+    if let Some(extra_key) = object
+        .keys()
+        .find(|key| !expected_keys.iter().any(|expected| expected == *key))
+    {
+        return Err(format!("响应包含额外键 {extra_key}"));
     }
 
-    Ok(translated)
+    let mut parsed = HashMap::with_capacity(expected_keys.len());
+    for key in expected_keys {
+        let Some(item) = object.get(key) else {
+            continue;
+        };
+        let entry = match item {
+            serde_json::Value::String(translation) => ParsedBatchTranslation {
+                echoed_source: None,
+                translation: translation.trim().to_string(),
+            },
+            serde_json::Value::Object(fields) => {
+                if let Some(extra_field) = fields
+                    .keys()
+                    .find(|field| !matches!(field.as_str(), "src" | "tr"))
+                {
+                    return Err(format!("字幕 {key} 包含额外字段 {extra_field}"));
+                }
+                ParsedBatchTranslation {
+                    echoed_source: fields
+                        .get("src")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    translation: fields
+                        .get("tr")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                }
+            }
+            _ => continue,
+        };
+        parsed.insert(key.clone(), entry);
+    }
+
+    Ok(parsed)
+}
+
+fn validate_batch_alignment(
+    parsed: &HashMap<String, ParsedBatchTranslation>,
+    expected_keys: &[String],
+    source_texts: &[String],
+    echo_anchoring: bool,
+) -> BatchAlignmentValidation {
+    let mut validation = BatchAlignmentValidation::default();
+    for (index, key) in expected_keys.iter().enumerate() {
+        let Some(entry) = parsed.get(key) else {
+            validation.flagged.push(key.clone());
+            continue;
+        };
+        if entry.translation.trim().is_empty() {
+            validation.flagged.push(key.clone());
+            continue;
+        }
+        if echo_anchoring {
+            let Some(echoed_source) = entry.echoed_source.as_deref() else {
+                validation.flagged.push(key.clone());
+                continue;
+            };
+            validation.echo_checked += 1;
+            if text_similarity(echoed_source, &source_texts[index]) < ECHO_SIMILARITY_THRESHOLD {
+                validation.flagged.push(key.clone());
+                continue;
+            }
+        }
+        validation
+            .accepted
+            .insert(key.clone(), entry.translation.clone());
+    }
+    validation
+}
+
+fn normalize_for_alignment(text: &str) -> Vec<char> {
+    crate::core::glossary::glossary_source_key(text)
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .collect()
+}
+
+fn text_similarity(left: &str, right: &str) -> f64 {
+    if left.trim() == right.trim() {
+        return 1.0;
+    }
+    let left = normalize_for_alignment(left);
+    let right = normalize_for_alignment(right);
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    if left == right {
+        return 1.0;
+    }
+
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    let mut current = vec![0usize; right.len() + 1];
+    for (left_index, left_char) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            let substitution = previous[right_index] + usize::from(left_char != right_char);
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    1.0 - previous[right.len()] as f64 / left.len().max(right.len()) as f64
+}
+
+fn build_repair_translation_prompt(
+    target_key: &str,
+    expected_keys: &[String],
+    source_texts: &[String],
+    accepted: &HashMap<String, String>,
+    target_language: &str,
+    echo_anchoring: bool,
+) -> String {
+    let target_index = expected_keys
+        .iter()
+        .position(|key| key == target_key)
+        .unwrap_or(0);
+    let start = target_index.saturating_sub(2);
+    let end = (target_index + 3).min(expected_keys.len());
+    let context = (start..end)
+        .map(|index| {
+            serde_json::json!({
+                "id": expected_keys[index],
+                "source": source_texts[index],
+                "accepted_translation_for_context_only": accepted.get(&expected_keys[index])
+            })
+        })
+        .collect::<Vec<_>>();
+    let output_contract = if echo_anchoring {
+        format!(
+            "Return only {{\"{target_key}\":{{\"src\":<copy the target source verbatim>,\"tr\":<translation>}}}}."
+        )
+    } else {
+        format!("Return only {{\"{target_key}\":<translation string>}}.")
+    };
+    format!(
+        "Repair exactly one subtitle translation into {target_language}. \
+The neighboring entries below are context only: do not translate or return them. \
+Translate only ID {target_key}; do not merge it with neighboring text. {output_contract}\n\n\
+Context JSON:\n{}",
+        serde_json::to_string_pretty(&context).unwrap_or_else(|_| "[]".into())
+    )
+}
+
+async fn translate_aligned_batch(
+    base_request: &TranslateRequest,
+    source_texts: &[String],
+    structured_output: &str,
+    echo_anchoring: bool,
+    retry_times: u32,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> AlignedBatchResult {
+    let mut alignment_retry_used = false;
+    let mut last_validation = BatchAlignmentValidation::default();
+    let mut expected_keys = Vec::new();
+
+    for alignment_attempt in 0..=1 {
+        let (prompt, keys) = build_batch_translation_prompt(
+            &base_request.source_language,
+            &base_request.target_language,
+            source_texts,
+            echo_anchoring,
+            alignment_attempt > 0,
+        );
+        expected_keys = keys;
+        let mut request = base_request.clone();
+        request.text = prompt;
+        request.structured_output = Some(structured_output.to_string());
+        request.response_json_schema = Some(make_batch_translation_schema(
+            &expected_keys,
+            echo_anchoring,
+        ));
+
+        let raw_text = match translate_with_retries(&request, retry_times, cancel_rx).await {
+            TranslationAttemptResult::Success(text) => text,
+            TranslationAttemptResult::Cancelled => return AlignedBatchResult::Cancelled,
+            TranslationAttemptResult::Failed(error) => return AlignedBatchResult::Failed(error),
+        };
+        let parsed = parse_batch_translation_response(&raw_text, &expected_keys)
+            .unwrap_or_else(|_| HashMap::new());
+        last_validation =
+            validate_batch_alignment(&parsed, &expected_keys, source_texts, echo_anchoring);
+        let large_mismatch_threshold = expected_keys.len().div_ceil(3);
+        if last_validation.flagged.len() > large_mismatch_threshold && alignment_attempt == 0 {
+            alignment_retry_used = true;
+            continue;
+        }
+        break;
+    }
+
+    let flagged_count = last_validation.flagged.len();
+    let flagged_keys = last_validation.flagged.clone();
+    let mut repaired = 0usize;
+    for key in flagged_keys {
+        let mut repaired_translation = None;
+        for _ in 0..ALIGNMENT_REPAIR_MAX_ATTEMPTS {
+            let mut request = base_request.clone();
+            request.text = build_repair_translation_prompt(
+                &key,
+                &expected_keys,
+                source_texts,
+                &last_validation.accepted,
+                &base_request.target_language,
+                echo_anchoring,
+            );
+            request.structured_output = Some(structured_output.to_string());
+            request.response_json_schema = Some(make_batch_translation_schema(
+                std::slice::from_ref(&key),
+                echo_anchoring,
+            ));
+            let raw_text =
+                match translate_with_retries(&request, retry_times.min(1), cancel_rx).await {
+                    TranslationAttemptResult::Success(text) => text,
+                    TranslationAttemptResult::Cancelled => return AlignedBatchResult::Cancelled,
+                    TranslationAttemptResult::Failed(_) => continue,
+                };
+            let Ok(parsed) =
+                parse_batch_translation_response(&raw_text, std::slice::from_ref(&key))
+            else {
+                continue;
+            };
+            let source_index = expected_keys
+                .iter()
+                .position(|item| item == &key)
+                .unwrap_or(0);
+            let validation = validate_batch_alignment(
+                &parsed,
+                std::slice::from_ref(&key),
+                std::slice::from_ref(&source_texts[source_index]),
+                echo_anchoring,
+            );
+            if let Some(translation) = validation.accepted.get(&key) {
+                repaired_translation = Some(translation.clone());
+                break;
+            }
+        }
+        if let Some(translation) = repaired_translation {
+            last_validation.accepted.insert(key, translation);
+            repaired += 1;
+        }
+    }
+
+    let unresolved = expected_keys
+        .iter()
+        .filter(|key| !last_validation.accepted.contains_key(*key))
+        .count();
+    let translations = expected_keys
+        .iter()
+        .map(|key| {
+            last_validation
+                .accepted
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| "[翻译失败：对齐校验与定点补翻均未成功]".into())
+        })
+        .collect();
+    AlignedBatchResult::Success(AlignedBatchReport {
+        translations,
+        echo_checked: last_validation.echo_checked,
+        flagged: flagged_count,
+        repaired,
+        unresolved,
+        alignment_retry_used,
+    })
 }
 
 fn extract_json_object(raw_text: &str) -> Option<&str> {
@@ -1791,30 +2198,90 @@ mod tests {
 
     #[test]
     fn batch_translation_prompt_and_response_preserve_key_alignment() {
-        let cues = SubtitleTrack::from_srt(
-            "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n\
-             2\n00:00:02,000 --> 00:00:03,000\nWorld\n\n",
-        )
-        .unwrap()
-        .cues;
-
-        let (prompt, keys) = build_batch_translation_prompt("en", "zh", &cues);
-        let translated = parse_batch_translation_response(
-            "```json\n{\"1\":\"你好\",\"2\":\"世界\"}\n```",
+        let sources = vec!["Hello".to_string(), "World".to_string()];
+        let (prompt, keys) = build_batch_translation_prompt("en", "zh", &sources, true, false);
+        let parsed = parse_batch_translation_response(
+            "```json\n{\"1\":{\"src\":\"Hello\",\"tr\":\"你好\"},\"2\":{\"src\":\"World\",\"tr\":\"世界\"}}\n```",
             &keys,
         )
         .unwrap();
+        let validated = validate_batch_alignment(&parsed, &keys, &sources, true);
 
         assert!(prompt.contains("same keys"));
         assert_eq!(keys, vec!["1".to_string(), "2".to_string()]);
-        assert_eq!(translated, vec!["你好".to_string(), "世界".to_string()]);
+        assert_eq!(validated.echo_checked, 2);
+        assert!(validated.flagged.is_empty());
+        assert_eq!(validated.accepted["1"], "你好");
+        assert_eq!(validated.accepted["2"], "世界");
     }
 
     #[test]
-    fn batch_translation_response_rejects_missing_key() {
+    fn batch_translation_validation_flags_missing_and_shifted_entries() {
         let keys = vec!["1".to_string(), "2".to_string()];
-        let err = parse_batch_translation_response("{\"1\":\"你好\"}", &keys).unwrap_err();
-        assert!(err.contains("缺少键 2"));
+        let sources = vec!["Hello".to_string(), "World".to_string()];
+        let parsed =
+            parse_batch_translation_response("{\"1\":{\"src\":\"World\",\"tr\":\"世界\"}}", &keys)
+                .unwrap();
+        let validated = validate_batch_alignment(&parsed, &keys, &sources, true);
+
+        assert_eq!(validated.flagged, keys);
+        assert!(validated.accepted.is_empty());
+    }
+
+    #[test]
+    fn dynamic_batch_schema_locks_keys_and_echo_shape() {
+        let keys = vec!["1".to_string(), "2".to_string()];
+        let schema = make_batch_translation_schema(&keys, true);
+
+        assert_eq!(schema["required"], serde_json::json!(["1", "2"]));
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"]["1"]["required"],
+            serde_json::json!(["src", "tr"])
+        );
+        assert_eq!(schema["properties"]["1"]["additionalProperties"], false);
+    }
+
+    #[test]
+    fn batch_translation_response_rejects_extra_keys() {
+        let keys = vec!["1".to_string()];
+        let error = parse_batch_translation_response("{\"1\":\"你好\",\"extra\":\"不要\"}", &keys)
+            .unwrap_err();
+        assert!(error.contains("额外键 extra"));
+
+        let nested = parse_batch_translation_response(
+            "{\"1\":{\"src\":\"Hello\",\"tr\":\"你好\",\"reason\":\"不要\"}}",
+            &keys,
+        )
+        .unwrap_err();
+        assert!(nested.contains("额外字段 reason"));
+    }
+
+    #[test]
+    fn echo_similarity_ignores_formatting_but_detects_merged_text() {
+        assert!(text_similarity("Hello, WORLD!", "hello world") > 0.99);
+        assert!(text_similarity("Hello world and next subtitle", "Hello world") < 0.75);
+    }
+
+    #[test]
+    fn repair_prompt_returns_only_target_with_neighbor_context() {
+        let keys = (1..=6).map(|index| index.to_string()).collect::<Vec<_>>();
+        let sources = (1..=6)
+            .map(|index| format!("source {index}"))
+            .collect::<Vec<_>>();
+        let prompt = build_repair_translation_prompt(
+            "4",
+            &keys,
+            &sources,
+            &HashMap::from([("3".into(), "译文三".into())]),
+            "zh",
+            true,
+        );
+
+        assert!(prompt.contains("Translate only ID 4"));
+        assert!(prompt.contains("source 2"));
+        assert!(prompt.contains("source 6"));
+        assert!(!prompt.contains("source 1"));
     }
 
     #[test]

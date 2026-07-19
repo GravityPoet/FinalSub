@@ -51,6 +51,8 @@ interface StandaloneSubtitlesConfig {
   translateContent?: string;
 }
 
+const TRANSLATION_FAILURE_MARKER = '[翻译失败：';
+
 // 将时间字符串转换为秒
 const timeToSeconds = (timeStr: string): number => {
   const parts = timeStr.replace(',', '.').split(':');
@@ -400,7 +402,10 @@ export const useStandaloneSubtitles = (
     const total = mergedSubtitles.length;
     const withTranslation = shouldShowTranslation
       ? mergedSubtitles.filter(
-          (sub) => sub.targetContent && sub.targetContent.trim() !== '',
+          (sub) =>
+            sub.targetContent &&
+            sub.targetContent.trim() !== '' &&
+            !sub.targetContent.trim().startsWith(TRANSLATION_FAILURE_MARKER),
         ).length
       : 0;
     const percent =
@@ -416,7 +421,9 @@ export const useStandaloneSubtitles = (
     return (
       !!subtitle.sourceContent &&
       subtitle.sourceContent.trim() !== '' &&
-      (!subtitle.targetContent || subtitle.targetContent.trim() === '')
+      (!subtitle.targetContent ||
+        subtitle.targetContent.trim() === '' ||
+        subtitle.targetContent.trim().startsWith(TRANSLATION_FAILURE_MARKER))
     );
   };
 

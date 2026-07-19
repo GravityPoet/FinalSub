@@ -1,7 +1,30 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "../lib/i18n";
-import { Languages, AlertCircle, CheckCircle, Eye, EyeOff, RefreshCw, Braces, Network, Save } from "lucide-react";
 import {
+  AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
+  Braces,
+  CheckCircle,
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  Languages,
+  Network,
+  Plus,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import {
+  openDialog,
+  readTextFilePath,
+  saveDialog,
+  writeTextFilePath,
   listTranslationProviders,
   listTranslationModels,
   testTranslation,
@@ -11,12 +34,23 @@ import {
   hasProviderSecret,
   setProviderSecret,
   type TranslationProvider,
+  type TranslationGlossary,
+  type TranslationStructuredOutputMode,
   type Settings,
 } from "../lib/tauri";
+import {
+  createGlossaryId,
+  findGlossaryConflicts,
+  mergeImportedEntries,
+  moveGlossary,
+  normalizeGlossaryOrder,
+  parseGlossaryEntries,
+  serializeGlossaryEntries,
+} from "../lib/glossary";
 
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
-import { Input, Textarea } from "../components/ui/Input";
+import { Input, Select, Textarea } from "../components/ui/Input";
 
 const CUSTOM_OPENAI_PROVIDER_ID = "custom-openai";
 
@@ -130,6 +164,11 @@ function formatJsonObject(value: Record<string, unknown> | undefined): string {
   return JSON.stringify(value ?? {}, null, 2);
 }
 
+function safeFileStem(value: string): string {
+  const stem = value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ");
+  return stem || "FinalSub-glossary";
+}
+
 export default function TranslationPage() {
   const { t, locale } = useI18n();
   const [providers, setProviders] = useState<TranslationProvider[]>([]);
@@ -156,12 +195,22 @@ export default function TranslationPage() {
   const [testingProxy, setTestingProxy] = useState(false);
   const [proxyStatus, setProxyStatus] = useState("");
   const [runtimeSaved, setRuntimeSaved] = useState(false);
+  const [structuredOutput, setStructuredOutput] = useState<TranslationStructuredOutputMode>("json_schema");
+  const [echoAnchoring, setEchoAnchoring] = useState(true);
+  const [glossaryDrafts, setGlossaryDrafts] = useState<TranslationGlossary[]>([]);
+  const [activeGlossaryId, setActiveGlossaryId] = useState("");
+  const [glossarySaved, setGlossarySaved] = useState(false);
+  const [glossaryStatus, setGlossaryStatus] = useState("");
+  const [glossaryError, setGlossaryError] = useState("");
 
   useEffect(() => {
     listTranslationProviders().then(setProviders).catch(console.error);
     getSettings().then((s) => {
       setSettings(s);
       setSelectedProvider(s.translate_provider || "");
+      const loadedGlossaries = normalizeGlossaryOrder(s.translation_glossaries ?? []);
+      setGlossaryDrafts(loadedGlossaries);
+      setActiveGlossaryId(loadedGlossaries[0]?.id ?? "");
     }).catch(console.error);
   }, []);
 
@@ -171,6 +220,13 @@ export default function TranslationPage() {
     .filter((provider) => provider.implemented)
     .map((provider) => provider.name)
     .join(locale === "en" ? ", " : "、");
+  const glossaries = useMemo(
+    () => normalizeGlossaryOrder(glossaryDrafts),
+    [glossaryDrafts],
+  );
+  const glossaryConflicts = useMemo(() => findGlossaryConflicts(glossaries), [glossaries]);
+  const activeGlossary = glossaries.find((glossary) => glossary.id === activeGlossaryId) ?? null;
+  const enabledGlossaryCount = glossaries.filter((glossary) => glossary.enabled).length;
   const parseCustomHeaders = () => parseHeaderObject(
     customHeadersJson,
     t("translation.customHeaders"),
@@ -186,6 +242,16 @@ export default function TranslationPage() {
   );
 
   useEffect(() => {
+    if (glossaries.length === 0) {
+      if (activeGlossaryId) setActiveGlossaryId("");
+      return;
+    }
+    if (!glossaries.some((glossary) => glossary.id === activeGlossaryId)) {
+      setActiveGlossaryId(glossaries[0].id);
+    }
+  }, [activeGlossaryId, glossaries]);
+
+  useEffect(() => {
     if (!selectedProvider || !settings) return;
     const ep = settings.translate_endpoints?.[selectedProvider] || selectedProviderInfo?.default_endpoint || "";
     const md = settings.translate_models?.[selectedProvider] || "";
@@ -196,6 +262,8 @@ export default function TranslationPage() {
     setUserPrompt(settings.translate_user_prompts?.[selectedProvider] || "");
     setCustomHeadersJson(formatJsonObject(settings.translate_custom_headers?.[selectedProvider]));
     setCustomBodyJson(formatJsonObject(settings.translate_custom_body?.[selectedProvider]));
+    setStructuredOutput(settings.translate_structured_output?.[selectedProvider] ?? "json_schema");
+    setEchoAnchoring(settings.translate_echo_anchoring?.[selectedProvider] ?? true);
     setProxyStatus("");
 
     if (selectedProviderInfo?.secret_fields) {
@@ -241,6 +309,8 @@ export default function TranslationPage() {
     selectedProviderInfo,
     settings?.translate_endpoints?.[selectedProvider],
     settings?.translate_models?.[selectedProvider],
+    settings?.translate_structured_output?.[selectedProvider],
+    settings?.translate_echo_anchoring?.[selectedProvider],
   ]);
 
   const handleSecretChange = (field: string, val: string) => {
@@ -278,6 +348,8 @@ export default function TranslationPage() {
       const updatedUserPrompts = { ...(settings.translate_user_prompts || {}), [selectedProvider]: userPrompt.trim() };
       const updatedCustomHeaders = { ...(settings.translate_custom_headers || {}), [selectedProvider]: parsedCustomHeaders };
       const updatedCustomBody = { ...(settings.translate_custom_body || {}), [selectedProvider]: parsedCustomBody };
+      const updatedStructuredOutput = { ...(settings.translate_structured_output || {}), [selectedProvider]: structuredOutput };
+      const updatedEchoAnchoring = { ...(settings.translate_echo_anchoring || {}), [selectedProvider]: echoAnchoring };
 
       const updated = {
         ...settings,
@@ -288,6 +360,8 @@ export default function TranslationPage() {
         translate_user_prompts: updatedUserPrompts,
         translate_custom_headers: updatedCustomHeaders,
         translate_custom_body: updatedCustomBody,
+        translate_structured_output: updatedStructuredOutput,
+        translate_echo_anchoring: updatedEchoAnchoring,
       };
 
       if (selectedProviderInfo?.secret_fields) {
@@ -417,6 +491,168 @@ export default function TranslationPage() {
       window.setTimeout(() => setRuntimeSaved(false), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const updateGlossaries = (next: TranslationGlossary[], nextActiveId?: string) => {
+    const normalized = normalizeGlossaryOrder(next);
+    setGlossaryDrafts(normalized);
+    if (nextActiveId !== undefined) setActiveGlossaryId(nextActiveId);
+    setGlossarySaved(false);
+    setGlossaryStatus("");
+    setGlossaryError("");
+  };
+
+  const handleAddGlossary = () => {
+    if (!settings || glossaries.length >= 64) return;
+    const id = createGlossaryId("glossary");
+    updateGlossaries([
+      ...glossaries,
+      {
+        id,
+        name: t("translation.glossaryNewName", { count: glossaries.length + 1 }),
+        description: "",
+        enabled: true,
+        order: glossaries.length,
+        entries: [],
+      },
+    ], id);
+  };
+
+  const handleCopyGlossary = () => {
+    if (!activeGlossary || glossaries.length >= 64) return;
+    const id = createGlossaryId("glossary");
+    updateGlossaries([
+      ...glossaries,
+      {
+        ...activeGlossary,
+        id,
+        name: `${activeGlossary.name}${t("translation.glossaryCopySuffix")}`,
+        order: glossaries.length,
+        entries: activeGlossary.entries.map((entry) => ({ ...entry, id: createGlossaryId("entry") })),
+      },
+    ], id);
+  };
+
+  const handleDeleteGlossary = () => {
+    if (!activeGlossary) return;
+    if (!window.confirm(t("translation.glossaryDeleteConfirm", { name: activeGlossary.name }))) return;
+    const remaining = glossaries.filter((glossary) => glossary.id !== activeGlossary.id);
+    updateGlossaries(remaining, remaining[0]?.id ?? "");
+  };
+
+  const updateActiveGlossary = (patch: Partial<TranslationGlossary>) => {
+    if (!activeGlossary) return;
+    updateGlossaries(glossaries.map((glossary) => (
+      glossary.id === activeGlossary.id ? { ...glossary, ...patch } : glossary
+    )));
+  };
+
+  const handleAddGlossaryEntry = () => {
+    if (!activeGlossary || activeGlossary.entries.length >= 10_000) return;
+    updateActiveGlossary({
+      entries: [
+        ...activeGlossary.entries,
+        { id: createGlossaryId("entry"), source: "", target: "", note: "" },
+      ],
+    });
+  };
+
+  const handleUpdateGlossaryEntry = (
+    entryId: string,
+    patch: Partial<TranslationGlossary["entries"][number]>,
+  ) => {
+    if (!activeGlossary) return;
+    updateActiveGlossary({
+      entries: activeGlossary.entries.map((entry) => (
+        entry.id === entryId ? { ...entry, ...patch } : entry
+      )),
+    });
+  };
+
+  const handleDeleteGlossaryEntry = (entryId: string) => {
+    if (!activeGlossary) return;
+    updateActiveGlossary({ entries: activeGlossary.entries.filter((entry) => entry.id !== entryId) });
+  };
+
+  const handleImportGlossary = async () => {
+    if (!activeGlossary) return;
+    setGlossaryError("");
+    setGlossaryStatus("");
+    try {
+      const path = await openDialog({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "CSV / TXT", extensions: ["csv", "txt"] }],
+      });
+      if (typeof path !== "string") return;
+      const format = path.toLocaleLowerCase().endsWith(".csv") ? "csv" : "txt";
+      const parsed = parseGlossaryEntries(await readTextFilePath(path), format);
+      if (parsed.length === 0) {
+        setGlossaryError(t("translation.glossaryImportEmpty"));
+        return;
+      }
+      const merged = mergeImportedEntries(activeGlossary.entries, parsed);
+      updateActiveGlossary({ entries: merged.entries.slice(0, 10_000) });
+      setGlossaryStatus(t("translation.glossaryImportSuccess", {
+        added: merged.added,
+        updated: merged.updated,
+      }));
+    } catch (err) {
+      setGlossaryError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleExportGlossary = async () => {
+    if (!activeGlossary) return;
+    setGlossaryError("");
+    setGlossaryStatus("");
+    try {
+      const path = await saveDialog({
+        defaultPath: `${safeFileStem(activeGlossary.name)}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!path) return;
+      await writeTextFilePath(path, serializeGlossaryEntries(activeGlossary.entries, "csv"));
+      setGlossaryStatus(t("translation.glossaryExported"));
+    } catch (err) {
+      setGlossaryError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleSaveGlossaries = async () => {
+    if (!settings) return;
+    setGlossaryError("");
+    setGlossaryStatus("");
+    const cleaned = glossaries.map((glossary) => ({
+      ...glossary,
+      name: glossary.name.trim(),
+      description: glossary.description.trim(),
+      entries: glossary.entries
+        .map((entry) => ({
+          ...entry,
+          source: entry.source.trim(),
+          target: entry.target.trim(),
+          note: entry.note.trim(),
+        }))
+        .filter((entry) => entry.source || entry.target || entry.note),
+    }));
+    if (cleaned.some((glossary) => !glossary.name)) {
+      setGlossaryError(t("translation.glossaryNameRequired"));
+      return;
+    }
+    if (cleaned.some((glossary) => glossary.entries.some((entry) => !entry.source || !entry.target))) {
+      setGlossaryError(t("translation.glossaryEntryIncomplete"));
+      return;
+    }
+    try {
+      const saved = await saveSettingsCmd({ ...settings, translation_glossaries: cleaned });
+      setSettings(saved);
+      setGlossaryDrafts(normalizeGlossaryOrder(saved.translation_glossaries));
+      setGlossarySaved(true);
+      window.setTimeout(() => setGlossarySaved(false), 3000);
+    } catch (err) {
+      setGlossaryError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -617,6 +853,50 @@ export default function TranslationPage() {
                 <div className="liquid-panel lg:col-span-2 rounded-2xl border border-border-subtle p-4">
                   <div className="mb-4 flex items-start gap-3">
                     <span className="liquid-icon grid h-9 w-9 shrink-0 place-items-center rounded-xl text-brand">
+                      <ShieldCheck size={17} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h5 className="text-sm font-semibold text-text-primary">{t("translation.alignmentTitle")}</h5>
+                        <span className="rounded-md border border-brand/15 bg-brand/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-brand-text">
+                          {t("translation.alignmentBadge")}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("translation.alignmentDesc")}</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                        {t("translation.structuredOutput")}
+                      </label>
+                      <Select
+                        value={structuredOutput}
+                        onChange={(event) => setStructuredOutput(event.target.value as TranslationStructuredOutputMode)}
+                      >
+                        <option value="json_schema">{t("translation.structuredJsonSchema")}</option>
+                        <option value="json_object">{t("translation.structuredJsonObject")}</option>
+                        <option value="disabled">{t("translation.structuredDisabled")}</option>
+                      </Select>
+                      <p className="mt-1.5 text-xs leading-5 text-text-tertiary">{t("translation.structuredFallback")}</p>
+                    </div>
+                    <label className="flex min-h-24 cursor-pointer items-start gap-3 rounded-xl border border-border-subtle bg-surface-overlay/45 p-3.5">
+                      <input
+                        type="checkbox"
+                        checked={echoAnchoring}
+                        onChange={(event) => setEchoAnchoring(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 accent-brand"
+                      />
+                      <span>
+                        <span className="block text-sm font-semibold text-text-primary">{t("translation.echoAnchoring")}</span>
+                        <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("translation.echoAnchoringDesc")}</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div className="liquid-panel lg:col-span-2 rounded-2xl border border-border-subtle p-4">
+                  <div className="mb-4 flex items-start gap-3">
+                    <span className="liquid-icon grid h-9 w-9 shrink-0 place-items-center rounded-xl text-brand">
                       <Braces size={17} />
                     </span>
                     <div>
@@ -721,6 +1001,267 @@ export default function TranslationPage() {
           )}
         </div>
       </Card>
+
+      {settings && (
+        <Card className="p-6">
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="liquid-icon grid h-10 w-10 shrink-0 place-items-center rounded-xl text-brand">
+                <BookOpen size={18} />
+              </span>
+              <div>
+                <h3 className="font-display text-h2 font-semibold text-text-primary">{t("translation.glossaryTitle")}</h3>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-text-tertiary">{t("translation.glossaryDesc")}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-wide">
+              <span className="rounded-md border border-border-subtle bg-surface-overlay px-2.5 py-1.5 text-text-secondary">
+                {t("translation.glossaryEnabledCount", { enabled: enabledGlossaryCount, total: glossaries.length })}
+              </span>
+              <span className={`rounded-md border px-2.5 py-1.5 ${
+                glossaryConflicts.length > 0
+                  ? "border-warning/25 bg-warning/10 text-warning"
+                  : "border-success/20 bg-success/10 text-success"
+              }`}>
+                {t("translation.glossaryConflictCount", { count: glossaryConflicts.length })}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[17rem_minmax(0,1fr)]">
+            <aside className="rounded-2xl border border-border-subtle bg-surface-overlay/35 p-3">
+              <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+                  {t("translation.glossaryList")}
+                </span>
+                <Button type="button" variant="secondary" size="sm" onClick={handleAddGlossary} disabled={glossaries.length >= 64}>
+                  <Plus size={13} />
+                  {t("translation.glossaryAdd")}
+                </Button>
+              </div>
+              {glossaries.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={handleAddGlossary}
+                  className="flex min-h-32 w-full flex-col items-center justify-center rounded-xl border border-dashed border-border-default px-4 text-center text-sm text-text-tertiary transition hover:border-brand/35 hover:bg-brand/5 hover:text-text-primary"
+                >
+                  <Plus className="mb-2" size={18} />
+                  {t("translation.glossaryEmpty")}
+                </button>
+              ) : (
+                <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                  {glossaries.map((glossary, index) => (
+                    <div
+                      key={glossary.id}
+                      className={`rounded-xl border p-2 transition ${
+                        glossary.id === activeGlossaryId
+                          ? "border-brand/25 bg-brand/10"
+                          : "border-border-subtle bg-surface-raised/55"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setActiveGlossaryId(glossary.id)}
+                        className="w-full px-1 text-left"
+                      >
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm font-semibold text-text-primary">{glossary.name}</span>
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${glossary.enabled ? "bg-success" : "bg-text-tertiary/45"}`} />
+                        </span>
+                        <span className="mt-1 block text-xs text-text-tertiary">
+                          {t("translation.glossaryEntryCount", { count: glossary.entries.length })}
+                        </span>
+                      </button>
+                      <div className="mt-2 flex justify-end gap-1 border-t border-border-subtle pt-1.5">
+                        <button
+                          type="button"
+                          onClick={() => updateGlossaries(moveGlossary(glossaries, glossary.id, -1))}
+                          disabled={index === 0}
+                          className="rounded-md p-1.5 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary disabled:opacity-30"
+                          title={t("translation.glossaryMoveUp")}
+                        >
+                          <ArrowUp size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateGlossaries(moveGlossary(glossaries, glossary.id, 1))}
+                          disabled={index === glossaries.length - 1}
+                          className="rounded-md p-1.5 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary disabled:opacity-30"
+                          title={t("translation.glossaryMoveDown")}
+                        >
+                          <ArrowDown size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </aside>
+
+            <section className="min-w-0 rounded-2xl border border-border-subtle bg-surface-raised/50 p-4 sm:p-5">
+              {activeGlossary ? (
+                <>
+                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <label className="flex cursor-pointer items-center gap-2.5 text-sm font-semibold text-text-primary">
+                      <input
+                        type="checkbox"
+                        checked={activeGlossary.enabled}
+                        onChange={(event) => updateActiveGlossary({ enabled: event.target.checked })}
+                        className="h-4 w-4 accent-brand"
+                      />
+                      {t("translation.glossaryEnabled")}
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="secondary" size="sm" onClick={handleCopyGlossary} disabled={glossaries.length >= 64}>
+                        <Copy size={13} /> {t("translation.glossaryCopy")}
+                      </Button>
+                      <Button type="button" variant="danger" size="sm" onClick={handleDeleteGlossary}>
+                        <Trash2 size={13} /> {t("translation.glossaryDelete")}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.glossaryName")}</label>
+                      <Input
+                        value={activeGlossary.name}
+                        maxLength={120}
+                        onChange={(event) => updateActiveGlossary({ name: event.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.glossaryDescription")}</label>
+                      <Input
+                        value={activeGlossary.description}
+                        maxLength={500}
+                        onChange={(event) => updateActiveGlossary({ description: event.target.value })}
+                        placeholder={t("translation.glossaryDescriptionPlaceholder")}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-5">
+                    <div>
+                      <h4 className="text-sm font-semibold text-text-primary">{t("translation.glossaryEntries")}</h4>
+                      <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("translation.glossaryEntriesHint")}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="secondary" size="sm" onClick={handleImportGlossary}>
+                        <Upload size={13} /> {t("translation.glossaryImport")}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={handleExportGlossary}>
+                        <Download size={13} /> {t("translation.glossaryExport")}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={handleAddGlossaryEntry} disabled={activeGlossary.entries.length >= 10_000}>
+                        <Plus size={13} /> {t("translation.glossaryAddEntry")}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {activeGlossary.entries.length === 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleAddGlossaryEntry}
+                      className="mt-4 flex min-h-28 w-full flex-col items-center justify-center rounded-xl border border-dashed border-border-default px-4 text-sm text-text-tertiary transition hover:border-brand/35 hover:bg-brand/5 hover:text-text-primary"
+                    >
+                      <Plus className="mb-2" size={18} />
+                      {t("translation.glossaryEntriesEmpty")}
+                    </button>
+                  ) : (
+                    <div className="mt-4 max-h-[30rem] space-y-3 overflow-y-auto pr-1">
+                      <div className="hidden grid-cols-[2rem_minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_2rem] gap-2 px-3 font-mono text-[10px] uppercase tracking-wide text-text-tertiary lg:grid">
+                        <span />
+                        <span>{t("translation.glossarySource")}</span>
+                        <span>{t("translation.glossaryTarget")}</span>
+                        <span>{t("translation.glossaryNote")}</span>
+                        <span />
+                      </div>
+                      {activeGlossary.entries.map((entry, index) => (
+                        <div key={entry.id} className="grid gap-2 rounded-xl border border-border-subtle bg-surface-overlay/35 p-3 lg:grid-cols-[2rem_minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_2rem] lg:items-center">
+                          <span className="font-mono text-xs text-text-tertiary">{String(index + 1).padStart(2, "0")}</span>
+                          <label className="min-w-0">
+                            <span className="mb-1 block text-xs font-medium text-text-tertiary lg:hidden">{t("translation.glossarySource")}</span>
+                            <Input
+                              value={entry.source}
+                              maxLength={300}
+                              onChange={(event) => handleUpdateGlossaryEntry(entry.id, { source: event.target.value })}
+                              placeholder={t("translation.glossarySource")}
+                              aria-label={t("translation.glossarySource")}
+                            />
+                          </label>
+                          <label className="min-w-0">
+                            <span className="mb-1 block text-xs font-medium text-text-tertiary lg:hidden">{t("translation.glossaryTarget")}</span>
+                            <Input
+                              value={entry.target}
+                              maxLength={600}
+                              onChange={(event) => handleUpdateGlossaryEntry(entry.id, { target: event.target.value })}
+                              placeholder={t("translation.glossaryTarget")}
+                              aria-label={t("translation.glossaryTarget")}
+                            />
+                          </label>
+                          <label className="min-w-0">
+                            <span className="mb-1 block text-xs font-medium text-text-tertiary lg:hidden">{t("translation.glossaryNote")}</span>
+                            <Input
+                              value={entry.note}
+                              maxLength={1000}
+                              onChange={(event) => handleUpdateGlossaryEntry(entry.id, { note: event.target.value })}
+                              placeholder={t("translation.glossaryNote")}
+                              aria-label={t("translation.glossaryNote")}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteGlossaryEntry(entry.id)}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-text-tertiary transition hover:bg-danger/10 hover:text-danger"
+                            title={t("translation.glossaryDeleteEntry")}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {glossaryConflicts.length > 0 && (
+                    <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning">
+                      <AlertCircle className="mt-0.5 shrink-0" size={14} />
+                      <span className="leading-5">{t("translation.glossaryConflictNotice", { count: glossaryConflicts.length })}</span>
+                    </div>
+                  )}
+                  {glossaryError && (
+                    <div className="mt-4 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm text-danger">
+                      <AlertCircle className="mt-0.5 shrink-0" size={14} />
+                      <span>{glossaryError}</span>
+                    </div>
+                  )}
+                  <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-5">
+                    <Button type="button" variant="primary" size="sm" onClick={handleSaveGlossaries}>
+                      <Save size={14} /> {t("translation.glossarySave")}
+                    </Button>
+                    {glossaryStatus && <span className="text-sm font-medium text-success">{glossaryStatus}</span>}
+                    {glossarySaved && (
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-success">
+                        <CheckCircle size={14} /> {t("translation.glossarySaved")}
+                      </span>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="grid min-h-64 place-items-center text-center">
+                  <div>
+                    <BookOpen className="mx-auto mb-3 text-text-tertiary" size={28} />
+                    <p className="text-sm text-text-tertiary">{t("translation.glossaryEmptyDetail")}</p>
+                    <Button className="mt-4" type="button" variant="primary" size="sm" onClick={handleAddGlossary}>
+                      <Plus size={13} /> {t("translation.glossaryAdd")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+        </Card>
+      )}
 
       {settings && (
         <Card className="p-6">

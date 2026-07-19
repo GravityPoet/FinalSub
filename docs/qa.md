@@ -100,6 +100,18 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run tauri dev
 | `qwen` | AI | `apiKey` | endpoint 默认 `https://dashscope.aliyuncs.com/compatible-mode/v1`；必须填写模型 | 返回中文译文；模型/key 错误可明确显示 |
 | `custom-openai` | AI | `apiKey` | 必须填写 OpenAI-compatible endpoint 和模型 | 返回中文译文；endpoint/model/key 错误可明确显示 |
 
+## 翻译对齐与术语表验收
+
+| 场景 | 操作 | 通过判据 |
+|------|------|----------|
+| 动态 Schema | 用 2–3 条字幕启动 AI 翻译，并在测试 endpoint 记录请求体 | `required` 仅含当前批次 ID，顶层与 `{src,tr}` 均禁止额外字段 |
+| 结构化输出降级 | endpoint 依次拒绝 `json_schema`、`json_object` | 请求自动降级到普通文本模式，任务仍能解析提示词约定的 JSON |
+| 回声错位 | 返回正确 ID，但把第二条 `src` 放到第一条 | 相似度校验标记错位；大面积异常整批重试一次，小面积异常只补翻问题条目 |
+| 局部失败 | 定点补翻连续返回无效结构 | 该行写入显式失败标记，校对页把它计入失败项而不是完成项 |
+| 术语优先级 | 启用两个包含同一原文的术语表并调整顺序 | 冲突数可见；仅采用优先级更高的译法，任务日志不记录术语正文 |
+| 命中最小化 | 术语表包含命中与未命中条目 | 发给 AI 的术语数据只含当前批次命中的条目，最多 100 条 |
+| 导入导出 | 导入带引号、逗号和备注的 CSV，再导出 | 条目完整、重复原文更新而不重复追加；TXT 的 Tab、`=>`、`->`、`→`、`=` 分隔可识别 |
+
 ## 签名验证
 
 ```bash
