@@ -68,9 +68,9 @@ Translate your transcriptions into elegant, natural bilingual subtitles with the
 * **Timeline Shift**: Adjust time offsets for the entire timeline or selected areas to resolve audio-visual sync issues.
 
 ### 🎧 Recoverable TTS Dubbing Workbench
-* **Local and cloud are separate by design**: local Kokoro, VITS, and ZipVoice models are scanned and reused in place; online OpenAI-compatible, Azure Speech, and ElevenLabs profiles live in a separate cloud-service area and never trigger a model download.
+* **Local and cloud are separate by design**: local Kokoro, VITS, and ZipVoice models are scanned and reused in place; online OpenAI-compatible, Azure Speech, ElevenLabs, Volcano Engine Doubao Speech, and Edge TTS profiles live in a separate cloud-service area and never trigger a model download.
 * **Native local synthesis**: sherpa-onnx runs inside the Rust backend with no Python or first-run installer. ZipVoice accepts a local WAV plus its exact transcript and offers standard/high generation steps; the reference audio stays on the device.
-* **Timeline-aware sessions**: import SRT/VTT/ASS/LRC, synthesize one line or all pending lines, resume after restart, borrow silent gaps, preserve source overlaps, review lines over the 1.5× redline, and export an aligned WAV or MP3.
+* **Timeline-aware sessions**: import SRT/VTT/ASS/LRC, play the source video with active-cue highlighting and cue seeking, edit text or per-line voices, synthesize one line or all pending lines, resume after restart, borrow silent gaps, preserve source overlaps, review lines over the 1.5× redline, safely write edited subtitles to a copy or the unchanged source, and export an aligned WAV or MP3.
 * **Explicit cloud consent**: text is sent only through a saved, endpoint-bound profile after upload consent is enabled; API keys remain in the OS credential store.
 
 ### 🎬 One-Stop Video Composition

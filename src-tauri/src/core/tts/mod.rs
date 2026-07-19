@@ -3,6 +3,7 @@ mod dubbing;
 mod engine;
 mod models;
 mod providers;
+mod volcengine;
 
 pub(crate) use download::download_model_impl;
 pub(crate) use engine::{synthesize_local, TtsEngineCache};

@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、本地/云端 TTS、可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、任务配方、完成前人工审核、模型管理和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR 协议广度、本地模型原地复用、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 的声音克隆资产管理、云端 TTS 广度、多进程推理、视频联动配音和统一阶段编排仍更完整。FinalSub 当前能用 ZipVoice 参考 WAV + 精确文本直接克隆合成，但还不能把它等同于完整的录音、质检、音色库、导入导出与云克隆工作流，因此仍不能笼统宣称功能已经全面对齐或超越。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、任务配方、完成前人工审核、模型管理和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 的声音克隆资产管理、多进程推理、统一阶段编排、硬件编码管理和跨任务日志中心仍更完整。FinalSub 当前能用 ZipVoice 参考 WAV + 精确文本直接克隆合成，但还不能把它等同于完整的录音、质检、音色库、导入导出与云克隆工作流，因此仍不能笼统宣称功能已经全面对齐或超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -106,9 +106,9 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 | 能力 | 状态 | 当前实现与 SmartSub 基线差异 |
 |---|---:|---|
-| 行级配音工作台 | 🟠 | 已支持字幕导入、逐行/批量生成、试听、重生成、状态统计和恢复；可直接修改单行文本、覆盖或恢复全局音色，编辑后只失效对应 WAV 与最终导出；尚缺视频播放联动与同步字幕回写 |
+| 行级配音工作台 | 🟢 | 已支持字幕导入、视频播放/行级跳转/当前行高亮、逐行/批量生成、试听、重生成、状态统计和恢复；可修改单行文本、覆盖或恢复全局音色，编辑后只失效对应 WAV 与最终导出；可另存字幕副本，并仅在源文件哈希未改变时创建精确备份后原子写回 |
 | 本地 TTS | 🟠 | Rust 原生 sherpa-onnx 已接 Kokoro 103 音色、VITS 174 说话人与 ZipVoice；支持受管下载、取消、最多两个引擎缓存和原子 WAV，但缺真实本地 TTS 模型音质 E2E 与多进程并行 |
-| 云 TTS | 🟠 | OpenAI-compatible、Azure Speech、ElevenLabs 与 Edge TTS 免费试用档已接入；Edge 为固定版本逆向 WebSocket、无需 Key 但不承诺稳定性；仍缺火山豆包与付费账号 E2E |
+| 云 TTS | 🟡 | OpenAI-compatible、Azure Speech、ElevenLabs、火山引擎豆包语音 V3 与 Edge TTS 免费试用档已接入；豆包固定官方 Endpoint、资源版本/音色路由、chunked base64 PCM、Keychain 与定向错误诊断已有协议测试，仍缺付费账号真实 E2E；Edge 无需 Key 但不承诺稳定性 |
 | 本地声音克隆 | 🟠 | ZipVoice 已支持参考 WAV + 逐字文本、4/8 步质量档与 30 秒/64 MB 边界；缺录音、ASR 预填、选段/质检、降噪、音色实体、A/B、导入导出 |
 | 云声音克隆 | 🔴 | 火山声音复刻 2.0、ElevenLabs IVC、云端音色找回 |
 | 时间轴对齐 | 🟠 | 已实现静音借时、原重叠保留、实测复检、`atempo`、1.5× 人工红线；缺按语言估时的合成前预控与自动重合成策略 |
@@ -177,7 +177,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 - SmartSub 上游审计固定在 `e9ad26f1d4ddde59b8460a453c29ebb9c545a4c8`；确认其仍覆盖 Edge/火山/ElevenLabs 云 TTS、声音克隆资产、模型镜像下载、时间轴预控和统一 pipeline specs。FinalSub 的差距项未被误标为完成。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- TTS 下载器、Edge provider 与配音行级编辑单元测试覆盖镜像顺序、固定大小流量上限、归档原子替换、失败保留旧模型、ZipVoice 缺 vocoder 拒绝、空必需文件拒绝、Edge 语速/语言区域/音频上限、零配置实例、行文本/音色/越界索引与旧音频失效；`cargo test --lib` 为 237 passed / 0 failed / 8 ignored，`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --check` 通过。
+- TTS 下载器、Edge/豆包 provider、配音行级编辑与字幕写回单元测试覆盖镜像顺序、固定大小流量上限、归档原子替换、失败保留旧模型、ZipVoice 缺 vocoder 拒绝、Edge 语速/语言区域/音频上限、豆包固定 Endpoint/资源路由/语速/文本上限/流式 PCM/错误诊断、行文本/音色/越界索引、外部修改拒绝和写回备份；`cargo test --lib` 为 250 passed / 0 failed / 8 ignored，`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check` 与 `npm run build` 通过。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
 - 浏览器 QA（本地 Vite + Playwright）：新建任务已移除旧 `hero-panel`，1440×900 下“选择音视频”距视口顶部约 209 px，390×844 下约 312 px，核心入口不再被品牌大卡片挤走；配音页实测修改第 1 行文本与云端音色、保存后回到待合成、重新生成后已对齐；模型页本地/云端顶层分区、本地 TTS 外部目录“直接复用”、应用内下载/选择已有目录/官方来源、ZipVoice 双工件提示均可见；云端页明确显示“不是下载区 / 不会下载模型”；在线 TTS 面板可见 Edge“免费试用 / 无需 API Key / 仍需文本授权 / 可能断供”分层提示；1440×900 与 390×844 无横向溢出，控制台无 error/warning。
@@ -210,5 +210,5 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 4. Linux Secret Service 后端已配置，但尚缺真实 Linux 桌面会话的密钥存取 E2E。
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-7. 本地/云端 TTS、配音会话与时间轴导出已交付，受管下载与 Edge 免费试用档已完成，但缺真实本地 TTS 模型音质 E2E、火山豆包 TTS、完整 ZipVoice 音色资产工作流、云声音克隆与独立 worker。
+7. 本地/云端 TTS、配音会话、视频联动、字幕安全写回与时间轴导出已交付，受管下载、Edge 免费试用档和豆包语音 V3 协议均已完成；仍缺真实本地 TTS 模型音质 E2E、豆包付费账号 smoke test、完整 ZipVoice 音色资产工作流、云声音克隆与独立 worker。
 8. 人工审核和配音会话都已有持久状态，但统一阶段编排、批准后自动进入配音/compose、硬件编码管理和跨任务日志中心尚未达到 SmartSub `e9ad26f` 基线。

@@ -18,6 +18,7 @@ import {
   deleteTtsProvider,
   hasProviderSecret,
   listTtsProviders,
+  openUrl,
   saveTtsProvider,
   setProviderSecret,
   testTtsProvider,
@@ -30,30 +31,43 @@ import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { Input, Select } from "./ui/Input";
 
-const DEFAULTS: Record<TtsProviderProtocol, Pick<SaveTtsProviderRequest, "endpoint" | "model" | "voice" | "region">> = {
+const VOLC_TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
+
+const DEFAULTS: Record<TtsProviderProtocol, Pick<SaveTtsProviderRequest, "endpoint" | "model" | "voice" | "region" | "resource_id">> = {
   "openai-compatible": {
     endpoint: "https://api.openai.com/v1",
     model: "gpt-4o-mini-tts",
     voice: "alloy",
     region: "",
+    resource_id: "",
   },
   "azure-speech": {
     endpoint: "",
     model: "azure-neural",
     voice: "zh-CN-XiaoxiaoNeural",
     region: "japaneast",
+    resource_id: "",
   },
   elevenlabs: {
     endpoint: "https://api.elevenlabs.io/v1",
     model: "eleven_multilingual_v2",
     voice: "21m00Tcm4TlvDq8ikWAM",
     region: "",
+    resource_id: "",
   },
   "edge-tts": {
     endpoint: "",
     model: "",
     voice: "zh-CN-XiaoxiaoNeural",
     region: "zh-CN",
+    resource_id: "",
+  },
+  volcengine: {
+    endpoint: "",
+    model: "",
+    voice: "zh_female_shuangkuaisisi_uranus_bigtts",
+    region: "",
+    resource_id: "seed-tts-2.0",
   },
 };
 
@@ -74,6 +88,7 @@ function secretProviderId(id: string): string {
 
 function resolvedEndpoint(profile: Pick<TtsProviderProfile, "protocol" | "endpoint" | "region">): string {
   if (profile.protocol === "edge-tts") return "";
+  if (profile.protocol === "volcengine") return VOLC_TTS_ENDPOINT;
   if (profile.protocol === "azure-speech" && !profile.endpoint.trim()) {
     return `https://${profile.region.trim()}.tts.speech.microsoft.com/cognitiveservices/v1`;
   }
@@ -270,7 +285,9 @@ export function CloudTtsPanel() {
                           ? t("models.ttsCloudProtocolAzure")
                           : profile.protocol === "elevenlabs"
                             ? t("models.ttsCloudProtocolElevenlabs")
-                            : t("models.ttsCloudProtocolEdge")}
+                            : profile.protocol === "edge-tts"
+                              ? t("models.ttsCloudProtocolEdge")
+                              : t("models.ttsCloudProtocolVolcengine")}
                     </span>
                     {profile.text_upload_consent && <CheckCircle2 size={13} className="text-success" />}
                   </span>
@@ -322,6 +339,7 @@ export function CloudTtsPanel() {
                 <option value="azure-speech">{t("models.ttsCloudProtocolAzure")}</option>
                 <option value="elevenlabs">{t("models.ttsCloudProtocolElevenlabs")}</option>
                 <option value="edge-tts">{t("models.ttsCloudProtocolEdge")}</option>
+                <option value="volcengine">{t("models.ttsCloudProtocolVolcengine")}</option>
               </Select>
             </label>
             {draft.protocol === "edge-tts" && (
@@ -332,6 +350,25 @@ export function CloudTtsPanel() {
                     <p className="text-sm font-semibold text-text-primary">{t("models.ttsCloudEdgeBadge")}</p>
                     <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudEdgeDesc")}</p>
                     <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudEdgeUsageHint")}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {draft.protocol === "volcengine" && (
+              <div className="sm:col-span-2 rounded-2xl border border-brand/20 bg-brand-subtle/40 p-4">
+                <div className="flex items-start gap-3">
+                  <Cloud size={17} className="mt-0.5 shrink-0 text-brand" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-text-primary">{t("models.ttsCloudVolcBadge")}</p>
+                    <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudVolcDesc")}</p>
+                    <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudVolcBilling")}</p>
+                    <button
+                      type="button"
+                      className="mt-2 inline-flex text-xs font-semibold text-brand underline underline-offset-4"
+                      onClick={() => void openUrl("https://www.volcengine.com/docs/6561/1257544")}
+                    >
+                      {t("models.ttsCloudVolcVoiceDocs")}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -348,16 +385,30 @@ export function CloudTtsPanel() {
                 <Input value={draft.region} onChange={(event) => setDraft({ ...draft, region: event.target.value })} placeholder={t("models.ttsCloudEdgeRegionPlaceholder")} />
               </label>
             )}
-            {draft.protocol !== "edge-tts" && (
+            {draft.protocol !== "edge-tts" && draft.protocol !== "volcengine" && (
               <label className={`space-y-1.5 text-sm font-medium text-text-secondary ${draft.protocol === "azure-speech" ? "" : "sm:col-span-2"}`}>
                 <span>{draft.protocol === "azure-speech" ? t("models.ttsCloudEndpointOptional") : "Endpoint"}</span>
                 <Input value={draft.endpoint} onChange={(event) => setDraft({ ...draft, endpoint: event.target.value })} placeholder={draft.protocol === "azure-speech" ? t("models.ttsCloudEndpointAuto") : "https://..."} />
               </label>
             )}
-            {draft.protocol !== "azure-speech" && draft.protocol !== "edge-tts" && (
+            {draft.protocol !== "azure-speech" && draft.protocol !== "edge-tts" && draft.protocol !== "volcengine" && (
               <label className="space-y-1.5 text-sm font-medium text-text-secondary">
                 <span>{t("models.ttsCloudModel")}</span>
                 <Input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} />
+              </label>
+            )}
+            {draft.protocol === "volcengine" && (
+              <label className="space-y-1.5 text-sm font-medium text-text-secondary">
+                <span>{t("models.ttsCloudVolcResource")}</span>
+                <Select
+                  value={draft.resource_id || "seed-tts-2.0"}
+                  onChange={(event) => setDraft({ ...draft, resource_id: event.target.value })}
+                >
+                  <option value="seed-tts-2.0">seed-tts-2.0 · {t("models.ttsCloudVolcResource20")}</option>
+                  <option value="seed-tts-1.0">seed-tts-1.0 · {t("models.ttsCloudVolcResource10")}</option>
+                  <option value="seed-tts-1.0-concurr">seed-tts-1.0-concurr · {t("models.ttsCloudVolcResource10Concurrent")}</option>
+                </Select>
+                <span className="block text-xs font-normal leading-5 text-text-tertiary">{t("models.ttsCloudVolcResourceHint")}</span>
               </label>
             )}
             <label className="space-y-1.5 text-sm font-medium text-text-secondary">
@@ -365,7 +416,7 @@ export function CloudTtsPanel() {
               <Input
                 value={draft.voice}
                 onChange={(event) => setDraft({ ...draft, voice: event.target.value })}
-                list={draft.protocol === "edge-tts" ? "finalsub-edge-voices" : undefined}
+                list={draft.protocol === "edge-tts" ? "finalsub-edge-voices" : draft.protocol === "volcengine" ? "finalsub-volc-voices" : undefined}
               />
               {draft.protocol === "edge-tts" && (
                 <>
@@ -380,33 +431,45 @@ export function CloudTtsPanel() {
                   <span className="block text-xs font-normal leading-5 text-text-tertiary">{t("models.ttsCloudEdgeVoiceHint")}</span>
                 </>
               )}
+              {draft.protocol === "volcengine" && (
+                <>
+                  <datalist id="finalsub-volc-voices">
+                    <option value="zh_female_shuangkuaisisi_uranus_bigtts" />
+                    <option value="zh_female_xiaohe_uranus_bigtts" />
+                    <option value="zh_male_yunzhou_uranus_bigtts" />
+                    <option value="zh_male_xiaotian_uranus_bigtts" />
+                    <option value="zh_female_vv_jupiter_bigtts" />
+                  </datalist>
+                  <span className="block text-xs font-normal leading-5 text-text-tertiary">{t("models.ttsCloudVolcVoiceHint")}</span>
+                </>
+              )}
             </label>
           </div>
 
           {draft.protocol !== "edge-tts" ? (
-          <div className="rounded-2xl border border-border-subtle bg-surface-overlay p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="inline-flex items-center gap-2 text-sm font-semibold text-text-primary">
-                <KeyRound size={15} className="text-brand" /> API Key
-              </span>
-              <span className={`text-xs font-semibold ${keyConfigured ? "text-success" : "text-text-tertiary"}`}>
-                {keyConfigured ? t("models.ttsCloudKeySaved") : t("models.ttsCloudKeyMissing")}
-              </span>
+            <div className="rounded-2xl border border-border-subtle bg-surface-overlay p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="inline-flex items-center gap-2 text-sm font-semibold text-text-primary">
+                  <KeyRound size={15} className="text-brand" /> API Key
+                </span>
+                <span className={`text-xs font-semibold ${keyConfigured ? "text-success" : "text-text-tertiary"}`}>
+                  {keyConfigured ? t("models.ttsCloudKeySaved") : t("models.ttsCloudKeyMissing")}
+                </span>
+              </div>
+              <div className="relative mt-3">
+                <Input
+                  type={showKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={keyConfigured ? t("models.ttsCloudKeyKeep") : t("models.ttsCloudKeyPlaceholder")}
+                  className="pr-11"
+                />
+                <button type="button" onClick={() => setShowKey((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary">
+                  {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudKeychain")}</p>
             </div>
-            <div className="relative mt-3">
-              <Input
-                type={showKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder={keyConfigured ? t("models.ttsCloudKeyKeep") : t("models.ttsCloudKeyPlaceholder")}
-                className="pr-11"
-              />
-              <button type="button" onClick={() => setShowKey((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary">
-                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-            <p className="mt-2 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudKeychain")}</p>
-          </div>
           ) : (
             <div className="rounded-2xl border border-success/20 bg-success/10 p-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">

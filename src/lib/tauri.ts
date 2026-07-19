@@ -259,7 +259,7 @@ export interface TtsSynthesisResult {
   duration_ms: number;
 }
 
-export type TtsProviderProtocol = "openai-compatible" | "azure-speech" | "elevenlabs" | "edge-tts";
+export type TtsProviderProtocol = "openai-compatible" | "azure-speech" | "elevenlabs" | "edge-tts" | "volcengine";
 
 export interface TtsProviderProfile {
   id: string;
@@ -269,6 +269,7 @@ export interface TtsProviderProfile {
   model: string;
   voice: string;
   region: string;
+  resource_id: string;
   text_upload_consent: boolean;
   timeout_seconds: number;
   request_concurrency: number;
@@ -1126,6 +1127,7 @@ let mockTtsProvidersState: TtsProviderProfile[] = [
     model: "gpt-4o-mini-tts",
     voice: "alloy",
     region: "",
+    resource_id: "",
     text_upload_consent: false,
     timeout_seconds: 60,
     request_concurrency: 1,
@@ -1138,9 +1140,23 @@ let mockTtsProvidersState: TtsProviderProfile[] = [
     model: "",
     voice: "zh-CN-XiaoxiaoNeural",
     region: "zh-CN",
+    resource_id: "",
     text_upload_consent: false,
     timeout_seconds: 60,
     request_concurrency: 1,
+  },
+  {
+    id: "00000000-0000-4000-8000-000000000303",
+    name: "豆包语音 2.0",
+    protocol: "volcengine",
+    endpoint: "",
+    model: "",
+    voice: "zh_female_shuangkuaisisi_uranus_bigtts",
+    region: "",
+    resource_id: "seed-tts-2.0",
+    text_upload_consent: false,
+    timeout_seconds: 60,
+    request_concurrency: 2,
   },
 ];
 let mockDubbingSessionState: DubbingSession | null = null;

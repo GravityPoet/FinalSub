@@ -12,6 +12,8 @@ use crate::core::secrets;
 use crate::core::tts::TtsSynthesisResult;
 use crate::error::{FinalSubError, Result};
 
+use super::volcengine;
+
 const PROVIDER_STORE_VERSION: u32 = 1;
 const MAX_PROVIDERS: usize = 32;
 const MAX_TEXT_BYTES: usize = 20_000;
@@ -29,6 +31,7 @@ pub enum TtsProviderProtocol {
     AzureSpeech,
     Elevenlabs,
     EdgeTts,
+    Volcengine,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +44,7 @@ pub struct TtsProviderProfile {
     pub model: String,
     pub voice: String,
     pub region: String,
+    pub resource_id: String,
     pub text_upload_consent: bool,
     pub timeout_seconds: u32,
     pub request_concurrency: u32,
@@ -56,6 +60,7 @@ impl Default for TtsProviderProfile {
             model: "gpt-4o-mini-tts".into(),
             voice: "alloy".into(),
             region: String::new(),
+            resource_id: String::new(),
             text_upload_consent: false,
             timeout_seconds: 60,
             request_concurrency: 1,
@@ -72,6 +77,8 @@ pub struct SaveTtsProviderRequest {
     pub model: String,
     pub voice: String,
     pub region: String,
+    #[serde(default)]
+    pub resource_id: String,
     pub text_upload_consent: bool,
     pub timeout_seconds: u32,
     pub request_concurrency: u32,
@@ -195,6 +202,7 @@ pub fn resolved_provider_endpoint(profile: &TtsProviderProfile) -> Result<String
                 .to_string())
         }
         TtsProviderProtocol::EdgeTts => Ok(EDGE_PROVIDER_ENDPOINT.to_string()),
+        TtsProviderProtocol::Volcengine => Ok(volcengine::VOLC_TTS_URL.to_string()),
     }
 }
 
@@ -213,7 +221,9 @@ fn validate_profile(profile: &TtsProviderProfile) -> Result<()> {
     let model = profile.model.trim();
     if !matches!(
         profile.protocol,
-        TtsProviderProtocol::AzureSpeech | TtsProviderProtocol::EdgeTts
+        TtsProviderProtocol::AzureSpeech
+            | TtsProviderProtocol::EdgeTts
+            | TtsProviderProtocol::Volcengine
     ) && (model.is_empty() || model.len() > 160 || model.chars().any(char::is_control))
     {
         return Err(FinalSubError::Validation("TTS 模型名称无效".into()));
@@ -226,6 +236,23 @@ fn validate_profile(profile: &TtsProviderProfile) -> Result<()> {
         }
         if !profile.region.trim().is_empty() {
             validate_edge_locale(profile.region.trim())?;
+        }
+    }
+    if profile.protocol == TtsProviderProtocol::Volcengine {
+        if !profile.endpoint.trim().is_empty() || !profile.model.trim().is_empty() {
+            return Err(FinalSubError::Validation(
+                "豆包 TTS 使用固定官方 Endpoint，不需要自定义 Endpoint 或模型名称".into(),
+            ));
+        }
+        let resource_id = if profile.resource_id.trim().is_empty() {
+            volcengine::DEFAULT_RESOURCE_ID
+        } else {
+            profile.resource_id.trim()
+        };
+        if !volcengine::is_valid_resource_id(resource_id) {
+            return Err(FinalSubError::Validation(
+                "豆包 TTS 资源版本必须是 seed-tts-2.0、seed-tts-1.0 或 seed-tts-1.0-concurr".into(),
+            ));
         }
     }
     validate_voice(&profile.voice)?;
@@ -313,10 +340,48 @@ pub fn save_provider(
         model: request.model.trim().to_string(),
         voice: request.voice.trim().to_string(),
         region: request.region.trim().to_string(),
+        resource_id: request.resource_id.trim().to_string(),
         text_upload_consent: request.text_upload_consent,
         timeout_seconds: request.timeout_seconds,
         request_concurrency: request.request_concurrency,
     };
+    if profile.protocol == TtsProviderProtocol::Volcengine {
+        // 豆包是品牌型单例，Endpoint/模型由协议固定，避免用户保存出一份
+        // 看似不同但实际指向同一资源的重复实例。
+        let mut normalized = profile.clone();
+        normalized.endpoint.clear();
+        normalized.model.clear();
+        if normalized.resource_id.trim().is_empty() {
+            normalized.resource_id = volcengine::DEFAULT_RESOURCE_ID.into();
+        }
+        validate_profile(&normalized)?;
+        let mut store = load_store(app_config_dir)?;
+        if let Some(existing) = store
+            .profiles
+            .iter_mut()
+            .find(|existing| existing.id == normalized.id)
+        {
+            *existing = normalized.clone();
+        } else {
+            if store
+                .profiles
+                .iter()
+                .any(|existing| existing.protocol == TtsProviderProtocol::Volcengine)
+            {
+                return Err(FinalSubError::Validation(
+                    "豆包 TTS 只允许配置一个实例；请编辑现有实例".into(),
+                ));
+            }
+            if store.profiles.len() >= MAX_PROVIDERS {
+                return Err(FinalSubError::Validation(format!(
+                    "在线 TTS 服务不能超过 {MAX_PROVIDERS} 个"
+                )));
+            }
+            store.profiles.push(normalized.clone());
+        }
+        save_store(app_config_dir, &store)?;
+        return Ok(normalized);
+    }
     validate_profile(&profile)?;
     let mut store = load_store(app_config_dir)?;
     if let Some(existing) = store
@@ -602,6 +667,65 @@ async fn synthesize_elevenlabs(
     response_or_error(response, "ElevenLabs TTS", cancelled).await
 }
 
+async fn synthesize_volcengine(
+    client: &Client,
+    profile: &TtsProviderProfile,
+    api_key: &str,
+    text: &str,
+    voice: &str,
+    speed: f32,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Vec<u8>> {
+    let text_chars = volcengine::text_char_count(text);
+    if !volcengine::text_is_within_limit(text) {
+        return Err(FinalSubError::Validation(format!(
+            "豆包 TTS 单条文本不能超过 {} 个字符（当前 {text_chars} 个）；请拆分该行字幕",
+            volcengine::MAX_TEXT_CHARS
+        )));
+    }
+    let resource_id = volcengine::resource_id_for_voice(voice, &profile.resource_id);
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut request = client.post(volcengine::VOLC_TTS_URL);
+    for (name, value) in volcengine::build_headers(api_key, &resource_id, &request_id) {
+        request = request.header(name, value);
+    }
+    let request = request.json(&volcengine::build_request_body(text, voice, Some(speed)));
+    let response = send_cancelable(request, cancelled.clone()).await?;
+    let status = response.status();
+    // 错误响应也可能以 chunked JSON 返回，但不应享受音频响应的 64 MB
+    // 内存预算；16 KB 已足够保留业务码与可行动提示。
+    let response_limit = if status.is_success() {
+        MAX_AUDIO_BYTES
+    } else {
+        MAX_ERROR_BYTES
+    };
+    let body = response_bytes_limited(response, response_limit, cancelled).await?;
+    let body_text = String::from_utf8_lossy(&body);
+    let parsed = volcengine::parse_stream(&body_text);
+    if !status.is_success() || parsed.error_code.is_some() {
+        return Err(FinalSubError::Validation(volcengine::error_hint(
+            status.as_u16(),
+            parsed.error_code,
+            if parsed.message.is_empty() {
+                &body_text
+            } else {
+                &parsed.message
+            },
+        )));
+    }
+    if parsed.end_code != Some(20_000_000) {
+        return Err(FinalSubError::Validation(
+            "豆包 TTS 流式响应未正常结束，请稍后重试".into(),
+        ));
+    }
+    if parsed.pcm.is_empty() || !parsed.pcm.len().is_multiple_of(2) {
+        return Err(FinalSubError::Validation(
+            "豆包 TTS 返回了空的或不完整的 PCM 音频".into(),
+        ));
+    }
+    Ok(parsed.pcm)
+}
+
 fn edge_failure(detail: impl AsRef<str>) -> FinalSubError {
     let detail = sanitize_provider_detail(detail.as_ref().as_bytes());
     let suffix = if detail.is_empty() {
@@ -679,7 +803,7 @@ async fn synthesize_edge(
 fn write_pcm_wav(path: &Path, pcm: &[u8], sample_rate: u32) -> Result<u64> {
     if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
         return Err(FinalSubError::Validation(
-            "ElevenLabs 返回的 PCM 音频为空或长度无效".into(),
+            "云端 TTS 返回的 PCM 音频为空或长度无效".into(),
         ));
     }
     let data_len =
@@ -872,12 +996,36 @@ pub async fn synthesize_cloud(
             )
             .await?
         }
+        TtsProviderProtocol::Volcengine => {
+            let endpoint = resolved_provider_endpoint(&profile)?;
+            let api_key =
+                secrets::get_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+                    .map_err(FinalSubError::Validation)?
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        FinalSubError::Validation("该豆包 TTS 实例尚未保存 API Key".into())
+                    })?;
+            let client = http_client(profile.timeout_seconds)?;
+            synthesize_volcengine(
+                &client,
+                &profile,
+                &api_key,
+                &text,
+                &voice,
+                speed,
+                cancelled.clone(),
+            )
+            .await?
+        }
     };
     if cancelled.load(Ordering::Relaxed) {
         return Err(FinalSubError::Validation("配音已取消".into()));
     }
-    let duration_ms = if profile.protocol == TtsProviderProtocol::Elevenlabs {
-        write_pcm_wav(&temporary, &audio, 24_000)?
+    let duration_ms = if matches!(
+        profile.protocol,
+        TtsProviderProtocol::Elevenlabs | TtsProviderProtocol::Volcengine
+    ) {
+        write_pcm_wav(&temporary, &audio, volcengine::VOLC_TTS_SAMPLE_RATE)?
     } else {
         transcode_to_wav(ffmpeg_path, &audio, &output, &temporary, cancelled.clone()).await?
     };
@@ -904,9 +1052,12 @@ mod tests {
                 TtsProviderProtocol::OpenaiCompatible => "https://api.openai.com/v1".into(),
                 TtsProviderProtocol::AzureSpeech => String::new(),
                 TtsProviderProtocol::Elevenlabs => "https://api.elevenlabs.io/v1".into(),
-                TtsProviderProtocol::EdgeTts => String::new(),
+                TtsProviderProtocol::EdgeTts | TtsProviderProtocol::Volcengine => String::new(),
             },
-            model: if protocol == TtsProviderProtocol::EdgeTts {
+            model: if matches!(
+                protocol,
+                TtsProviderProtocol::EdgeTts | TtsProviderProtocol::Volcengine
+            ) {
                 String::new()
             } else {
                 "model".into()
@@ -916,6 +1067,11 @@ mod tests {
                 "japaneast".into()
             } else if protocol == TtsProviderProtocol::EdgeTts {
                 "zh-CN".into()
+            } else {
+                String::new()
+            },
+            resource_id: if protocol == TtsProviderProtocol::Volcengine {
+                volcengine::DEFAULT_RESOURCE_ID.into()
             } else {
                 String::new()
             },
@@ -1002,6 +1158,21 @@ mod tests {
         );
         assert_eq!(profile.endpoint, "");
         assert_eq!(profile.model, "");
+    }
+
+    #[test]
+    fn volcengine_provider_is_fixed_endpoint_and_singleton() {
+        let config = TempDir::new().unwrap();
+        let profile =
+            save_provider(config.path(), request(TtsProviderProtocol::Volcengine)).unwrap();
+        assert_eq!(profile.endpoint, "");
+        assert_eq!(profile.model, "");
+        assert_eq!(
+            resolved_provider_endpoint(&profile).unwrap(),
+            volcengine::VOLC_TTS_URL
+        );
+        let duplicate = save_provider(config.path(), request(TtsProviderProtocol::Volcengine));
+        assert!(duplicate.is_err());
     }
 
     #[test]
