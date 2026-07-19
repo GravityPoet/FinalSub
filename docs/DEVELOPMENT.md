@@ -16,7 +16,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/
 
 ## 当前发布边界（更新于 2026-07-19）
 
-模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、动态结构化批量翻译、术语表、回声对齐、持久任务队列、可保存任务配方、完成前人工审核、校对、硬/软字幕、配音音轨组合、合成进度/预览/取消和 Universal 构建均已交付。对齐 SmartSub 的剩余产品边界主要是 TTS/声音克隆、统一阶段编排与批准后自动续跑、硬件编码管理和跨任务日志中心；外部环境仍需 Apple Developer ID 与 notarization、Windows/Linux 安装启动、Linux Secret Service 桌面会话及付费云服务真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)。
+模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、动态结构化批量翻译、术语表、回声对齐、持久任务队列、可保存任务配方、完成前人工审核、校对、本地/云端 TTS、可恢复配音工作台、硬/软字幕、配音音轨组合、合成进度/预览/取消和 Universal 构建均已交付。对齐 SmartSub 的剩余产品边界主要是 TTS 应用内受管下载、完整声音克隆资产工作流、多进程推理隔离、统一阶段编排与批准后自动续跑、硬件编码管理和跨任务日志中心；外部环境仍需 Apple Developer ID 与 notarization、Windows/Linux 安装启动、Linux Secret Service 桌面会话及付费云服务真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)，TTS 数据边界、模型布局与恢复语义见 [`tts-dubbing.md`](tts-dubbing.md)。
 
 ## 验收命令
 
@@ -33,6 +33,8 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:universal
 ## FFmpeg 与 ASR Sidecar 说明
 
 本项目内置了已完成签名的、可直接分发的静态多架构 (Universal) `ffmpeg` 与 `whisper-cli` Sidecar 二进制文件（支持 x86_64 与 arm64），无外部 Homebrew 或系统运行时依赖，符合全自包含打包与沙箱安全合规要求。
+
+本地 TTS 不新增 sidecar：Kokoro、VITS 与 ZipVoice 复用 Rust 进程内的 `sherpa-onnx 1.13.3`。配音时间轴变速和最终 WAV/MP3 混音复用内置 FFmpeg。当前引擎缓存最多保留两个模型实例，但尚未迁移到独立 utility process；原生推理崩溃隔离仍列为后续缺口。
 
 ## 致敬与开源授权
 

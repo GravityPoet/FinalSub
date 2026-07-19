@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  💡 <strong>FinalSub</strong> is a Tauri 2.0 + Rust + React desktop subtitle workstation combining <strong>local-first, optional-cloud transcription</strong>, <strong>18 translation engines</strong>, <strong>visual proofreading</strong>, and <strong>high-quality FFmpeg hardsubbing</strong> in one workflow.
+  💡 <strong>FinalSub</strong> is a Tauri 2.0 + Rust + React desktop subtitle workstation combining <strong>local-first, optional-cloud transcription</strong>, <strong>18 translation engines</strong>, <strong>visual proofreading</strong>, <strong>recoverable TTS dubbing</strong>, and <strong>high-quality FFmpeg composition</strong> in one workflow.
 </p>
 
 ---
@@ -36,7 +36,7 @@ With so many subtitle tools out there, why choose **FinalSub**?
 | **Setup Barrier** | 🟢 No local setup | ❌ Often needs Python, Conda, Homebrew, and environment variables | **🟢 Local engines require no Python or uv; FFmpeg and Whisper sidecars ship with the app** |
 | **Cost** | ❌ Pay-per-minute or monthly subscriptions. Restrictive limits | 🟢 Free, but has a steep learning curve | **🟢 100% free and open-source. Supports free offline Ollama translation for zero-cost workflows.** |
 | **Performance** | 🟢 Cloud compute | 🟡 CPU-heavy or complex GPU setup | **🟢 Whisper.cpp supports macOS Metal; native sherpa-onnx engines run fully offline** |
-| **Pipeline Integration** | 🟡 Transcription only; requires third-party video editors for hardsubbing | ❌ Disjointed scripts; tedious file copying between tools | **🟢 Extraction ➔ Transcription ➔ AI Translation ➔ Proofreading ➔ Hardsubbing, all in one app.** |
+| **Pipeline Integration** | 🟡 Transcription only; requires third-party video editors for hardsubbing | ❌ Disjointed scripts; tedious file copying between tools | **🟢 Extraction ➔ Transcription ➔ Translation ➔ Proofreading ➔ Dubbing ➔ Composition, all in one app.** |
 
 ---
 
@@ -67,6 +67,12 @@ Translate your transcriptions into elegant, natural bilingual subtitles with the
 * **Speedy Editing**: Easily split, merge, and search-and-replace subtitle cards.
 * **Timeline Shift**: Adjust time offsets for the entire timeline or selected areas to resolve audio-visual sync issues.
 
+### 🎧 Recoverable TTS Dubbing Workbench
+* **Local and cloud are separate by design**: local Kokoro, VITS, and ZipVoice models are scanned and reused in place; online OpenAI-compatible, Azure Speech, and ElevenLabs profiles live in a separate cloud-service area and never trigger a model download.
+* **Native local synthesis**: sherpa-onnx runs inside the Rust backend with no Python or first-run installer. ZipVoice accepts a local WAV plus its exact transcript and offers standard/high generation steps; the reference audio stays on the device.
+* **Timeline-aware sessions**: import SRT/VTT/ASS/LRC, synthesize one line or all pending lines, resume after restart, borrow silent gaps, preserve source overlaps, review lines over the 1.5× redline, and export an aligned WAV or MP3.
+* **Explicit cloud consent**: text is sent only through a saved, endpoint-bound profile after upload consent is enabled; API keys remain in the OS credential store.
+
 ### 🎬 One-Stop Video Composition
 * Bundled with Universal architecture static high-version `ffmpeg` sidecars. No need to install FFmpeg globally.
 * **Hard subtitles**: Permanently render `SRT`, `VTT`, or `ASS` into the picture with font, outline, shadow, background, nine-position alignment, CRF, encoding presets, real preview, progress, and cancellation.
@@ -86,16 +92,16 @@ Translate your transcriptions into elegant, natural bilingual subtitles with the
 ### 1. Download & Launch
 Download the macOS Universal package from the [Releases page](https://github.com/GravityPoet/FinalSub/releases). This repository does not yet publish Windows or Linux installers validated on real machines.
 
-### 2. Prepare Whisper Models
+### 2. Prepare Local Models or Cloud Services
 1. Navigate to the **"Models"** page.
-2. Choose a model and use the in-app downloader. Downloads can be cancelled and resumed, and managed models are verified before installation.
-3. Whisper models can also be installed through local import; the app rescans model status automatically.
+2. Use **Local Models** for offline ASR/TTS. FinalSub scans existing folders first—including a configured Parakeet or TTS directory—so a complete local model can be reused without downloading or copying it.
+3. Use **Cloud Services** only when you want an online ASR/TTS API. This area stores endpoint configuration and explicit upload consent; it does not download models.
 
 ### 3. Create a Subtitle Task
 1. Return to the **"Tasks"** page and drop your video or audio file.
 2. Select the input language (or choose Auto-detect).
 3. (Optional) Turn on translation, then configure and test your chosen AI translation engine.
-4. Optionally apply/save a task recipe and require human review, then click **"Start Task"**. Monitor ASR and translation in **"Queue"**, approve checked outputs, edit in **"Proofread"**, then use **"Compose"** to choose hard/soft subtitles and the final audio-track structure.
+4. Optionally apply/save a task recipe and require human review, then click **"Start Task"**. Monitor ASR and translation in **"Queue"**, approve checked outputs, edit in **"Proofread"**, create a timed voice track in **"Dubbing"**, then use **"Compose"** to choose hard/soft subtitles and the final audio-track structure.
 
 ---
 
@@ -105,7 +111,7 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 * **Core Framework**: [Tauri 2.0](https://tauri.app/) (Rust-based cross-platform runtime, avoiding Electron's bloat)
 * **Frontend**: [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
 * **CSS Framework**: [TailwindCSS 4.0](https://tailwindcss.com/)
-* **ASR Engines**: [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) + [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+* **ASR & TTS Engines**: [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) + [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 * **Media Processor**: [FFmpeg 7.x](https://ffmpeg.org/) (Pre-signed Universal static Thin Sidecar)
 * **Security Backend**: Rust [keyring](https://github.com/hwchen/keyring-rs) crate for system-native Keychain communication
 
@@ -118,6 +124,7 @@ FinalSub leverages cutting-edge technology for maximum performance and a tiny me
 * With local ASR, media, subtitles, and task caches stay on your device.
 * Audio is sent only when you configure cloud ASR, grant upload consent, and start a matching task. FinalSub uploads speech chunks produced locally by Silero VAD to the configured endpoint.
 * Subtitle text is sent only when you explicitly configure and enable a cloud translation API. For AI translation, only glossary entries matched in the current batch accompany that subtitle text.
+* Dubbing text is sent only when you select a cloud TTS profile with explicit text-upload consent. Local Kokoro, VITS, and ZipVoice synthesis—including ZipVoice reference audio—stays on the device.
 * Automatic startup update checks and anonymous crash/error reporting are off by default. FinalSub contacts GitHub Release metadata only when you manually check or enable startup checks; diagnostics are sent to Sentry only after explicit opt-in.
 
 ---
