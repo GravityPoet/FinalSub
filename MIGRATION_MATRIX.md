@@ -1,7 +1,7 @@
 # FinalSub 功能与发布矩阵
 
 更新时间：2026-07-19
-对照基线：SmartSub `2ea9327f80bd79ec1b950caeb002f17a8722a5e0`（2026-07-18）与 FinalSub `4f029f81b417ff205e4aa6451cff563ac82aef9f` 的源码、单元测试、Universal 生产构建和真实应用 UI。
+对照基线：SmartSub `2ea9327f80bd79ec1b950caeb002f17a8722a5e0`（2026-07-18）与 FinalSub `6e0c133a9d890b77be30443e858b8910c2dc33c4` 的源码、单元测试、Universal 生产构建和真实应用 UI。
 
 状态定义：
 
@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、校对、硬字幕合成、模型管理和配置安全主链路已可用于真实生产；在原生离线 ASR、云 ASR 协议广度、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 3.4.0 已把产品边界扩到“转写 → 翻译 → 校对 → TTS 配音 → 声音克隆 → 音轨/字幕封装 → 流水线批处理”，并交付术语表、AI 回显对齐、软字幕、硬件编码、配方/人工闸门和日志中心。FinalSub 目前尚不能笼统宣称功能全面对齐或超越；本矩阵把这些缺口固定为后续实现与验收清单。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、硬字幕合成、模型管理和配置安全主链路已可用于真实生产；在原生离线 ASR、云 ASR 协议广度、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 3.4.0 已把产品边界扩到“转写 → 翻译 → 校对 → TTS 配音 → 声音克隆 → 音轨/字幕封装 → 流水线批处理”。FinalSub 已对齐其术语表和 AI 对齐保护，但 TTS/声音克隆、软字幕与音轨封装、硬件编码、配方/人工闸门和日志中心仍未交付，因此目前尚不能笼统宣称功能全面对齐或超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -25,7 +25,7 @@ FinalSub 的字幕生成、批处理、18 个翻译 provider、校对、硬字�
 | 批量任务 | 🟢 | 多文件、文件夹递归扫描、拖放、绝对路径粘贴；Rust 后端原子批量建任务，失败不留下半批状态 |
 | 输出命名 | 🟢 | 支持 `{name}`、`{lang}`、`{index}`，原子占位避免覆盖和并发重名 |
 | 任务持久化 | 🟢 | `tasks.json` 临时文件 + rename；重启后未完成任务恢复为可继续状态 |
-| 字幕翻译 | 🟢 | 18 个 provider dispatch；批量大小、并发、间隔、提示词模板、自定义 headers/body、代理和模型发现 |
+| 字幕翻译 | 🟢 | 18 个 provider dispatch；批量大小、并发、间隔、术语表、动态 Schema、回显对齐、定点补翻、提示词模板、自定义 headers/body、代理和模型发现 |
 | 字幕校对 | 🟢 | 视频联动、导入/检测、编辑、拆分、合并、时间偏移、搜索替换、撤销重做、保存及错误恢复 |
 | 视频合字幕 | 🟢 | 进度、取消、10 秒预览、字体/描边/阴影/背景、九宫格位置、CRF、编码 preset |
 | 软字幕 / MKV 封装 | 🔴 | 当前只交付硬字幕烧录；尚缺 stream-copy 软字幕、双音轨 MKV 与音轨元数据 |
@@ -91,11 +91,11 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 |---|---:|---|
 | Provider 覆盖 | 🟢 | 百度、Google、阿里云、火山、豆包、小牛、腾讯、讯飞、DeepLX、微软、Ollama、DeepSeek、Azure OpenAI、DeerAPI、Gemini、SiliconFlow、Qwen、自定义 OpenAI 兼容，共 18 个内置项 |
 | Provider 独立配置 | 🟢 | endpoint、模型、system/user prompt、自定义 headers/body 与密钥字段按 provider 保存 |
-| 批量翻译 | 🟢 | 行数/字符边界、并发、间隔、checkpoint 恢复与 key 对齐校验 |
-| 术语表管理 | 🔴 | SmartSub 支持多术语表、优先级、启停、冲突处理及导入导出；FinalSub 尚未交付 |
-| 动态 JSON Schema | 🔴 | SmartSub 按当前批次 ID 锁定 required keys 并禁止额外键；FinalSub 当前只在提示词与解析层检查键 |
-| 回显锚定与错位检测 | 🟠 | FinalSub 能发现缺键/非字符串并整批降级逐条翻译，但尚无 `{src,tr}` 相似度校验和局部错位检测 |
-| 分级定点补翻 | 🟠 | 当前批量失败会降级逐条，保证不把不可解析批次直接写入；尚缺“整批重试一次 → 问题条目带上下文补翻 → 局部失败标记”的精细修复 |
+| 批量翻译 | 🟢 | 行数/字符边界、并发、间隔、checkpoint 恢复、严格 key 对齐与失败可见性 |
+| 术语表管理 | 🟢 | 多术语表、优先级、启停、确定性冲突处理、CSV/TXT 导入与 CSV 导出；每批只发送命中的最多 100 条术语 |
+| 动态 JSON Schema | 🟢 | 按当前批次 ID 锁定 required keys，顶层和 `{src,tr}` 均禁止额外字段；OpenAI/Ollama/Gemini 原生格式，自动 `json_schema → json_object → disabled` 降级 |
+| 回显锚定与错位检测 | 🟢 | 默认要求 `{src,tr}`；原文规范化后按 0.75 相似度识别漏行、串行、合并与错位，可按 provider 关闭 |
+| 分级定点补翻 | 🟢 | 大面积异常整批重试一次；其余问题行带前后各 2 条上下文最多补翻 3 轮；未解决行写入显式失败标记并由校对页识别 |
 | 代理 | 🟢 | HTTP(S) proxy 配置与连通性探测 |
 | 商业服务真实 E2E | 🟡 | 本地签名/请求边界测试已覆盖；正式上线前仍需真实账号逐项 smoke test |
 
@@ -141,7 +141,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 视觉系统 | 🟢 | 深浅主题液态玻璃、统一组件、F 品牌图标、清晰状态色与减少动态效果适配；主题入口集中到设置页 |
 | 响应式 | 🟢 | 桌面侧栏、移动底栏；1200×800 与 390×844 无横向溢出 |
 | 导航效率 | 🟢 | `⌘K` 根级命令面板、`⌘1`–`⌘7`、活动中心、首次引导和可折叠侧栏；选中态使用导轨而非通知圆点 |
-| 国际化 | 🟢 | 中文、英文、日文 738 个 key 完全对齐 |
+| 国际化 | 🟢 | 中文、英文、日文 786 个 key 完全对齐 |
 | 路由体积 | 🟢 | 页面 lazy loading；生产构建按页面拆包 |
 | 浏览器 QA | 🟢 | 本地模型/云端服务分区、深浅主题、云 ASR 多实例与讯飞长表单、桌面/移动端已实测；控制台 0 error |
 
@@ -171,17 +171,18 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 ## 11. 新鲜验证（2026-07-19）
 
-- `cargo test --lib`：181 passed、0 failed、5 ignored；新增独立 Parakeet 根目录扫描与存储路由回归测试。
+- `cargo test --lib`：195 passed、0 failed、5 ignored；新增术语优先级/命中、配置迁移、三段结构化输出降级、动态 Schema、回显相似度与嵌套额外字段拒绝测试。
 - `cargo clippy --all-targets --all-features -- -D warnings`：通过。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
-- 中英日 locale：738/738/738，duplicate 0；TypeScript 的 `Record<keyof typeof zh, string>` 同时约束缺失与多余键。
+- 中英日 locale：786/786/786，duplicate 0；TypeScript 的 `Record<keyof typeof zh, string>` 同时约束缺失与多余键。
 - 云端 ASR 聚焦测试：22 passed，覆盖八种协议、签名固定向量、异步续查，以及服务商级闸门的共享、隔离、并发、启动间隔和取消边界。
 - SenseVoice、Paraformer、Qwen3-ASR、FireRedASR2 官方模型真实短 WAV E2E：全部通过。
-- Liquid Glass UI：1440×900、1200×800 与 390×844、深浅主题、控制台 0 error；模型管理默认进入本地模型、已安装模型置顶，云端服务独立成页并明确“无需下载模型”；云 ASR 请求控制在桌面为四列/两列、移动端为单列且无横向溢出；命令面板挂载于 `document.body`；主题只在设置页出现；任务动态与页面操作按钮无重叠。
+- Liquid Glass UI：1440×900、1200×800 与 390×844、深浅主题、控制台 0 error；模型管理默认进入本地模型、已安装模型置顶，云端服务独立成页并明确“无需下载模型”；翻译页新增对齐保护与独立术语表草稿，桌面/移动端无横向溢出，并验证“保存 provider 不会误存术语草稿”；云 ASR 请求控制在桌面为四列/两列、移动端为单列。
 - macOS Universal `.app`：主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，主程序与 Whisper 的两套 slice 均为 `minos 12.0`，深度签名验证通过。
-- Universal DMG：新鲜构建通过 bundle 签名检查；SHA-256 `e8d7c09502d029a3a30d40827e5057fd4e5c9a1b5408893569768f3ddd264298`。
+- Universal DMG：新鲜构建通过 bundle 签名检查；SHA-256 `32d72dc0a1afcbbce9ab7cf21f1dd2fdba1efce83862f39879cbe059fb6bb38d`。
 - 签名 updater：使用一次性测试密钥真实生成 `.app.tar.gz` 与 `.sig`，验证 release 配置、官方签名器及产物链路后已物理清理测试密钥、生成配置和临时更新包；生产根密钥仍保持 P0 门控。
 - `/Applications/FinalSub.app`：版本 1.0.10，bundle id `com.gravitypoet.finalsub`，`x86_64 arm64`、deep strict 签名有效，真实启动路径与安装路径一致；文件系统只保留这一份产品 App。
+- 本轮安装前备份：`~/Library/Application Support/FinalSub/Backups/20260719-143937/FinalSub.app.zip`，压缩数据与回滚应用签名均已验证。
 - 真实应用 UI：模型管理默认打开“本地模型”，已安装模型置顶，并把 `/Users/moonlitpoet/Tools/Local-LLM/parakeet-models/parakeet-tdt-0.6b-v2` 判定为绿色“已下载”；“云端服务”独立成页并明确标注“无需下载模型”，未触发重复下载。
 
 ## 12. 仍不能宣称完成的事项
@@ -193,4 +194,4 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
 7. TTS 配音、声音克隆、时间轴对齐、音轨混合/替换/双音轨 MKV 尚未交付。
-8. 术语表、AI 回显锚定、局部定点补翻、配方、人工闸门、软字幕封装、硬件编码管理和跨任务日志中心尚未达到 SmartSub `2ea9327` 基线。
+8. 配方、人工闸门、软字幕封装、硬件编码管理和跨任务日志中心尚未达到 SmartSub `2ea9327` 基线。
