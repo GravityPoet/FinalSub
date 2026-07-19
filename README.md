@@ -56,6 +56,11 @@ Translate your transcriptions into elegant, natural bilingual subtitles with the
 * **Prioritized Glossaries**: Maintain multiple enabled glossaries with deterministic conflict resolution, CSV/TXT import and CSV export. Only terms matched in the current batch are added to the AI prompt.
 * **Secure Key Storage**: Secrets are stored in the OS credential store and bound to provider, endpoint, and field. Changing an endpoint never silently reuses its old secret, and secrets are not returned to the frontend over IPC.
 
+### 🧩 Reusable Task Recipes & Review Gates
+* Start from built-in offline, bilingual-review, or subtitle-translation recipes, or save, rename, delete, and reapply your own task configuration.
+* Recipes persist in the Rust backend. If a referenced local model is removed, FinalSub safely selects an installed model instead of leaving a broken task configuration.
+* Enable **human review** to write the subtitle first and hold the task in **Needs Review**. Open the output, check it, then approve one task or an entire selected batch atomically.
+
 ### ✏️ Interactive Subtitle Proofreader
 * Say goodbye to text editors! Built-in subtitle editor designed for efficient editing.
 * **Media-Subtitle Linkage**: Subtitle rows highlight dynamically in sync with the video playback.
@@ -90,7 +95,7 @@ Download the macOS Universal package from the [Releases page](https://github.com
 1. Return to the **"Tasks"** page and drop your video or audio file.
 2. Select the input language (or choose Auto-detect).
 3. (Optional) Turn on translation, then configure and test your chosen AI translation engine.
-4. Click **"Start Task"**. Monitor ASR and translation in **"Queue"**, edit in **"Proofread"**, then use **"Compose"** to choose hard/soft subtitles and the final audio-track structure.
+4. Optionally apply/save a task recipe and require human review, then click **"Start Task"**. Monitor ASR and translation in **"Queue"**, approve checked outputs, edit in **"Proofread"**, then use **"Compose"** to choose hard/soft subtitles and the final audio-track structure.
 
 ---
 

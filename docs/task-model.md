@@ -11,12 +11,20 @@ pub struct Task {
     pub media_name: String,   // 显示名
     pub engine_id: String,    // e.g. "whisper-cpp", "parakeet-mlx"
     pub model_id: String,     // e.g. "large-v3-turbo"
-    pub language: Option<String>,
+    pub source_language: Option<String>,
+    pub target_language: Option<String>,
+    pub translation_content_mode: TranslationContentMode,
+    pub output_format: String,
+    pub output_name: Option<String>,
+    pub strip_chinese_punctuation: bool,
+    pub review_required: bool, // 写出后是否进入人工审核
+    pub reviewed_at: Option<String>,
     pub progress: f32,        // 0.0 ~ 1.0
     pub status_message: String,
     pub output_path: Option<String>,
     pub error: Option<String>,
     pub created_at: String,   // ISO 8601
+    pub updated_at: String,   // ISO 8601
 }
 ```
 
@@ -34,19 +42,21 @@ pub struct Task {
 |---|---|---|
 | `Pending` | `pending` | 已创建，等待执行 |
 | `Running` | `running` | 正在执行 |
-| `Paused` | `paused` | 已暂停（当前未触发） |
+| `Paused` | `paused` | 已暂停，可从 checkpoint 继续 |
 | `Cancelled` | `cancelled` | 已取消 |
+| `Review` | `review` | 字幕已写出，等待人工审核 |
 | `Done` | `done` | 完成 |
 | `Error` | `error` | 失败 |
 
 状态转换图：
 
 ```
-Pending → Running → Done      // 预览任务与真实任务完成
+Pending → Running → Done      // 不要求人工审核
+Pending → Running → Review → Done // 写出字幕后等待审核，再单个或批量批准
 Pending → Running → Error     // 真实任务发生错误（ASR/翻译/外部进程出错）
 Pending → Running → Cancelled // 预览任务与真实任务被中途取消
 Pending → Cancelled
-Running → Paused → Running    // 未实现
+Running → Paused → Running    // 保留 checkpoint 后继续
 Running → Cancelled
 ```
 
@@ -72,11 +82,11 @@ Running → Cancelled
 
 注意：真实任务流水线已全部接入（通过 `create_task` 进入后台 `task_runner`），支持真实的 ASR 与翻译进程；`create_preview_task` 依然保留用于快速的事件与 UI 模拟。
 
-### `task-log`（规划，未实现）
+### `task-log`（已实现）
 
 - 方向：Rust → 前端
 - 载荷：`{ task_id: String, level: String, message: String, timestamp: String }`
-- 用途：高频日志流式输出
+- 用途：高频日志流式输出；日志同时持久化，可在任务队列中查看和复制
 
 ## 错误模型
 
