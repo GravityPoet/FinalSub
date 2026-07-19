@@ -1,7 +1,7 @@
 # FinalSub 功能与发布矩阵
 
-更新时间：2026-07-19
-对照基线：SmartSub `2ea9327f80bd79ec1b950caeb002f17a8722a5e0`（2026-07-18）与 FinalSub `13124399b0a28757b49704a20811022394eefce4` 的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
+更新时间：2026-07-20
+对照基线：SmartSub `e9ad26f1d4ddde59b8460a453c29ebb9c545a4c8`（当前上游 HEAD）与 FinalSub 当前主线的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
 
 状态定义：
 
@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、本地/云端 TTS、可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、任务配方、完成前人工审核、模型管理和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR 协议广度、本地模型原地复用、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 3.4.0 的声音克隆资产管理、TTS 受管下载、多进程推理、视频联动配音和统一阶段编排仍更完整。FinalSub 当前能用 ZipVoice 参考 WAV + 精确文本直接克隆合成，但还不能把它等同于完整的录音、质检、音色库、导入导出与云克隆工作流，因此仍不能笼统宣称功能已经全面对齐或超越。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、本地/云端 TTS、可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、任务配方、完成前人工审核、模型管理和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR 协议广度、本地模型原地复用、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。SmartSub 的声音克隆资产管理、云端 TTS 广度、多进程推理、视频联动配音和统一阶段编排仍更完整。FinalSub 当前能用 ZipVoice 参考 WAV + 精确文本直接克隆合成，但还不能把它等同于完整的录音、质检、音色库、导入导出与云克隆工作流，因此仍不能笼统宣称功能已经全面对齐或超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -85,7 +85,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 本地 / 云端分类 | 🟣 | 顶层按运行位置拆为“本地模型 / 云端服务”，本地再拆 ASR/TTS；云端区明确是 API 配置并标注无需下载模型 |
 | 外部模型目录复用 | 🟣 | Whisper、Parakeet 与 TTS 使用独立根目录；真实 2.9 GB Parakeet 模型无需搬移或重下；TTS 选择已有目录只保存规范化路径，取消登记不删除源文件 |
 | 本地 TTS 发现 | 🟢 | 有限深度扫描配置目录与 `~/Tools/Local-LLM`，按真实必需文件把 Kokoro/VITS/ZipVoice 标为 ready / incomplete / not-installed |
-| TTS 受管下载 | 🟠 | 已把主模型包和 ZipVoice 独立 vocoder 工件列清并提供官方链接；尚未接入应用内断点续传、摘要校验与安全解包 |
+| TTS 受管下载 | 🟢 | 固定目录清单；镜像 → 官方回退；`.part` 断点续传；主包/独立 vocoder 固定大小与 SHA-256；安全 tar 解包、staging + 原子替换、取消/删除边界均已接入；VITS 与 ZipVoice 官方 Release 布局真实夹具通过 |
 | 外部运行时依赖 | 🟢 | Parakeet/SenseVoice/Paraformer/Qwen/FireRed 均不需要 Python 或 uv |
 
 ## 4. 翻译
@@ -107,7 +107,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 能力 | 状态 | 当前实现与 SmartSub 基线差异 |
 |---|---:|---|
 | 行级配音工作台 | 🟠 | 已支持字幕导入、逐行/批量生成、试听、重生成、状态统计和恢复；尚缺视频播放联动、行内文本编辑与逐行音色覆盖 |
-| 本地 TTS | 🟠 | Rust 原生 sherpa-onnx 已接 Kokoro 103 音色、VITS 174 说话人与 ZipVoice；支持取消、最多两个引擎缓存和原子 WAV，但缺真实本地 TTS 模型音质 E2E、受管下载与多进程并行 |
+| 本地 TTS | 🟠 | Rust 原生 sherpa-onnx 已接 Kokoro 103 音色、VITS 174 说话人与 ZipVoice；支持受管下载、取消、最多两个引擎缓存和原子 WAV，但缺真实本地 TTS 模型音质 E2E 与多进程并行 |
 | 云 TTS | 🟠 | OpenAI-compatible、Azure Speech、ElevenLabs 已接真实 HTTP/音频归一化与显式文本授权；缺 Edge、火山豆包，且仍需真实账号 E2E |
 | 本地声音克隆 | 🟠 | ZipVoice 已支持参考 WAV + 逐字文本、4/8 步质量档与 30 秒/64 MB 边界；缺录音、ASR 预填、选段/质检、降噪、音色实体、A/B、导入导出 |
 | 云声音克隆 | 🔴 | 火山声音复刻 2.0、ElevenLabs IVC、云端音色找回 |
@@ -173,7 +173,16 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 签名应用内更新 | 🟡 | Rust updater 固定 HTTPS manifest、限定 FinalSub 官方 GitHub Release asset、签名校验、进度、安装前任务/控制句柄竞态复检与重启已接入；CI 从 Secret 原子生成 git-ignored release 配置并产出 macOS App、Linux AppImage/DEB 与 Windows NSIS 签名包，`latest.json` 缺任一目标即熔断发布；仍需生产根密钥 ceremony 与真实远端升级 E2E |
 | 质量 CI | 🟢 | 前端 build、Rust fmt/test/clippy、macOS sidecar 重编与最低版本检查；工作流 YAML 与 Bash 脚本静态校验通过 |
 
-## 11. 新鲜验证（2026-07-19）
+## 11. 新鲜验证（2026-07-20）
+
+- SmartSub 上游审计固定在 `e9ad26f1d4ddde59b8460a453c29ebb9c545a4c8`；确认其仍覆盖 Edge/火山/ElevenLabs 云 TTS、声音克隆资产、模型镜像下载、时间轴预控和统一 pipeline specs。FinalSub 的差距项未被误标为完成。
+- TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
+- TTS 下载器单元测试覆盖镜像顺序、固定大小流量上限、归档原子替换、失败保留旧模型、ZipVoice 缺 vocoder 拒绝、空必需文件拒绝；`cargo test --lib` 为 231 passed / 0 failed / 7 ignored，`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --check` 通过。
+- `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
+- 浏览器 QA（本地 Vite + Playwright）：新建任务首屏在 1280×720 视口同时露出“选择音视频 / 任务配置 / 任务概览 / 开始任务”，主视觉不再挤走核心动作；模型页本地/云端顶层分区、本地 TTS 外部目录“直接复用”、应用内下载/选择已有目录/官方来源、ZipVoice 双工件提示均可见；云端页明确显示“不是下载区 / 不会下载模型”。控制台无 error。
+- 当前 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与运行进程路径唯一通过。DMG SHA-256 `416ae7dfdf28ac00e4629cc3d14be4b6ada22364216292b429f6c6304a6bbdd3`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-045613/FinalSub.app.zip` 并通过完整性检查。
+
+## 12. 新鲜验证（2026-07-19）
 
 - `cargo test --lib`：224 passed、0 failed、5 ignored；新增 TTS 模型发现/外部复用、provider 边界、ZipVoice 输入、配音会话恢复、时间轴决策与更新阻断测试，并保留 compose、翻译对齐与全部既有覆盖。
 - `cargo clippy --all-targets --all-features -- -D warnings`：通过。
@@ -192,7 +201,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 - 本轮安装前备份：`~/Library/Application Support/FinalSub/Backups/20260719-163534/FinalSub.app.zip`，压缩数据与解压后的回滚应用深度签名均已验证。
 - 真实应用 UI：`1312439` 对应 Universal 构建已安装并从 `/Applications/FinalSub.app` 真实启动；CoreGraphics 读到 1200×770 的可见 FinalSub 窗口。模型管理继续把 `/Users/moonlitpoet/Tools/Local-LLM/parakeet-models/parakeet-tdt-0.6b-v2` 判定为本地可用，不触发重复下载；生产前端已包含“模型与在线服务”分区和“配音工作台”路由。
 
-## 12. 仍不能宣称完成的事项
+## 13. 仍不能宣称完成的事项
 
 1. Windows/Linux 构建脚本与 release job 已交付，但当前 macOS 主机不能替代 GitHub Windows/Linux runner 的真实安装包与启动验收。
 2. Apple Developer ID 正式签名、公证、stapling 尚未用仓库 secrets 跑通；本机交付是可验证的 ad-hoc 签名。
@@ -200,5 +209,5 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 4. Linux Secret Service 后端已配置，但尚缺真实 Linux 桌面会话的密钥存取 E2E。
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-7. 本地/云端 TTS、配音会话与时间轴导出已交付，但缺真实本地 TTS 模型音质 E2E、TTS 受管下载、Edge/火山 TTS、完整 ZipVoice 音色资产工作流、云声音克隆与独立 worker。
-8. 人工审核和配音会话都已有持久状态，但统一阶段编排、批准后自动进入配音/compose、硬件编码管理和跨任务日志中心尚未达到 SmartSub `2ea9327` 基线。
+7. 本地/云端 TTS、配音会话与时间轴导出已交付，受管下载已完成，但缺真实本地 TTS 模型音质 E2E、Edge/火山 TTS、完整 ZipVoice 音色资产工作流、云声音克隆与独立 worker。
+8. 人工审核和配音会话都已有持久状态，但统一阶段编排、批准后自动进入配音/compose、硬件编码管理和跨任务日志中心尚未达到 SmartSub `e9ad26f` 基线。

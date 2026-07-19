@@ -190,6 +190,108 @@ pub fn list_tts_models(state: State<'_, AppState>) -> Result<Vec<TtsModelInfo>, 
     crate::core::tts::list_models(&state.app_config_dir).map_err(|error| error.to_string())
 }
 
+/// 将固定清单中的 TTS 工件下载到受管目录。下载只接受内置模型 ID，
+/// 不把前端传入的 URL 当作下载目标；这样“应用内下载”与“选择已有目录”保持清晰边界。
+#[tauri::command]
+pub async fn download_tts_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let normalized = model_id.trim().to_string();
+    crate::core::tts::find_spec(&normalized).map_err(|error| error.to_string())?;
+
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        // 检查与登记必须在同一个写锁内完成，避免两次并发 IPC 都通过
+        // contains_key 后启动两个写入同一 `.part`/staging 目录的任务。
+        let mut controls = state.tts_model_controls.write().await;
+        if controls.contains_key(&normalized) {
+            return Err("该 TTS 模型已经在下载队列中".into());
+        }
+        controls.insert(normalized.clone(), cancel_tx);
+    }
+
+    let controls = state.tts_model_controls.clone();
+    let cleanup_id = normalized.clone();
+    let config_dir = state.app_config_dir.clone();
+    let app_for_task = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = crate::core::tts::download_model_impl(
+            app_for_task.clone(),
+            config_dir,
+            normalized.clone(),
+            cancel_rx,
+        )
+        .await;
+        controls.write().await.remove(&cleanup_id);
+        if let Err(error) = result {
+            let _ = app_for_task.emit(
+                "model-download-updated",
+                crate::core::models::download::ModelDownloadProgress {
+                    model_id: normalized,
+                    bytes_downloaded: 0,
+                    total_bytes: 0,
+                    progress: 0.0,
+                    status: "error".into(),
+                    phase: "error".into(),
+                    bytes_per_second: None,
+                    eta_seconds: None,
+                    error: Some(error.to_string()),
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_tts_model_download(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<bool, String> {
+    let normalized = model_id.trim().to_string();
+    crate::core::tts::find_spec(&normalized).map_err(|error| error.to_string())?;
+    let controls = state.tts_model_controls.read().await;
+    if let Some(sender) = controls.get(&normalized) {
+        sender
+            .send(true)
+            .map_err(|_| "TTS 下载任务已经结束".to_string())?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// 只删除 FinalSub 受管目录中的 TTS 模型；外部登记路径永远不会被此命令触碰。
+#[tauri::command]
+pub async fn delete_tts_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
+    let normalized = model_id.trim().to_string();
+    crate::core::tts::find_spec(&normalized).map_err(|error| error.to_string())?;
+    if state
+        .tts_model_controls
+        .read()
+        .await
+        .contains_key(&normalized)
+    {
+        return Err("模型正在下载，请先暂停下载再删除".into());
+    }
+    if !state.tts_controls.read().await.is_empty() {
+        return Err("配音正在进行，请等待当前配音任务完成后再删除模型".into());
+    }
+    // 引擎对象可能仍持有已删除目录的文件句柄；先从缓存移除，避免删除后
+    // 下一次请求继续复用旧实例。正在运行的合成已由上面的闸门排除。
+    let cache_key_prefix = format!("{normalized}|");
+    state
+        .tts_engines
+        .lock()
+        .map_err(|_| "TTS 引擎缓存不可用".to_string())?
+        .retain(|key, _| !key.starts_with(&cache_key_prefix));
+    crate::core::tts::delete_managed_model(&state.app_config_dir, &normalized)
+        .map_err(|error| error.to_string())
+}
+
 /// 登记外部 TTS 模型目录。只保存绝对路径，不复制模型，也不会取得源目录删除权。
 #[tauri::command]
 pub fn register_tts_model_path(

@@ -462,7 +462,7 @@ pub async fn download_model_impl(
     Ok(())
 }
 
-async fn request_download(
+pub(crate) async fn request_download(
     client: &reqwest::Client,
     url: &str,
     existing_bytes: u64,
@@ -499,7 +499,7 @@ async fn request_download(
     )))
 }
 
-async fn open_part_file(path: &Path, append: bool) -> Result<File> {
+pub(crate) async fn open_part_file(path: &Path, append: bool) -> Result<File> {
     let mut options = OpenOptions::new();
     options.create(true).write(true);
     if append {
@@ -524,7 +524,7 @@ fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
     (start <= end && end < total).then_some((start, end, total))
 }
 
-async fn sha256_file(path: PathBuf) -> Result<String> {
+pub(crate) async fn sha256_file(path: PathBuf) -> Result<String> {
     tokio::task::spawn_blocking(move || {
         let mut file = StdFile::open(&path)?;
         let mut hasher = Sha256::new();

@@ -1,6 +1,6 @@
 # TTS 与配音工作台实现说明
 
-本文对应 FinalSub `13124399b0a28757b49704a20811022394eefce4`。它记录当前已经交付的边界，不把后续声音克隆管理能力算作完成。
+本文对应 FinalSub 当前主线的 TTS 配音工作台实现。它记录当前已经交付的边界，不把后续声音克隆资产管理能力算作完成。
 
 ## 模型与服务分类
 
@@ -41,6 +41,19 @@ ZipVoice 额外要求：
 - 音频响应最多 64 MB，错误体最多 16 KB 并移除控制字符；
 - 返回音频统一转换为 24 kHz 单声道 PCM WAV，再进入时间轴层。
 
+## 受管下载与生命周期
+
+本地 TTS 的“应用内下载”只针对固定目录中的三个官方模型条目：Kokoro、VITS AIShell3 和 ZipVoice。模型管理页先扫描本机；已经登记且文件完整的外部目录显示“直接复用”，不会因为进入页面或切换任务而重新下载。云端服务页只配置 endpoint、密钥和上传授权，永远不进入本地模型下载流程。
+
+受管下载器具备以下边界：
+
+- 先尝试可用镜像，再回退官方 GitHub Release；主包和 ZipVoice 独立 vocoder 都使用固定文件大小与 SHA-256 校验。
+- 下载写入 `.part` 文件，支持中断后续传；取消只保留可续传工件，不会把半成品登记为可用模型。
+- 校验通过后在临时 staging 目录安全解包，拒绝路径穿越、链接、设备、FIFO、重复条目、异常条目数量和过大解包体积。
+- 所有必需文件检查通过后才原子替换目标目录；安装失败会保留上一份完整模型。
+- ZipVoice 的 `vocos_24khz.onnx` 单独下载、校验并与主包一起安装，缺少任一工件都不会显示为 ready。
+- “删除模型”只删除应用受管目录；外部目录只能“取消登记”，源文件始终保留。正在下载或合成时，后端拒绝删除以避免竞态。
+
 ## 可恢复配音会话
 
 会话文件位于应用配置目录的 `tts/dubbing-sessions/<uuid>/session.json`，每行产物位于同会话的 `cues/`。字幕最多 20 MB、2,000 行；支持 SRT、VTT、ASS/SSA 与 LRC。
@@ -64,7 +77,6 @@ ZipVoice 额外要求：
 
 ## 当前未覆盖
 
-- TTS 模型仍是“官方工件链接 + 选择已有目录”，尚未接入带断点续传、摘要校验和安全解包的应用内受管下载器。
 - ZipVoice 目前可直接使用参考 WAV 与文本合成，但尚无克隆音色实体、录音、自动转写、选段波形、质量评分、降噪、重命名/删除、导入导出与 A/B 试听管理。
 - 尚未接入 Edge TTS、火山豆包 TTS、火山声音复刻与 ElevenLabs IVC 管理。
 - 工作台尚无视频播放联动、逐行文本编辑、逐行音色覆盖和同步字幕重写。
@@ -76,6 +88,17 @@ ZipVoice 额外要求：
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib core::tts && cargo clippy --all-targets --all-features -- -D warnings
+```
+
+受管下载的官方资产布局验收（不改变默认测试的离线性质）可用真实 Release 工件显式运行：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri
+FINALSUB_TTS_VITS_ARCHIVE=/path/to/vits.tar.bz2 \
+  cargo test --lib core::tts::download::tests::official_vits_archive_installs_with_real_release_layout -- --ignored
+FINALSUB_TTS_ZIPVOICE_ARCHIVE=/path/to/zipvoice.tar.bz2 \
+FINALSUB_TTS_VOCODER=/path/to/vocos_24khz.onnx \
+  cargo test --lib core::tts::download::tests::official_zipvoice_archive_installs_with_vocoder -- --ignored
 ```
 
 真实付费云服务与本地 TTS 模型仍需在具备相应账号/模型的机器上做最终音质 E2E；单元测试与 FFmpeg 混音冒烟不能替代该验收。
