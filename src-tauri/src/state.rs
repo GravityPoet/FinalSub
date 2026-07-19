@@ -12,6 +12,8 @@ pub struct AppState {
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
     pub model_controls:
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+    pub tts_model_controls:
+        Arc<RwLock<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
     pub burn_controls:
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     pub tts_controls: Arc<RwLock<std::collections::HashMap<String, Arc<AtomicBool>>>>,
@@ -49,6 +51,7 @@ impl AppState {
             tasks: Arc::new(RwLock::new(loaded_tasks)),
             task_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             model_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            tts_model_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             burn_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_engines: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

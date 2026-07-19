@@ -397,6 +397,18 @@ export async function listTtsModels(): Promise<TtsModelInfo[]> {
   return invoke("list_tts_models");
 }
 
+export async function downloadTtsModel(modelId: string): Promise<void> {
+  return invoke("download_tts_model", { modelId });
+}
+
+export async function cancelTtsModelDownload(modelId: string): Promise<boolean> {
+  return invoke("cancel_tts_model_download", { modelId });
+}
+
+export async function deleteTtsModel(modelId: string): Promise<void> {
+  return invoke("delete_tts_model", { modelId });
+}
+
 export async function registerTtsModelPath(
   modelId: string,
   sourcePath: string,
@@ -1436,6 +1448,19 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return createMockModels();
     case "list_tts_models":
       return currentMockTtsModels();
+    case "download_tts_model":
+      return undefined;
+    case "cancel_tts_model_download":
+      return true;
+    case "delete_tts_model": {
+      const modelId = String(args?.modelId ?? "");
+      mockTtsModelsState = currentMockTtsModels().map((model) => (
+        model.id === modelId
+          ? { ...model, status: "not-installed" as const, path: null, location: null }
+          : model
+      ));
+      return undefined;
+    }
     case "register_tts_model_path": {
       const modelId = String(args?.modelId ?? "");
       mockTtsModelsState = currentMockTtsModels().map((model) => (

@@ -263,6 +263,18 @@ export default function ModelsPage() {
     }
   };
 
+  const handleTtsDownloadState = (modelId: string, progress: ModelDownloadProgress | null) => {
+    setDownloads((previous) => {
+      const next = { ...previous };
+      if (progress) {
+        next[progress.model_id] = progress;
+      } else {
+        delete next[modelId];
+      }
+      return next;
+    });
+  };
+
   if (loading && models.length === 0) {
     return <div className="text-text-tertiary py-16 text-center text-sm">{t("models.scanning")}</div>;
   }
@@ -560,7 +572,11 @@ export default function ModelsPage() {
             </div>
           ))}
 
-          <LocalTtsModelsPanel refreshSignal={localRefreshSignal} />
+          <LocalTtsModelsPanel
+            refreshSignal={localRefreshSignal}
+            downloadProgress={downloads}
+            onDownloadStateChange={handleTtsDownloadState}
+          />
 
           <Card className="p-5">
             <h3 className="font-display text-h3 font-semibold text-text-primary">{t("models.localStorageTitle")}</h3>

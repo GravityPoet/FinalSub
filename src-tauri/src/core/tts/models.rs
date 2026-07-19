@@ -51,13 +51,31 @@ pub struct TtsModelSpec {
     pub archive_name: &'static str,
     pub archive_inner_dir: &'static str,
     pub download_url: &'static str,
-    pub extra_download_urls: &'static [&'static str],
+    pub archive_size: u64,
+    pub archive_sha256: &'static str,
+    pub(crate) extra_files: &'static [TtsDownloadFileSpec],
     pub required_files: &'static [&'static str],
     pub sample_rate: u32,
     pub default_voice_id: &'static str,
     pub clone_only: bool,
     pub voices: Vec<TtsVoice>,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TtsDownloadFileSpec {
+    pub file_name: &'static str,
+    pub download_url: &'static str,
+    pub size: u64,
+    pub sha256: &'static str,
+}
+
+const ZIPVOICE_EXTRA_FILES: &[TtsDownloadFileSpec] = &[TtsDownloadFileSpec {
+    file_name: "vocos_24khz.onnx",
+    download_url:
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx",
+    size: 54_157_409,
+    sha256: "bcb3b970e384161c4d634f0bb9e999ff1c471b34c9bc0b1049a5014065ed3cc0",
+}];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TtsModelInfo {
@@ -235,7 +253,9 @@ pub(crate) fn catalog() -> Vec<TtsModelSpec> {
             archive_name: "kokoro-int8-multi-lang-v1_1.tar.bz2",
             archive_inner_dir: "kokoro-int8-multi-lang-v1_1",
             download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2",
-            extra_download_urls: &[],
+            archive_size: 147_031_220,
+            archive_sha256: "a1e94694776049035c4f2c6529f003aaece993c76aae9a78995831c3c4dcafc6",
+            extra_files: &[],
             required_files: &[
                 "model.int8.onnx",
                 "voices.bin",
@@ -259,7 +279,9 @@ pub(crate) fn catalog() -> Vec<TtsModelSpec> {
             archive_name: "vits-icefall-zh-aishell3.tar.bz2",
             archive_inner_dir: "vits-icefall-zh-aishell3",
             download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-icefall-zh-aishell3.tar.bz2",
-            extra_download_urls: &[],
+            archive_size: 31_559_701,
+            archive_sha256: "ab468db3a3308cdd861495e0db2f25d79418a0c00639f74944c7cdf5dd8c6ec1",
+            extra_files: &[],
             required_files: &["model.onnx", "tokens.txt", "lexicon.txt"],
             sample_rate: 8_000,
             default_voice_id: "0",
@@ -276,7 +298,9 @@ pub(crate) fn catalog() -> Vec<TtsModelSpec> {
             archive_name: "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2",
             archive_inner_dir: "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia",
             download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2",
-            extra_download_urls: &["https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx"],
+            archive_size: 109_162_785,
+            archive_sha256: "77219c8b40f4ee8d73a7f902305ff6c1128ef9b54461c41b4ca6ed890b6c2803",
+            extra_files: ZIPVOICE_EXTRA_FILES,
             required_files: &[
                 "encoder.int8.onnx",
                 "decoder.int8.onnx",
@@ -293,17 +317,23 @@ pub(crate) fn catalog() -> Vec<TtsModelSpec> {
     ]
 }
 
-fn find_spec(model_id: &str) -> Result<TtsModelSpec> {
+pub(crate) fn find_spec(model_id: &str) -> Result<TtsModelSpec> {
     catalog()
         .into_iter()
         .find(|spec| spec.id == model_id)
         .ok_or_else(|| FinalSubError::Validation(format!("未知 TTS 模型：{model_id}")))
 }
 
-fn missing_files(spec: &TtsModelSpec, path: &Path) -> Vec<String> {
+pub(crate) fn missing_files(spec: &TtsModelSpec, path: &Path) -> Vec<String> {
     spec.required_files
         .iter()
-        .filter(|relative| !path.join(relative).is_file())
+        .filter(|relative| {
+            let candidate = path.join(relative);
+            !candidate.is_file()
+                || std::fs::metadata(candidate)
+                    .map(|metadata| metadata.len() == 0)
+                    .unwrap_or(true)
+        })
         .map(|relative| (*relative).to_string())
         .collect()
 }
@@ -439,9 +469,9 @@ fn model_info(spec: TtsModelSpec, registry: &TtsModelRegistry) -> TtsModelInfo {
         size_mb: spec.size_mb,
         download_url: spec.download_url.into(),
         extra_download_urls: spec
-            .extra_download_urls
+            .extra_files
             .iter()
-            .map(|url| (*url).into())
+            .map(|file| file.download_url.into())
             .collect(),
         sample_rate: spec.sample_rate,
         default_voice_id: spec.default_voice_id.into(),
@@ -509,6 +539,40 @@ pub fn set_models_root(app_config_dir: &Path, models_root: &str) -> Result<Vec<T
     list_models(app_config_dir)
 }
 
+pub(crate) fn managed_models_root(app_config_dir: &Path) -> Result<PathBuf> {
+    let registry = load_registry(app_config_dir)?;
+    let root = validate_root(&registry.models_root)?;
+    std::fs::create_dir_all(&root)?;
+    Ok(root.canonicalize()?)
+}
+
+pub(crate) fn finish_managed_install(app_config_dir: &Path, model_id: &str) -> Result<()> {
+    find_spec(model_id)?;
+    let mut registry = load_registry(app_config_dir)?;
+    registry.external_paths.remove(model_id);
+    save_registry(app_config_dir, &registry)
+}
+
+pub fn delete_managed_model(app_config_dir: &Path, model_id: &str) -> Result<()> {
+    let spec = find_spec(model_id)?;
+    let root = managed_models_root(app_config_dir)?;
+    let target = root.join(spec.id);
+    if !target.exists() {
+        return Err(FinalSubError::Validation(format!(
+            "本机没有可删除的受管 TTS 模型：{}",
+            spec.name
+        )));
+    }
+    let canonical = target.canonicalize()?;
+    if canonical.parent() != Some(root.as_path()) {
+        return Err(FinalSubError::Validation(
+            "拒绝删除受管目录之外的 TTS 模型".into(),
+        ));
+    }
+    std::fs::remove_dir_all(canonical)?;
+    Ok(())
+}
+
 pub(crate) fn resolve_ready_model(app_config_dir: &Path, model_id: &str) -> Result<ReadyTtsModel> {
     let registry = load_registry(app_config_dir)?;
     let spec = find_spec(model_id)?;
@@ -561,7 +625,9 @@ mod tests {
             .any(|spec| spec.family == TtsModelFamily::Zipvoice));
         assert_eq!(specs[0].voices.len(), 103);
         assert_eq!(specs[1].voices.len(), 174);
-        assert_eq!(specs[2].extra_download_urls.len(), 1);
+        assert_eq!(specs[2].extra_files.len(), 1);
+        assert!(specs.iter().all(|spec| spec.archive_size > 0));
+        assert!(specs.iter().all(|spec| spec.archive_sha256.len() == 64));
     }
 
     #[test]
@@ -599,6 +665,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_required_model_files_are_not_ready() {
+        let root = TempDir::new().unwrap();
+        let spec = find_spec("vits-zh-aishell3").unwrap();
+        for relative in spec.required_files {
+            let path = root.path().join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::File::create(path).unwrap();
+        }
+        assert!(!missing_files(&spec, root.path()).is_empty());
+    }
+
+    #[test]
     fn discovery_finds_archive_named_directory_under_local_llm_root() {
         let root = TempDir::new().unwrap();
         let spec = find_spec("vits-zh-aishell3").unwrap();
@@ -608,5 +688,20 @@ mod tests {
             discover_model_path(&spec, root.path()).unwrap(),
             model.canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn managed_delete_never_touches_external_registration() {
+        let config = TempDir::new().unwrap();
+        let managed_root = TempDir::new().unwrap();
+        set_models_root(config.path(), managed_root.path().to_str().unwrap()).unwrap();
+        let external = TempDir::new().unwrap();
+        let spec = find_spec("vits-zh-aishell3").unwrap();
+        materialize(&spec, external.path());
+        register_external_model(config.path(), spec.id, external.path().to_str().unwrap()).unwrap();
+
+        let error = delete_managed_model(config.path(), spec.id).unwrap_err();
+        assert!(error.to_string().contains("没有可删除"));
+        assert!(external.path().join("model.onnx").is_file());
     }
 }
