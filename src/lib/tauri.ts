@@ -17,6 +17,10 @@ import {
   openPath as tauriOpenPath,
   revealItemInDir as tauriRevealItemInDir,
 } from "@tauri-apps/plugin-opener";
+import {
+  readTextFile as tauriReadTextFile,
+  writeTextFile as tauriWriteTextFile,
+} from "@tauri-apps/plugin-fs";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 
 export const TASK_UPDATED_EVENT = "task-updated";
@@ -96,6 +100,24 @@ export async function saveDialog(options?: SaveDialogOptions): Promise<string | 
   }
 
   throw new Error("Tauri dialog runtime is unavailable for save dialog");
+}
+
+export async function readTextFilePath(path: string): Promise<string> {
+  if (isTauriRuntime()) {
+    return tauriReadTextFile(path);
+  }
+  throw new Error(`Browser mock cannot read local file: ${path}`);
+}
+
+export async function writeTextFilePath(path: string, contents: string): Promise<void> {
+  if (isTauriRuntime()) {
+    return tauriWriteTextFile(path, contents);
+  }
+  if (import.meta.env.DEV) {
+    console.info(`[dev browser mock] writeTextFilePath(${path}, ${contents.length} bytes)`);
+    return;
+  }
+  throw new Error(`Tauri file runtime is unavailable for path: ${path}`);
 }
 
 export async function openPath(path: string, openWith?: string): Promise<void> {
@@ -450,6 +472,9 @@ export interface TranslateRequest {
   proxy_url?: string;
   custom_headers?: Record<string, string>;
   custom_body?: Record<string, unknown>;
+  structured_output?: TranslationStructuredOutputMode;
+  response_json_schema?: Record<string, unknown>;
+  glossary_prompt?: string;
 }
 
 export interface TranslateResponse {
@@ -494,6 +519,24 @@ export interface CloudAsrProfile {
   request_interval_ms: number;
 }
 
+export type TranslationStructuredOutputMode = "disabled" | "json_object" | "json_schema";
+
+export interface TranslationGlossaryEntry {
+  id: string;
+  source: string;
+  target: string;
+  note: string;
+}
+
+export interface TranslationGlossary {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  order: number;
+  entries: TranslationGlossaryEntry[];
+}
+
 export interface Settings {
   language: string;
   asr_engine: string;
@@ -521,6 +564,9 @@ export interface Settings {
   translate_user_prompts: Record<string, string>;
   translate_custom_headers: Record<string, Record<string, string>>;
   translate_custom_body: Record<string, Record<string, unknown>>;
+  translate_structured_output: Record<string, TranslationStructuredOutputMode>;
+  translate_echo_anchoring: Record<string, boolean>;
+  translation_glossaries: TranslationGlossary[];
   translate_batch_size: number;
   translate_concurrency: number;
   translate_request_interval_ms: number;
@@ -704,6 +750,9 @@ function createMockSettings(): Settings {
     translate_user_prompts: {},
     translate_custom_headers: {},
     translate_custom_body: {},
+    translate_structured_output: {},
+    translate_echo_anchoring: {},
+    translation_glossaries: [],
     translate_batch_size: 24,
     translate_concurrency: 1,
     translate_request_interval_ms: 0,

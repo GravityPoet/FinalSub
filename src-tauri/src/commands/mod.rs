@@ -1505,6 +1505,9 @@ pub async fn list_translation_models(
         custom_headers: custom_headers
             .or_else(|| settings.translate_custom_headers.get(&provider.id).cloned()),
         custom_body: settings.translate_custom_body.get(&provider.id).cloned(),
+        structured_output: None,
+        response_json_schema: None,
+        glossary_prompt: None,
     };
     translation::list_provider_models(&request)
         .await

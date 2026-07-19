@@ -1,6 +1,7 @@
 pub mod asr;
 pub mod audio;
 pub mod batch;
+pub mod glossary;
 pub mod models;
 pub mod opencc;
 pub mod secrets;

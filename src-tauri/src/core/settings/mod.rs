@@ -8,6 +8,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 
+use crate::core::glossary::{validate_glossaries, TranslationGlossary};
 use crate::error::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +99,12 @@ pub struct Settings {
     #[serde(alias = "translateCustomBody")]
     pub translate_custom_body:
         std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>>,
+    #[serde(alias = "translateStructuredOutput")]
+    pub translate_structured_output: std::collections::HashMap<String, String>,
+    #[serde(alias = "translateEchoAnchoring")]
+    pub translate_echo_anchoring: std::collections::HashMap<String, bool>,
+    #[serde(alias = "translationGlossaries")]
+    pub translation_glossaries: Vec<TranslationGlossary>,
     #[serde(alias = "translateBatchSize")]
     pub translate_batch_size: u32,
     #[serde(alias = "translateConcurrency")]
@@ -166,6 +173,9 @@ impl Default for Settings {
             translate_user_prompts: std::collections::HashMap::new(),
             translate_custom_headers: std::collections::HashMap::new(),
             translate_custom_body: std::collections::HashMap::new(),
+            translate_structured_output: std::collections::HashMap::new(),
+            translate_echo_anchoring: std::collections::HashMap::new(),
+            translation_glossaries: Vec::new(),
             translate_batch_size: 24,
             translate_concurrency: 1,
             translate_request_interval_ms: 0,
@@ -574,6 +584,21 @@ pub fn validate_settings(settings: &Settings) -> Result<()> {
             ));
         }
     }
+    if settings.translate_structured_output.len() > 64
+        || settings.translate_echo_anchoring.len() > 64
+    {
+        return Err(crate::error::FinalSubError::Validation(
+            "翻译服务的结构化输出配置不能超过 64 项".into(),
+        ));
+    }
+    for mode in settings.translate_structured_output.values() {
+        if !matches!(mode.as_str(), "disabled" | "json_object" | "json_schema") {
+            return Err(crate::error::FinalSubError::Validation(format!(
+                "不支持的结构化输出模式：{mode}"
+            )));
+        }
+    }
+    validate_glossaries(&settings.translation_glossaries)?;
     if !settings.vad_threshold.is_finite() || !(0.0..=1.0).contains(&settings.vad_threshold) {
         return Err(crate::error::FinalSubError::Validation(
             "VAD 阈值必须在 0-1 之间".into(),
@@ -710,6 +735,42 @@ mod tests {
     }
 
     #[test]
+    fn translation_alignment_settings_and_glossary_roundtrip() {
+        let (_tmp, dir) = test_config_dir();
+        let mut settings = Settings::default();
+        settings
+            .translate_structured_output
+            .insert("ollama".into(), "json_schema".into());
+        settings
+            .translate_echo_anchoring
+            .insert("ollama".into(), true);
+        settings.translation_glossaries = vec![TranslationGlossary {
+            id: "product-terms".into(),
+            name: "Product terms".into(),
+            description: "Preferred product translations".into(),
+            enabled: true,
+            order: 0,
+            entries: vec![crate::core::glossary::TranslationGlossaryEntry {
+                id: "finalsub".into(),
+                source: "FinalSub".into(),
+                target: "终字幕".into(),
+                note: "brand".into(),
+            }],
+        }];
+
+        save_settings(&dir, &settings).unwrap();
+        let loaded = load_settings(&dir).unwrap();
+        assert_eq!(loaded.translate_structured_output["ollama"], "json_schema");
+        assert!(loaded.translate_echo_anchoring["ollama"]);
+        assert_eq!(loaded.translation_glossaries[0].entries[0].target, "终字幕");
+
+        settings
+            .translate_structured_output
+            .insert("ollama".into(), "yaml".into());
+        assert!(save_settings(&dir, &settings).is_err());
+    }
+
+    #[test]
     fn import_legacy_camel_case_settings() {
         let (_tmp, dir) = test_config_dir();
         let legacy = r#"{
@@ -745,6 +806,9 @@ mod tests {
         assert!(imported.parakeet_models_path.ends_with("parakeet-models"));
         assert_eq!(imported.max_concurrent_tasks, 2);
         assert_eq!(imported.cloud_asr_request_concurrency, 1);
+        assert!(imported.translate_structured_output.is_empty());
+        assert!(imported.translate_echo_anchoring.is_empty());
+        assert!(imported.translation_glossaries.is_empty());
     }
 
     #[test]
