@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { AudioLines, Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { ActivityCenter, CommandPalette, WorkspaceOverlays } from "./WorkspaceOverlays";
 import brandIcon from "../../src-tauri/icons/icon.png";
@@ -10,6 +10,7 @@ const navItems = [
   { to: "/tasks", key: "nav.queue", icon: ListTodo },
   { to: "/models", key: "nav.models", icon: Bot },
   { to: "/translation", key: "nav.translation", icon: Languages },
+  { to: "/dubbing", key: "nav.dubbing", icon: AudioLines },
   { to: "/proofread", key: "nav.proofread", icon: Edit3 },
   { to: "/subtitle-merge", key: "nav.merge", icon: Film },
   { to: "/settings", key: "nav.settings", icon: Settings },
@@ -73,7 +74,7 @@ export default function Layout() {
         <div className={`absolute right-4 top-[1.1rem] z-[55] sm:static sm:block sm:border-b sm:border-border-subtle ${collapsed ? "sm:px-0 sm:py-2.5" : "sm:p-3"}`}>
           <ActivityCenter compact={collapsed} />
         </div>
-        <nav className={`hidden gap-1 overflow-x-hidden overflow-y-auto p-2.5 sm:block sm:flex-1 sm:space-y-1.5 ${collapsed ? "sm:px-0 sm:py-3" : "sm:p-3"}`}>
+        <nav className={`hidden gap-1 overflow-x-hidden overflow-y-auto p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sm:px-0 sm:py-3" : "sm:p-3"}`}>
           {navItems.map(({ to, key, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
@@ -96,7 +97,7 @@ export default function Layout() {
             );
           })}
         </nav>
-        <div className={`mt-auto hidden border-t border-border-subtle sm:block ${collapsed ? "sm:px-0 sm:py-3.5" : "sm:p-3.5"}`}>
+        <div className={`relative z-10 mt-auto hidden border-t border-border-subtle bg-surface-card sm:block ${collapsed ? "sm:px-0 sm:py-3.5" : "sm:p-3.5"}`}>
           <CommandPalette compact={collapsed} />
         </div>
       </aside>

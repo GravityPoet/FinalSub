@@ -1,0 +1,616 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  AlertTriangle,
+  AudioLines,
+  CheckCircle2,
+  Clock3,
+  Cloud,
+  FileText,
+  FolderOpen,
+  Gauge,
+  HardDrive,
+  LoaderCircle,
+  Pause,
+  Play,
+  RefreshCw,
+  Save,
+  Sparkles,
+  Video,
+  Volume2,
+  WandSparkles,
+} from "lucide-react";
+
+import { Badge } from "../components/ui/Badge";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Input, Select, Textarea } from "../components/ui/Input";
+import { Progress } from "../components/ui/Progress";
+import { useI18n } from "../lib/i18n";
+import {
+  acceptDubbingOverflow,
+  cancelLocalTts,
+  createDubbingSession,
+  exportDubbingAudio,
+  fileAssetUrl,
+  getDubbingSession,
+  listTtsModels,
+  listTtsProviders,
+  openDialog,
+  revealItemInDir,
+  saveDialog,
+  synthesizeDubbingCue,
+  type DubbingCue,
+  type DubbingEngineSelection,
+  type DubbingSession,
+  type TtsModelInfo,
+  type TtsProviderProfile,
+} from "../lib/tauri";
+
+const LAST_SESSION_KEY = "finalsub:last-dubbing-session";
+
+function formatTime(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const millis = ms % 1000;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+function outputPathFor(subtitlePath: string): string {
+  return `${subtitlePath.replace(/\.[^/.]+$/, "")}.finalsub-dub.wav`;
+}
+
+export default function DubbingPage() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const [models, setModels] = useState<TtsModelInfo[]>([]);
+  const [providers, setProviders] = useState<TtsProviderProfile[]>([]);
+  const [session, setSession] = useState<DubbingSession | null>(null);
+  const [subtitlePath, setSubtitlePath] = useState("");
+  const [videoPath, setVideoPath] = useState("");
+  const [engineValue, setEngineValue] = useState("");
+  const [voice, setVoice] = useState("");
+  const [globalSpeed, setGlobalSpeed] = useState(1);
+  const [referenceAudio, setReferenceAudio] = useState("");
+  const [referenceText, setReferenceText] = useState("");
+  const [cloneQuality, setCloneQuality] = useState<"standard" | "high">("standard");
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
+  const [activeCueIndex, setActiveCueIndex] = useState<number | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
+  const cancelRequested = useRef(false);
+
+  const readyModels = useMemo(() => models.filter((model) => model.status === "ready"), [models]);
+  const selectedLocalModel = useMemo(() => {
+    if (!engineValue.startsWith("local:")) return null;
+    return models.find((model) => model.id === engineValue.slice("local:".length)) ?? null;
+  }, [engineValue, models]);
+  const selectedProvider = useMemo(() => {
+    if (!engineValue.startsWith("cloud:")) return null;
+    return providers.find((provider) => provider.id === engineValue.slice("cloud:".length)) ?? null;
+  }, [engineValue, providers]);
+
+  const applyDefaultEngine = (loadedModels: TtsModelInfo[], loadedProviders: TtsProviderProfile[]) => {
+    const local = loadedModels.find((model) => model.status === "ready" && !model.clone_only)
+      ?? loadedModels.find((model) => model.status === "ready");
+    if (local) {
+      setEngineValue(`local:${local.id}`);
+      setVoice(local.default_voice_id);
+      return;
+    }
+    const cloud = loadedProviders[0];
+    if (cloud) {
+      setEngineValue(`cloud:${cloud.id}`);
+      setVoice(cloud.voice);
+    }
+  };
+
+  useEffect(() => {
+    Promise.all([listTtsModels(), listTtsProviders()])
+      .then(async ([loadedModels, loadedProviders]) => {
+        setModels(loadedModels);
+        setProviders(loadedProviders);
+        applyDefaultEngine(loadedModels, loadedProviders);
+        const previous = localStorage.getItem(LAST_SESSION_KEY);
+        if (previous) {
+          try {
+            const restored = await getDubbingSession(previous);
+            setSession(restored);
+            setSubtitlePath(restored.subtitle_path);
+            setVideoPath(restored.video_path ?? "");
+            if (restored.last_config) {
+              const engine = restored.last_config.engine;
+              setEngineValue(engine.kind === "local" ? `local:${engine.model_id}` : `cloud:${engine.provider_id}`);
+              setVoice(restored.last_config.voice);
+              setGlobalSpeed(restored.last_config.global_speed);
+              setReferenceAudio(restored.last_config.reference_audio_path ?? "");
+              setReferenceText(restored.last_config.reference_text ?? "");
+              setCloneQuality((restored.last_config.num_steps ?? 4) >= 8 ? "high" : "standard");
+            }
+          } catch {
+            localStorage.removeItem(LAST_SESSION_KEY);
+          }
+        }
+      })
+      .catch((error) => setMessage({ type: "err", text: String(error) }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const changeEngine = (value: string) => {
+    setEngineValue(value);
+    if (value.startsWith("local:")) {
+      const model = models.find((item) => item.id === value.slice("local:".length));
+      setVoice(model?.default_voice_id ?? "");
+    } else {
+      const provider = providers.find((item) => item.id === value.slice("cloud:".length));
+      setVoice(provider?.voice ?? "");
+    }
+    setMessage(null);
+  };
+
+  const chooseSubtitle = async () => {
+    const selected = await openDialog({
+      multiple: false,
+      filters: [{ name: t("dubbing.subtitleFiles"), extensions: ["srt", "vtt", "ass", "ssa", "lrc"] }],
+    });
+    if (typeof selected === "string") setSubtitlePath(selected);
+  };
+
+  const chooseVideo = async () => {
+    const selected = await openDialog({
+      multiple: false,
+      filters: [{ name: t("dubbing.videoFiles"), extensions: ["mp4", "mov", "mkv", "webm", "avi"] }],
+    });
+    if (typeof selected === "string") setVideoPath(selected);
+  };
+
+  const chooseReference = async () => {
+    const selected = await openDialog({
+      multiple: false,
+      filters: [{ name: t("dubbing.audioFiles"), extensions: ["wav"] }],
+    });
+    if (typeof selected === "string") setReferenceAudio(selected);
+  };
+
+  const createSession = async () => {
+    if (!subtitlePath) return;
+    setCreating(true);
+    setMessage(null);
+    try {
+      const created = await createDubbingSession(subtitlePath, videoPath || undefined);
+      setSession(created);
+      localStorage.setItem(LAST_SESSION_KEY, created.id);
+      setMessage({ type: "ok", text: t("dubbing.sessionCreated", { count: created.cues.length }) });
+    } catch (error) {
+      setMessage({ type: "err", text: String(error) });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const resetSession = () => {
+    localStorage.removeItem(LAST_SESSION_KEY);
+    setSession(null);
+    setSubtitlePath("");
+    setVideoPath("");
+    setMessage(null);
+  };
+
+  const engineSelection = (): DubbingEngineSelection | null => {
+    if (engineValue.startsWith("local:")) {
+      return { kind: "local", model_id: engineValue.slice("local:".length) };
+    }
+    if (engineValue.startsWith("cloud:")) {
+      return { kind: "cloud", provider_id: engineValue.slice("cloud:".length) };
+    }
+    return null;
+  };
+
+  const runCue = async (cueIndex: number): Promise<DubbingSession> => {
+    if (!session) throw new Error(t("dubbing.noSession"));
+    const engine = engineSelection();
+    if (!engine) throw new Error(t("dubbing.noEngine"));
+    if (selectedLocalModel?.clone_only && (!referenceAudio || !referenceText.trim())) {
+      throw new Error(t("dubbing.cloneReferenceRequired"));
+    }
+    const generationId = crypto.randomUUID();
+    setActiveGenerationId(generationId);
+    setActiveCueIndex(cueIndex);
+    try {
+      const updated = await synthesizeDubbingCue(generationId, {
+        session_id: session.id,
+        cue_index: cueIndex,
+        engine,
+        voice,
+        global_speed: globalSpeed,
+        reference_audio_path: referenceAudio || undefined,
+        reference_text: referenceText.trim() || undefined,
+        num_steps: cloneQuality === "high" ? 8 : 4,
+      });
+      setSession(updated);
+      return updated;
+    } finally {
+      setActiveGenerationId(null);
+      setActiveCueIndex(null);
+    }
+  };
+
+  const generateSingle = async (cueIndex: number) => {
+    setMessage(null);
+    try {
+      const updated = await runCue(cueIndex);
+      const cue = updated.cues[cueIndex];
+      setMessage({
+        type: cue.status === "overlong" ? "warn" : "ok",
+        text: cue.status === "overlong" ? t("dubbing.cueOverlongNotice", { index: cueIndex + 1 }) : t("dubbing.cueReadyNotice", { index: cueIndex + 1 }),
+      });
+    } catch (error) {
+      if (session) {
+        getDubbingSession(session.id).then(setSession).catch(() => undefined);
+      }
+      setMessage({ type: "err", text: String(error) });
+    }
+  };
+
+  const generateBatch = async () => {
+    if (!session) return;
+    const targets = session.cues.filter((cue) => ["pending", "failed"].includes(cue.status));
+    if (targets.length === 0) {
+      setMessage({ type: "warn", text: t("dubbing.noPending") });
+      return;
+    }
+    setBatchRunning(true);
+    setBatchProgress(0);
+    setMessage(null);
+    cancelRequested.current = false;
+    let completed = 0;
+    let latest = session;
+    const failures: number[] = [];
+    for (const cue of targets) {
+      if (cancelRequested.current) break;
+      try {
+        latest = await runCue(cue.index);
+      } catch {
+        failures.push(cue.index + 1);
+        try {
+          latest = await getDubbingSession(session.id);
+          setSession(latest);
+        } catch {
+          // Keep the most recent valid snapshot; the backend already persisted the failure.
+        }
+      }
+      completed += 1;
+      setBatchProgress((completed / targets.length) * 100);
+    }
+    setBatchRunning(false);
+    setActiveGenerationId(null);
+    setActiveCueIndex(null);
+    if (cancelRequested.current) {
+      setMessage({ type: "warn", text: t("dubbing.batchCancelled") });
+    } else if (failures.length > 0) {
+      setMessage({ type: "err", text: t("dubbing.batchPartial", { rows: failures.join("、") }) });
+    } else {
+      const overlong = latest.cues.filter((cue) => cue.status === "overlong").length;
+      setMessage({
+        type: overlong > 0 ? "warn" : "ok",
+        text: overlong > 0
+          ? t("dubbing.batchNeedsReview", { count: overlong })
+          : t("dubbing.batchComplete"),
+      });
+    }
+  };
+
+  const cancelGeneration = async () => {
+    cancelRequested.current = true;
+    if (activeGenerationId) await cancelLocalTts(activeGenerationId);
+  };
+
+  const acceptOverflow = async (cueIndex: number) => {
+    if (!session) return;
+    const generationId = crypto.randomUUID();
+    setActiveGenerationId(generationId);
+    setActiveCueIndex(cueIndex);
+    setMessage(null);
+    try {
+      const updated = await acceptDubbingOverflow(generationId, session.id, cueIndex);
+      setSession(updated);
+      setMessage({ type: "ok", text: t("dubbing.overflowAccepted", { index: cueIndex + 1 }) });
+    } catch (error) {
+      setMessage({ type: "err", text: String(error) });
+    } finally {
+      setActiveGenerationId(null);
+      setActiveCueIndex(null);
+    }
+  };
+
+  const exportAudio = async () => {
+    if (!session) return;
+    const selected = await saveDialog({
+      defaultPath: outputPathFor(session.subtitle_path),
+      filters: [
+        { name: "WAV", extensions: ["wav"] },
+        { name: "MP3", extensions: ["mp3"] },
+      ],
+    });
+    if (!selected) return;
+    const generationId = crypto.randomUUID();
+    setExporting(true);
+    setActiveGenerationId(generationId);
+    setMessage(null);
+    try {
+      const updated = await exportDubbingAudio(generationId, session.id, selected);
+      setSession(updated);
+      setMessage({ type: "ok", text: t("dubbing.exportSuccess") });
+    } catch (error) {
+      setMessage({ type: "err", text: String(error) });
+    } finally {
+      setExporting(false);
+      setActiveGenerationId(null);
+    }
+  };
+
+  if (loading) {
+    return <div className="page-shell grid min-h-[30rem] place-items-center text-sm text-text-tertiary"><LoaderCircle className="animate-spin" /></div>;
+  }
+
+  const doneCount = session?.cues.filter((cue) => ["ready", "accepted"].includes(cue.status)).length ?? 0;
+  const overlongCount = session?.cues.filter((cue) => cue.status === "overlong").length ?? 0;
+  const failedCount = session?.cues.filter((cue) => cue.status === "failed").length ?? 0;
+  const canExport = Boolean(session && session.cues.length > 0 && doneCount === session.cues.length);
+
+  return (
+    <div className="page-shell space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand">{t("dubbing.eyebrow")}</p>
+          <h2 className="mt-1 font-display text-display font-bold tracking-tight text-text-primary">{t("dubbing.title")}</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-text-tertiary">{t("dubbing.subtitle")}</p>
+        </div>
+        {session && (
+          <Button type="button" variant="secondary" size="sm" onClick={resetSession} disabled={batchRunning || exporting || activeGenerationId !== null}>
+            <RefreshCw size={14} /> {t("dubbing.newSession")}
+          </Button>
+        )}
+      </div>
+
+      {message && (
+        <div className={`rounded-xl border px-4 py-3 text-sm font-semibold leading-6 ${
+          message.type === "ok"
+            ? "border-success/20 bg-success/10 text-success"
+            : message.type === "warn"
+              ? "border-warning/20 bg-warning/10 text-warning"
+              : "border-danger/20 bg-danger/10 text-danger"
+        }`}>
+          {message.text}
+        </div>
+      )}
+
+      {!session ? (
+        <Card className="p-6">
+          <div className="mx-auto max-w-3xl space-y-5">
+            <div className="text-center">
+              <span className="liquid-icon mx-auto grid h-14 w-14 place-items-center rounded-2xl text-brand"><AudioLines size={24} /></span>
+              <h3 className="mt-4 font-display text-h2 font-semibold text-text-primary">{t("dubbing.startTitle")}</h3>
+              <p className="mt-2 text-sm leading-6 text-text-tertiary">{t("dubbing.startDesc")}</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button type="button" onClick={chooseSubtitle} className="rounded-2xl border border-border-default bg-surface-card p-4 text-left transition hover:border-brand/25 hover:bg-surface-overlay">
+                <span className="flex items-center gap-2 text-sm font-semibold text-text-primary"><FileText size={17} className="text-brand" /> {t("dubbing.chooseSubtitle")}</span>
+                <span className="mt-2 block break-all text-xs leading-5 text-text-tertiary">{subtitlePath || t("dubbing.subtitleRequired")}</span>
+              </button>
+              <button type="button" onClick={chooseVideo} className="rounded-2xl border border-border-default bg-surface-card p-4 text-left transition hover:border-brand/25 hover:bg-surface-overlay">
+                <span className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Video size={17} className="text-brand" /> {t("dubbing.chooseVideo")}</span>
+                <span className="mt-2 block break-all text-xs leading-5 text-text-tertiary">{videoPath || t("dubbing.videoOptional")}</span>
+              </button>
+            </div>
+            <div className="flex justify-center">
+              <Button type="button" variant="primary" size="lg" onClick={createSession} disabled={!subtitlePath || creating}>
+                {creating ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                {creating ? t("dubbing.creating") : t("dubbing.createSession")}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : (
+        <>
+          {session.source_changed && (
+            <div className="rounded-2xl border border-warning/25 bg-warning/10 px-4 py-3 text-sm leading-6 text-warning">
+              <AlertTriangle size={16} className="mr-2 inline" /> {t("dubbing.sourceChanged")}
+            </div>
+          )}
+
+          <Card className="p-5">
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.72fr)]">
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="success"><HardDrive size={12} className="mr-1" /> {t("dubbing.localBadge")}</Badge>
+                  <Badge variant="warning"><Cloud size={12} className="mr-1" /> {t("dubbing.cloudBadge")}</Badge>
+                  <span className="text-xs text-text-tertiary">{t("dubbing.engineSeparation")}</span>
+                </div>
+                <label className="block space-y-1.5 text-sm font-medium text-text-secondary">
+                  <span>{t("dubbing.engine")}</span>
+                  <Select value={engineValue} onChange={(event) => changeEngine(event.target.value)}>
+                    <option value="">{t("dubbing.chooseEngine")}</option>
+                    {readyModels.length > 0 && (
+                      <optgroup label={t("dubbing.localEngines")}>
+                        {readyModels.map((model) => <option key={model.id} value={`local:${model.id}`}>{model.name}</option>)}
+                      </optgroup>
+                    )}
+                    {providers.length > 0 && (
+                      <optgroup label={t("dubbing.cloudEngines")}>
+                        {providers.map((provider) => <option key={provider.id} value={`cloud:${provider.id}`}>{provider.name}</option>)}
+                      </optgroup>
+                    )}
+                  </Select>
+                </label>
+
+                {!engineValue && (
+                  <button type="button" onClick={() => navigate("/models")} className="text-sm font-semibold text-brand underline underline-offset-4">
+                    {t("dubbing.configureEngine")}
+                  </button>
+                )}
+
+                {selectedLocalModel && !selectedLocalModel.clone_only ? (
+                  <label className="block space-y-1.5 text-sm font-medium text-text-secondary">
+                    <span>{t("dubbing.voice")}</span>
+                    <Select value={voice} onChange={(event) => setVoice(event.target.value)}>
+                      {selectedLocalModel.voices.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                    </Select>
+                  </label>
+                ) : selectedProvider ? (
+                  <label className="block space-y-1.5 text-sm font-medium text-text-secondary">
+                    <span>{t("dubbing.voice")}</span>
+                    <Input value={voice} onChange={(event) => setVoice(event.target.value)} placeholder={selectedProvider.voice} />
+                  </label>
+                ) : null}
+
+                {selectedLocalModel?.clone_only && (
+                  <div className="space-y-3 rounded-2xl border border-brand/15 bg-brand/5 p-4">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-text-primary"><WandSparkles size={16} className="text-brand" /> {t("dubbing.cloneConfig")}</div>
+                    <div className="flex gap-2">
+                      <Input value={referenceAudio} readOnly placeholder={t("dubbing.referenceAudio")} />
+                      <Button type="button" variant="secondary" size="sm" onClick={chooseReference}><FolderOpen size={14} /> {t("common.browse")}</Button>
+                    </div>
+                    <Textarea value={referenceText} onChange={(event) => setReferenceText(event.target.value)} rows={3} placeholder={t("dubbing.referenceText")} />
+                    <label className="block space-y-1.5 text-xs font-medium text-text-secondary">
+                      <span>{t("dubbing.cloneQuality")}</span>
+                      <Select value={cloneQuality} onChange={(event) => setCloneQuality(event.target.value as "standard" | "high")}>
+                        <option value="standard">{t("dubbing.cloneStandard")}</option>
+                        <option value="high">{t("dubbing.cloneHigh")}</option>
+                      </Select>
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <label className="block space-y-2 text-sm font-medium text-text-secondary">
+                  <span className="flex items-center justify-between"><span>{t("dubbing.globalSpeed")}</span><span className="font-mono text-brand">{globalSpeed.toFixed(2)}×</span></span>
+                  <input type="range" min="0.5" max="2" step="0.05" value={globalSpeed} onChange={(event) => setGlobalSpeed(Number(event.target.value))} className="w-full accent-brand" />
+                </label>
+                <div className="rounded-2xl border border-border-subtle bg-surface-overlay p-4 text-xs leading-5 text-text-tertiary">
+                  <p className="flex items-start gap-2"><Gauge size={15} className="mt-0.5 shrink-0 text-brand" /> {t("dubbing.alignmentDesc")}</p>
+                  <p className="mt-2 flex items-start gap-2"><AudioLines size={15} className="mt-0.5 shrink-0 text-brand" /> {t("dubbing.overlapDesc")}</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-xl bg-surface-overlay p-3"><div className="font-display text-lg font-semibold text-text-primary">{session.cues.length}</div><div className="text-xs text-text-tertiary">{t("dubbing.total")}</div></div>
+                  <div className="rounded-xl bg-success/10 p-3"><div className="font-display text-lg font-semibold text-success">{doneCount}</div><div className="text-xs text-text-tertiary">{t("dubbing.readyCount")}</div></div>
+                  <div className="rounded-xl bg-warning/10 p-3"><div className="font-display text-lg font-semibold text-warning">{overlongCount + failedCount}</div><div className="text-xs text-text-tertiary">{t("dubbing.attention")}</div></div>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <div className="sticky top-3 z-20 rounded-[1.3rem] border border-white/40 bg-surface-card/90 p-3 shadow-lg backdrop-blur-xl">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-text-primary">{session.subtitle_path}</p>
+                <p className="mt-0.5 text-xs text-text-tertiary">{t("dubbing.persisted", { id: session.id.slice(0, 8) })}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {batchRunning ? (
+                  <Button type="button" variant="danger" size="sm" onClick={cancelGeneration}><Pause size={14} /> {t("dubbing.cancelBatch")}</Button>
+                ) : (
+                  <Button type="button" variant="primary" size="sm" onClick={generateBatch} disabled={!engineValue || activeGenerationId !== null}><Play size={14} /> {t("dubbing.generatePending")}</Button>
+                )}
+                <Button type="button" variant="secondary" size="sm" onClick={exportAudio} disabled={!canExport || exporting || activeGenerationId !== null}>
+                  {exporting ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} {t("dubbing.export")}
+                </Button>
+              </div>
+            </div>
+            {batchRunning && <div className="mt-3"><Progress value={batchProgress} /></div>}
+          </div>
+
+          <div className="space-y-3">
+            {session.cues.map((cue) => (
+              <CueCard
+                key={cue.index}
+                cue={cue}
+                active={activeCueIndex === cue.index}
+                disabled={batchRunning || exporting || activeGenerationId !== null}
+                onGenerate={() => generateSingle(cue.index)}
+                onAccept={() => acceptOverflow(cue.index)}
+                t={t}
+              />
+            ))}
+          </div>
+
+          {session.output_path && (
+            <Card className="flex flex-col gap-3 border-success/20 bg-success/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0"><p className="flex items-center gap-2 text-sm font-semibold text-success"><CheckCircle2 size={16} /> {t("dubbing.outputReady")}</p><p className="mt-1 truncate font-mono text-xs text-text-tertiary">{session.output_path}</p></div>
+              <Button type="button" variant="secondary" size="sm" onClick={() => revealItemInDir(session.output_path!)}><FolderOpen size={14} /> {t("dubbing.revealOutput")}</Button>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CueCard({
+  cue,
+  active,
+  disabled,
+  onGenerate,
+  onAccept,
+  t,
+}: {
+  cue: DubbingCue;
+  active: boolean;
+  disabled: boolean;
+  onGenerate: () => void;
+  onAccept: () => void;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const status = {
+    pending: { label: t("dubbing.statusPending"), className: "text-text-tertiary", icon: Clock3 },
+    synthesizing: { label: t("dubbing.statusSynthesizing"), className: "text-brand", icon: LoaderCircle },
+    ready: { label: t("dubbing.statusReady"), className: "text-success", icon: CheckCircle2 },
+    overlong: { label: t("dubbing.statusOverlong"), className: "text-warning", icon: AlertTriangle },
+    accepted: { label: t("dubbing.statusAccepted"), className: "text-success", icon: CheckCircle2 },
+    failed: { label: t("dubbing.statusFailed"), className: "text-danger", icon: AlertTriangle },
+  }[cue.status];
+  const Icon = status.icon;
+  const audioUrl = cue.wav_path ? fileAssetUrl(cue.wav_path) : "";
+
+  return (
+    <Card className={`p-4 ${active ? "border-brand/30 shadow-brand-glow" : ""}`}>
+      <div className="grid gap-4 lg:grid-cols-[5.5rem_minmax(0,1fr)_18rem] lg:items-center">
+        <div>
+          <div className="font-display text-lg font-semibold text-text-primary">#{cue.index + 1}</div>
+          <div className="mt-1 font-mono text-[11px] leading-5 text-text-tertiary">{formatTime(cue.start_ms)}<br />{formatTime(cue.end_ms)}</div>
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium leading-6 text-text-primary">{cue.text}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
+            <span className={`inline-flex items-center gap-1 font-semibold ${status.className}`}><Icon size={13} className={cue.status === "synthesizing" ? "animate-spin" : ""} /> {status.label}</span>
+            <span>{t("dubbing.slot", { duration: (cue.slot_ms / 1000).toFixed(2) })}</span>
+            {cue.synthesized_ms !== null && <span>{t("dubbing.audioDuration", { duration: (cue.synthesized_ms / 1000).toFixed(2) })}</span>}
+            {cue.ratio !== null && <span>{t("dubbing.ratio", { ratio: cue.ratio.toFixed(2) })}</span>}
+            {cue.overlap && <Badge variant="warning">{t("dubbing.overlap")}</Badge>}
+          </div>
+          {cue.error && <p className="mt-2 text-xs leading-5 text-danger">{cue.error}</p>}
+        </div>
+        <div className="flex flex-col items-stretch gap-2 lg:items-end">
+          {audioUrl && <audio controls preload="none" src={audioUrl} className="h-9 w-full max-w-[17rem]" />}
+          <div className="flex flex-wrap justify-end gap-2">
+            {cue.status === "overlong" && (
+              <Button type="button" variant="secondary" size="sm" onClick={onAccept} disabled={disabled}>
+                <Gauge size={14} /> {t("dubbing.acceptSpeed")}
+              </Button>
+            )}
+            <Button type="button" variant={cue.status === "pending" || cue.status === "failed" ? "primary" : "secondary"} size="sm" onClick={onGenerate} disabled={disabled}>
+              {active ? <LoaderCircle size={14} className="animate-spin" /> : <Volume2 size={14} />}
+              {cue.wav_path ? t("dubbing.regenerate") : t("dubbing.generate")}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
