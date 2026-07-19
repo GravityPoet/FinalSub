@@ -247,6 +247,13 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSelectParakeetModelsPath = async () => {
+    const selected = await openDialog({ directory: true });
+    if (typeof selected === "string") {
+      update("parakeet_models_path", selected);
+    }
+  };
+
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true);
     try {
@@ -370,6 +377,23 @@ export default function SettingsPage() {
                 </span>
                 <Button
                   onClick={handleSelectModelsPath}
+                  variant="secondary"
+                  size="sm"
+                >
+                  {t("settings.change")}
+                </Button>
+              </div>
+            </SettingRow>
+            <SettingRow
+              label={t("settings.parakeetStorageLabel")}
+              description={t("settings.parakeetStorageDesc")}
+            >
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
+                <span className="min-w-0 max-w-full truncate rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2 font-mono text-sm text-text-secondary sm:max-w-[420px]">
+                  {settings.parakeet_models_path}
+                </span>
+                <Button
+                  onClick={handleSelectParakeetModelsPath}
                   variant="secondary"
                   size="sm"
                 >

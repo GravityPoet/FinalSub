@@ -107,6 +107,7 @@ export default function ModelsPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<AsrModelInfo | null>(null);
   const [modelsPath, setModelsPath] = useState("~/Tools/Local-LLM/whisper-models");
+  const [parakeetModelsPath, setParakeetModelsPath] = useState("~/Tools/Local-LLM/parakeet-models");
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   const engineLabel = (engineId: string): string => {
@@ -129,6 +130,7 @@ export default function ModelsPage() {
       .then(([nextModels, settings]) => {
         setModels(nextModels);
         setModelsPath(settings.models_path);
+        setParakeetModelsPath(settings.parakeet_models_path);
       })
       .catch((err) => setMessage({ type: "err", text: `${t("models.scanFailed")}${err}` }))
       .finally(() => setLoading(false));
@@ -491,6 +493,7 @@ export default function ModelsPage() {
 
       <div className="mt-8 space-y-1.5 text-sm leading-6 text-text-tertiary">
         <p>{t("models.pathInfo")}{modelsPath}</p>
+        <p>{t("models.parakeetPathInfo")}{parakeetModelsPath}</p>
         <p>{t("models.pathDesc")}</p>
         <p>{t("models.parakeetDesc")}</p>
       </div>

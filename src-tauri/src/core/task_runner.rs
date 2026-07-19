@@ -7,7 +7,7 @@ use tauri::Manager;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, RwLock};
 
-use crate::commands::{resolve_sidecar, whisper_models_dir};
+use crate::commands::{parakeet_models_dir, resolve_sidecar, whisper_models_dir};
 use crate::core::asr::cloud::{parse_protocol, CloudAsrConfig, CloudAsrEngine};
 use crate::core::asr::parakeet::ParakeetNativeEngine;
 use crate::core::asr::sherpa_native::{SherpaNativeEngine, SherpaNativeKind};
@@ -467,7 +467,7 @@ async fn run_task_impl(
                     Box::new(WhisperCppEngine::new(whisper_bin, models_dir, options))
                 }
                 "parakeet-mlx" => {
-                    let models_dir = whisper_models_dir(&app_config_dir)?;
+                    let models_dir = parakeet_models_dir(&app_config_dir)?;
                     Box::new(ParakeetNativeEngine::new(models_dir))
                 }
                 "sensevoice" => {
