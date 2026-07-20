@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 ASR、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、语言感知的配音时长预控与复测、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、统一存储根目录与引擎覆盖来源可视化、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；当前主要差距收敛到付费账号真实 E2E、独立 worker 和跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
+FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 ASR、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、语言感知的配音时长预控与复测、视频联动与安全写回的可恢复配音会话、独立 TTS worker 崩溃隔离、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、统一存储根目录与引擎覆盖来源可视化、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；当前主要差距收敛到付费账号真实 E2E、本地 TTS 可配置多进程并行和跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -117,7 +117,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 时间轴对齐 | 🟣 | CJK/拉丁混排估时、会话级语速校准、四档合成前预控、Kokoro/VITS 至多一次免费重合成、ZipVoice/云端本地 `atempo` 兜底均已接入；ElevenLabs 因 1.2× 服务端上限不虚报预控，云端不会为对齐重复计费。综合倍率超过 1.5× 时工作台与流水线统一停在人工处理，并可从任务卡直达原会话后续跑；真实 FFmpeg WAV 时长夹具已验证 |
 | 会话恢复 | 🟢 | 每行完成即原子保存；崩溃时 synthesizing → pending，单个 WAV 丢失只回退对应行，源字幕改变/消失可见 |
 | 输出模式 | 🟢 | 配音工作台可按原始 start_ms 多路混合并导出 WAV/MP3；视频合成页可继续做替换、sidechain ducking 混音或双轨 MKV |
-| 引擎进程隔离 | 🟠 | 有取消、响应/输入上限与更新安装阻断；本地 TTS 仍在主 Rust 进程，尚无独立 worker 崩溃隔离 |
+| 引擎进程隔离 | 🟢 | 本地 TTS 复用 FinalSub 自身二进制的私有 worker 模式，以独立 PID 常驻并在子进程内缓存最多两个模型；主进程只通过 64 KB 上限的逐行 JSON 协议通信，启动先做版本/PID 握手。取消会终止 worker 并清理临时 WAV，崩溃只让当前行失败、下一次请求自动重建；删除/切换模型目录与安装更新前主动停止 worker。真实进程测试已验证 PID 隔离、畸形消息恢复、强杀不带崩父进程和替代 worker 重启 |
 
 ## 6. 视频合成与媒体封装
 
@@ -178,13 +178,13 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 ## 11. 新鲜验证（2026-07-21）
 
-- SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设与云声音复刻。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC 与豆包声音复刻主链路；本轮进一步补齐语言感知估时、会话校准、合成前预控、一次本地重合成、云端不重复计费的后处理和 1.5× 持久人工闸门。当前差距项为独立 worker、付费账号 E2E 与跨平台真实安装验收。
+- SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设、云声音复刻与 TTS worker。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC、豆包声音复刻主链路，以及语言感知估时、会话校准、合成前预控、一次本地重合成、云端不重复计费的后处理、1.5× 持久人工闸门和独立 TTS worker 崩溃隔离。当前差距项为本地 TTS 可配置 1–3 路多进程并行、付费账号 E2E 与跨平台真实安装验收。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- 全量 `cargo test --lib` 为 318 passed / 0 failed / 8 ignored（326 项）；新增覆盖混合媒体/字幕发现、配对字幕任务持久化、跳过 ASR、语言感知估时、四档预控、一次本地重合成、云端单次计费、服务商速度边界、1.5× 红线、校准边界、人工处理续跑与真实 FFmpeg WAV 时长收敛，并保留统一存储根目录跟随、逐引擎覆盖、Unicode 路径和已有 Parakeet 目录无需下载的扫描闭环。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1,449 项且键集合一致、duplicate 0。
+- 全量 `cargo test --lib` 为 322 passed / 0 failed / 8 ignored（330 项）；独立进程集成测试另有 2/2 通过，覆盖 worker PID 隔离、协议握手、畸形/超大消息恢复、强杀不带崩父进程与替代进程重启。其余新增覆盖混合媒体/字幕发现、配对字幕任务持久化、跳过 ASR、语言感知估时、四档预控、一次本地重合成、云端单次计费、服务商速度边界、1.5× 红线、校准边界、人工处理续跑与真实 FFmpeg WAV 时长收敛，并保留统一存储根目录跟随、逐引擎覆盖、Unicode 路径和已有 Parakeet 目录无需下载的扫描闭环。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1,449 项且键集合一致、duplicate 0。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
 - 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；首次引导缩为右上角非阻塞卡片且关闭按钮可点击。折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体与同名字幕后自动显示 `1 已配对 · 0 将转录`，模型下载提示消失且任务可直接开始；手动选择 ASR 后模型前置条件立即恢复，切换任务类型不丢媒体或配对。配音工作台在 1200×700 与 390×844 下显示估时、首轮/最终速度及自动/人工动作标签，无横向溢出；任务会话 URL 在清空本地最近会话后仍能恢复指定配音会话。控制台 0 error / 0 warning。设置页与模型页均显示统一根目录、四类实际解析路径和来源徽标，切换根目录后 Parakeet 派生路径即时更新；模型页本地/云端分区与“无需下载模型”说明可见。
-- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与真实运行路径唯一通过，构建目录残留 `.app` 为 0。最新 DMG SHA-256 `89156eb3137309959bf530bb6a0440258ab0a897491cd90b41632a93a3bef1f9`；本轮安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260721-042900/FinalSub.app.zip`，`unzip -tq` 通过。
+- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、真实运行路径与单窗口通过，构建目录残留 `.app` 为 0。正式安装包内主程序以私有 worker 参数返回独立 PID `41544`，与 GUI PID `40927` 分离并可优雅退出。最新 DMG SHA-256 `6693ef999d75d300643abb44558cf81c4214f88340145fee9e7a9724f0350a52`；本轮安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260721-045508/FinalSub.app.zip`，`unzip -tq` 通过。
 - 真实 Universal 应用 UI：新建任务页的 Parakeet Native 显示“本地运行 / 已就绪”；模型管理页显示“本地模型 / 云端服务”分区、Parakeet 已安装，并实际展示 `~/Tools/Local-LLM/parakeet-models`、统一根目录 `~/Tools/Local-LLM`、TTS 与临时目录的解析结果，确认不会因本地模型存在而触发重复下载。
 
 ## 12. 新鲜验证（2026-07-19）
@@ -214,5 +214,5 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 4. Linux Secret Service 后端已配置，但尚缺真实 Linux 桌面会话的密钥存取 E2E。
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-7. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛与人工红线续跑已交付；仍缺真实本地 TTS 模型音质 E2E、ElevenLabs/豆包付费账号 smoke test、A/B 音色比较和独立 worker。
-8. 统一阶段编排、批准后自动进入配音/compose、provider 感知的显式 AI thinking 控制与可复用字幕样式预设已交付；仍缺独立 worker、付费云服务 E2E 和跨平台 runner 的真实安装验收。
+7. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛、人工红线续跑与独立 worker 已交付；仍缺真实本地 TTS 模型音质 E2E、ElevenLabs/豆包付费账号 smoke test、A/B 音色比较和可配置 1–3 路本地多进程并行。
+8. 统一阶段编排、批准后自动进入配音/compose、provider 感知的显式 AI thinking 控制、可复用字幕样式预设与本地 TTS 崩溃隔离已交付；仍缺付费云服务 E2E 和跨平台 runner 的真实安装验收。

@@ -16,7 +16,7 @@ const MAX_REFERENCE_TEXT_BYTES: usize = 4_000;
 const MAX_REFERENCE_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REFERENCE_DURATION_MS: u64 = 30_000;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalTtsSynthesisRequest {
     pub model_id: String,
     pub text: String,

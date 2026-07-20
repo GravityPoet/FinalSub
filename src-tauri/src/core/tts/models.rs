@@ -611,6 +611,35 @@ pub(crate) fn resolve_ready_model(app_config_dir: &Path, model_id: &str) -> Resu
     Ok(ReadyTtsModel { spec, path })
 }
 
+pub(crate) fn resolve_ready_model_at_path(
+    model_id: &str,
+    model_path: &str,
+) -> Result<ReadyTtsModel> {
+    let spec = find_spec(model_id)?;
+    let trimmed = model_path.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return Err(FinalSubError::Validation("TTS worker 模型路径无效".into()));
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(FinalSubError::Validation(
+            "TTS worker 模型路径必须是存在的绝对目录".into(),
+        ));
+    }
+    let missing = missing_files(&spec, &path);
+    if !missing.is_empty() {
+        return Err(FinalSubError::Validation(format!(
+            "{} 模型不完整，缺少：{}",
+            spec.name,
+            missing.join("、")
+        )));
+    }
+    Ok(ReadyTtsModel {
+        spec,
+        path: path.canonicalize()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,6 +705,19 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("缺少"));
+    }
+
+    #[test]
+    fn worker_model_resolution_revalidates_the_exact_directory() {
+        let model_root = TempDir::new().unwrap();
+        let spec = find_spec("vits-zh-aishell3").unwrap();
+        materialize(&spec, model_root.path());
+
+        let ready = resolve_ready_model_at_path(spec.id, model_root.path().to_str().unwrap())
+            .expect("complete absolute model path");
+        assert_eq!(ready.spec.id, spec.id);
+        assert_eq!(ready.path, model_root.path().canonicalize().unwrap());
+        assert!(resolve_ready_model_at_path(spec.id, "relative/model").is_err());
     }
 
     #[test]

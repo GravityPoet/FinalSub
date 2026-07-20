@@ -18,7 +18,7 @@ pub struct AppState {
     pub burn_controls:
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     pub tts_controls: Arc<RwLock<std::collections::HashMap<String, Arc<AtomicBool>>>>,
-    pub tts_engines: crate::core::tts::TtsEngineCache,
+    pub(crate) tts_worker: crate::core::tts::TtsWorkerManager,
     pub voice_profiles: Arc<RwLock<std::collections::HashMap<String, VoiceProfile>>>,
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
@@ -66,7 +66,7 @@ impl AppState {
             tts_model_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             burn_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            tts_engines: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            tts_worker: crate::core::tts::TtsWorkerManager::default(),
             voice_profiles: Arc::new(RwLock::new(voice_profiles)),
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,
