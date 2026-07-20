@@ -219,6 +219,20 @@ select {
   background-clip: padding-box;
 }
 
+.sidebar-nav-collapsed {
+  scrollbar-gutter: stable both-edges;
+}
+
+@supports not (scrollbar-gutter: stable) {
+  .sidebar-nav-collapsed {
+    scrollbar-width: none;
+  }
+
+  .sidebar-nav-collapsed::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @layer components {
   .app-frame {
     position: relative;

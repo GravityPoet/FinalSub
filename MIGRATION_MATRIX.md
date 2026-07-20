@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出与配音复用；当前主要差距收敛到云声音克隆、独立 worker、翻译模型的显式思考开关与更完整的样式预设，因此仍不笼统宣称所有边界均已全面超越。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出与配音复用；当前主要差距收敛到云声音克隆、独立 worker 与更完整的样式预设，因此仍不笼统宣称所有边界均已全面超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -99,6 +99,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 动态 JSON Schema | 🟢 | 按当前批次 ID 锁定 required keys，顶层和 `{src,tr}` 均禁止额外字段；OpenAI/Ollama/Gemini 原生格式，自动 `json_schema → json_object → disabled` 降级 |
 | 回显锚定与错位检测 | 🟢 | 默认要求 `{src,tr}`；原文规范化后按 0.75 相似度识别漏行、串行、合并与错位，可按 provider 关闭 |
 | 分级定点补翻 | 🟢 | 大面积异常整批重试一次；其余问题行带前后各 2 条上下文最多补翻 3 轮；未解决行写入显式失败标记并由校对页识别 |
+| AI 思考控制 | 🟢 | 默认主动关闭，按 Qwen/DashScope、SiliconFlow、火山、Ollama、Gemini、GPT-5 与 o1/o3/o4 映射服务商参数；DeepSeek/未知网关保守不注入，自定义 body 优先；参数被拒后自动去参重试并按 endpoint/model 做会话缓存，Qwen3 必要时追加 `/no_think`；测试结果显示实际状态，纯思考模型给出可见提示 |
 | 代理 | 🟢 | HTTP(S) proxy 配置与连通性探测 |
 | 商业服务真实 E2E | 🟡 | 本地签名/请求边界测试已覆盖；正式上线前仍需真实账号逐项 smoke test |
 
@@ -175,13 +176,13 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 ## 11. 新鲜验证（2026-07-20）
 
-- SmartSub 上游审计已更新到 `25f89e352bbdf3f56a8bfab400aa6717541b25c3`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物与 AI thinking control。FinalSub 本轮补齐统一阶段编排、双审核闸门、批准后自动续跑和交付目标向导；显式思考开关、云声音克隆和独立 worker 仍保留为差距项。
+- SmartSub 上游审计已更新到 `25f89e352bbdf3f56a8bfab400aa6717541b25c3`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物与 AI thinking control。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导和服务商感知的显式思考控制；云声音克隆、独立 worker 与多套样式预设仍保留为差距项。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- 全量 `cargo test --lib` 为 285 passed / 0 failed / 8 ignored；新增覆盖目标阶段排序与序列化、旧任务兼容、错误/运行阶段恢复、审核批准后续跑、仅翻译禁用媒体阶段、TTS/compose 依赖、视频/时轴字幕输入边界和目标配方往返。`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check`、`git diff --check` 与 `npm run build` 通过。
+- 全量 `cargo test --lib` 为 290 passed / 0 failed / 8 ignored；新增覆盖 provider 参数映射、自定义参数优先级、Qwen3 软回退、响应元数据检测，以及服务端拒绝参数后的去参重试与 endpoint/model 会话缓存。`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1266 项且键集合一致。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
-- 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×575 与 390×844 下来源选择和核心模型控制均保持紧凑层级；1200×575 的 ASR 引擎/模型在首屏可见。选择媒体后切换三种任务类型路径始终保留，类型不匹配只给提示，不要求重新上传。字幕/配音/成片目标、TXT 与纯音频依赖警告、阶段轨道、产物链接及“通过并继续”后的配音续跑均已实测，页面无横向溢出，控制台无 error/warning。
-- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，最低系统版本 12.0，deep strict 签名、Spotlight 与运行进程路径唯一通过。DMG SHA-256 `895c945aad0fd0ec54ab5eea7cdb3f2557fefecba5a8ce689e38d54e59a1072a`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-162655/FinalSub.app.zip` 并通过完整性检查。
+- 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×575 与 390×844 下来源选择和核心模型控制均保持紧凑层级；1200×575 的 ASR 引擎/模型在首屏可见。折叠侧栏在导航溢出并滚到底时，Logo、展开按钮、任务动态及首尾导航图标仍共享同一中心线。选择媒体后切换三种任务类型路径始终保留，类型不匹配只给提示，不要求重新上传。翻译页已实测思考开关默认关闭、provider 独立状态、纯思考模型提示与测试结果徽章；字幕/配音/成片目标、TXT 与纯音频依赖警告、阶段轨道、产物链接及“通过并继续”后的配音续跑均已实测，页面无横向溢出，控制台无 error/warning。
+- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名与应用路径唯一通过。DMG SHA-256 `22f5c332105ad8aa3b64112401fdbefcf73193739eb0e1559aa40eb901045fdf`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-201223/FinalSub.app.zip` 并通过完整性检查。
 
 ## 12. 新鲜验证（2026-07-19）
 
@@ -211,4 +212,4 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
 7. 本地/云端 TTS、持久本地音色库、配音会话、视频联动、字幕安全写回与时间轴导出已交付；仍缺真实本地 TTS 模型音质 E2E、豆包付费账号 smoke test、ASR 自动预填/降噪/A-B 音色比较、云声音克隆与独立 worker。
-8. 统一阶段编排与批准后自动进入配音/compose 已交付；仍缺翻译 provider 的显式 AI thinking 控制、多套样式预设、云声音克隆、独立 worker 和跨平台 runner 的真实安装验收。
+8. 统一阶段编排、批准后自动进入配音/compose 与 provider 感知的显式 AI thinking 控制已交付；仍缺多套样式预设、云声音克隆、独立 worker 和跨平台 runner 的真实安装验收。
