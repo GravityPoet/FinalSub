@@ -75,6 +75,8 @@ pub struct Settings {
     pub parakeet_models_path: String,
     #[serde(alias = "maxConcurrentTasks")]
     pub max_concurrent_tasks: u32,
+    #[serde(alias = "preventSleepDuringTasks")]
+    pub prevent_sleep_during_tasks: bool,
     #[serde(alias = "subtitleOutputFormat")]
     pub subtitle_output_format: String,
     #[serde(alias = "sourceLanguage")]
@@ -162,6 +164,7 @@ impl Default for Settings {
             models_path: default_models_path(),
             parakeet_models_path: default_parakeet_models_path(),
             max_concurrent_tasks: 1,
+            prevent_sleep_during_tasks: true,
             subtitle_output_format: "srt".into(),
             source_language: "auto".into(),
             target_language: "zh".into(),

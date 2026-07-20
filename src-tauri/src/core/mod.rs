@@ -4,6 +4,7 @@ pub mod batch;
 pub mod glossary;
 pub mod models;
 pub mod opencc;
+pub mod power_save;
 pub mod recipes;
 pub mod secrets;
 pub mod settings;

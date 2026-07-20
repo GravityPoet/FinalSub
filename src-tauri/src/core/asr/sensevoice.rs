@@ -77,10 +77,11 @@ fn build_cues(
     tokens: &[String],
     timestamps: Option<&[f32]>,
     duration_ms: u64,
+    max_subtitle_chars: i32,
 ) -> Vec<Cue> {
     if let Some(ts) = timestamps {
         if !ts.is_empty() && ts.len() == tokens.len() {
-            let cues = build_cues_from_tokens(tokens, ts, duration_ms);
+            let cues = build_cues_from_tokens(tokens, ts, duration_ms, max_subtitle_chars);
             if !cues.is_empty() {
                 return cues;
             }
@@ -95,12 +96,19 @@ fn build_segment_cues(
     timestamps: Option<&[f32]>,
     segment_start_ms: u64,
     segment_end_ms: u64,
+    max_subtitle_chars: i32,
 ) -> Vec<Cue> {
     if segment_end_ms <= segment_start_ms {
         return Vec::new();
     }
     let duration_ms = segment_end_ms - segment_start_ms;
-    let mut cues = build_cues(raw_text, tokens, timestamps, duration_ms);
+    let mut cues = build_cues(
+        raw_text,
+        tokens,
+        timestamps,
+        duration_ms,
+        max_subtitle_chars,
+    );
     for cue in &mut cues {
         let start = segment_start_ms.saturating_add(cue.start_ms);
         let end = segment_start_ms.saturating_add(cue.end_ms);
@@ -124,7 +132,12 @@ fn ends_sentence(token: &str) -> bool {
 }
 
 /// 基于真实 token 时间戳切分字幕：遇句末标点或累计到约 28 字时断句。
-fn build_cues_from_tokens(tokens: &[String], timestamps: &[f32], duration_ms: u64) -> Vec<Cue> {
+fn build_cues_from_tokens(
+    tokens: &[String],
+    timestamps: &[f32],
+    duration_ms: u64,
+    max_subtitle_chars: i32,
+) -> Vec<Cue> {
     let mut cues = Vec::new();
     let mut cur = String::new();
     let mut cur_start: Option<u64> = None;
@@ -136,12 +149,41 @@ fn build_cues_from_tokens(tokens: &[String], timestamps: &[f32], duration_ms: u6
             continue;
         }
         let start_ms = (timestamps[i].max(0.0) * 1000.0) as u64;
+        let normalized_token = normalize_token(t);
+        if !cur.trim().is_empty() {
+            let mut candidate = cur.clone();
+            candidate.push_str(&normalized_token);
+            if crate::core::subtitle::exceeds_custom_subtitle_width(
+                candidate.trim(),
+                max_subtitle_chars,
+            ) {
+                let start = cur_start.unwrap_or(start_ms);
+                let end = start_ms.max(start + 1);
+                cues.push(Cue {
+                    index: (cues.len() + 1) as u32,
+                    start_ms: start,
+                    end_ms: end,
+                    text: cur.trim().to_string(),
+                });
+                cur.clear();
+                cur_start = Some(end);
+            }
+        }
         if cur_start.is_none() {
             cur_start = Some(start_ms);
         }
-        cur.push_str(&normalize_token(t));
+        cur.push_str(&normalized_token);
 
-        if ends_sentence(t) || cur.chars().filter(|c| !c.is_whitespace()).count() >= 28 {
+        if ends_sentence(t)
+            || crate::core::subtitle::should_break_for_width(
+                cur.trim(),
+                max_subtitle_chars,
+                cur.chars()
+                    .filter(|character| !character.is_whitespace())
+                    .count()
+                    >= 28,
+            )
+        {
             let text = cur.trim().to_string();
             if !text.is_empty() {
                 let start = cur_start.unwrap_or(start_ms);
@@ -267,6 +309,7 @@ impl AsrEngine for SenseVoiceEngine {
         let audio_path = job.audio_path.clone();
         let vad_model_path = self.vad_model_path.clone();
         let language = job.language.clone().unwrap_or_else(|| "auto".to_string());
+        let max_subtitle_chars = job.max_subtitle_chars;
         let worker_progress = progress.clone();
         let worker_cancel = cancel_rx.clone();
 
@@ -341,6 +384,7 @@ impl AsrEngine for SenseVoiceEngine {
                         result.timestamps.as_deref(),
                         segment_start_ms,
                         segment_end_ms,
+                        max_subtitle_chars,
                     );
                     cues.append(&mut segment_cues);
                     let fraction = (segment_index + 1) as f32 / total as f32;
@@ -439,7 +483,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let timestamps = vec![0.0_f32, 0.5, 0.8, 1.0, 2.0, 2.3, 2.6];
-        let cues = build_cues_from_tokens(&tokens, &timestamps, 5000);
+        let cues = build_cues_from_tokens(&tokens, &timestamps, 5000, 0);
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "你好。");
         assert_eq!(cues[0].start_ms, 500); // 首个真实 token "你" 的戳
@@ -451,7 +495,7 @@ mod tests {
     #[test]
     fn build_cues_falls_back_without_timestamps() {
         // 长度不匹配 → 走降级均摊路径，仍产出合法 cue。
-        let cues = build_cues("<|zh|>你好。再见。", &[], None, 4000);
+        let cues = build_cues("<|zh|>你好。再见。", &[], None, 4000, 0);
         assert_eq!(cues.len(), 2);
         assert!(cues.iter().all(|c| c.end_ms > c.start_ms));
         assert_eq!(cues[0].text, "你好。");
@@ -461,7 +505,7 @@ mod tests {
     fn segmented_cues_preserve_vad_offset_and_clamp_to_segment() {
         let tokens = vec!["你".into(), "好".into(), "。".into()];
         let timestamps = [0.2, 0.5, 1.0];
-        let cues = build_segment_cues("你好。", &tokens, Some(&timestamps), 12_000, 14_000);
+        let cues = build_segment_cues("你好。", &tokens, Some(&timestamps), 12_000, 14_000, 0);
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].start_ms, 12_200);
         assert_eq!(cues[0].end_ms, 14_000);
@@ -471,5 +515,29 @@ mod tests {
     #[test]
     fn normalize_token_converts_word_boundary() {
         assert_eq!(normalize_token("\u{2581}hello"), " hello");
+    }
+
+    #[test]
+    fn smart_width_keeps_original_non_whitespace_threshold() {
+        let tokens = (0..20).map(|_| "▁a".to_string()).collect::<Vec<_>>();
+        let timestamps = (0..20).map(|index| index as f32 * 0.2).collect::<Vec<_>>();
+        let cues = build_cues_from_tokens(&tokens, &timestamps, 4_200, 0);
+        assert_eq!(cues.len(), 1);
+    }
+
+    #[test]
+    fn custom_width_splits_on_real_token_time_and_unlimited_keeps_run() {
+        let tokens = ["你", "好", "世", "界", "再", "见"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let timestamps = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+        let custom = build_cues_from_tokens(&tokens, &timestamps, 1_400, 8);
+        assert_eq!(custom.len(), 2);
+        assert_eq!(custom[0].text, "你好世界");
+        assert_eq!(custom[0].end_ms, 800);
+
+        let unlimited = build_cues_from_tokens(&tokens, &timestamps, 1_400, -1);
+        assert_eq!(unlimited.len(), 1);
     }
 }

@@ -31,6 +31,8 @@ pub struct TranscribeJob {
     pub output_path: String,
     pub language: Option<String>,
     pub model: AsrModelRef,
+    #[serde(default)]
+    pub max_subtitle_chars: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

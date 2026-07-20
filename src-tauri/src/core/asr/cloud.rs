@@ -2998,7 +2998,7 @@ fn ends_sentence(text: &str) -> bool {
     })
 }
 
-fn split_text_blocks(text: &str) -> Vec<String> {
+fn split_text_blocks(text: &str, max_subtitle_chars: i32) -> Vec<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return Vec::new();
@@ -3012,7 +3012,13 @@ fn split_text_blocks(text: &str) -> Vec<String> {
                 current.push(' ');
             }
             current.push_str(word);
-            if ends_sentence(word) || current.chars().count() >= max_chars {
+            if ends_sentence(word)
+                || crate::core::subtitle::should_break_for_width(
+                    &current,
+                    max_subtitle_chars,
+                    current.chars().count() >= max_chars,
+                )
+            {
                 blocks.push(std::mem::take(&mut current));
             }
         }
@@ -3025,7 +3031,13 @@ fn split_text_blocks(text: &str) -> Vec<String> {
     let mut current = String::new();
     for character in normalized.chars() {
         current.push(character);
-        if ends_sentence(&current) || current.chars().count() >= max_chars {
+        if ends_sentence(&current)
+            || crate::core::subtitle::should_break_for_width(
+                &current,
+                max_subtitle_chars,
+                current.chars().count() >= max_chars,
+            )
+        {
             blocks.push(std::mem::take(&mut current));
         }
     }
@@ -3035,8 +3047,8 @@ fn split_text_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-fn build_even_cues(text: &str, start_ms: u64, end_ms: u64) -> Vec<Cue> {
-    let blocks = split_text_blocks(text);
+fn build_even_cues(text: &str, start_ms: u64, end_ms: u64, max_subtitle_chars: i32) -> Vec<Cue> {
+    let blocks = split_text_blocks(text, max_subtitle_chars);
     if blocks.is_empty() || end_ms <= start_ms {
         return Vec::new();
     }
@@ -3087,7 +3099,12 @@ fn append_word(text: &mut String, word: &str) {
     text.push_str(word);
 }
 
-fn build_word_cues(words: &[CloudWord], offset_ms: u64, chunk_end_ms: u64) -> Vec<Cue> {
+fn build_word_cues(
+    words: &[CloudWord],
+    offset_ms: u64,
+    chunk_end_ms: u64,
+    max_subtitle_chars: i32,
+) -> Vec<Cue> {
     let mut cues = Vec::new();
     let mut text = String::new();
     let mut start_ms = offset_ms;
@@ -3096,13 +3113,39 @@ fn build_word_cues(words: &[CloudWord], offset_ms: u64, chunk_end_ms: u64) -> Ve
         if !word.start.is_finite() || !word.end.is_finite() || word.end <= word.start {
             continue;
         }
+        let word_start_ms = offset_ms + (word.start.max(0.0) * 1_000.0) as u64;
+        if !text.trim().is_empty() {
+            let mut candidate = text.clone();
+            append_word(&mut candidate, &word.word);
+            if crate::core::subtitle::exceeds_custom_subtitle_width(
+                candidate.trim(),
+                max_subtitle_chars,
+            ) {
+                let normalized = text.trim().to_string();
+                if start_ms < chunk_end_ms {
+                    cues.push(Cue {
+                        index: 0,
+                        start_ms: start_ms.min(chunk_end_ms - 1),
+                        end_ms: end_ms.min(chunk_end_ms).max(start_ms + 1),
+                        text: normalized,
+                    });
+                }
+                text.clear();
+            }
+        }
         if text.is_empty() {
-            start_ms = offset_ms + (word.start.max(0.0) * 1_000.0) as u64;
+            start_ms = word_start_ms;
         }
         append_word(&mut text, &word.word);
         end_ms = offset_ms + (word.end.max(0.0) * 1_000.0) as u64;
         let max_chars = if contains_cjk(&text) { 28 } else { 84 };
-        if ends_sentence(&word.word) || text.chars().count() >= max_chars {
+        if ends_sentence(&word.word)
+            || crate::core::subtitle::should_break_for_width(
+                &text,
+                max_subtitle_chars,
+                text.chars().count() >= max_chars,
+            )
+        {
             let normalized = text.trim().to_string();
             if !normalized.is_empty() && start_ms < chunk_end_ms {
                 cues.push(Cue {
@@ -3127,11 +3170,15 @@ fn build_word_cues(words: &[CloudWord], offset_ms: u64, chunk_end_ms: u64) -> Ve
     cues
 }
 
-fn response_to_cues(response: CloudResponse, range: ChunkRange) -> Vec<Cue> {
+fn response_to_cues(
+    response: CloudResponse,
+    range: ChunkRange,
+    max_subtitle_chars: i32,
+) -> Vec<Cue> {
     let offset_ms = range.start_sample as u64 * 1_000 / SAMPLE_RATE as u64;
     let chunk_end_ms = range.end_sample as u64 * 1_000 / SAMPLE_RATE as u64;
     if !response.words.is_empty() {
-        let cues = build_word_cues(&response.words, offset_ms, chunk_end_ms);
+        let cues = build_word_cues(&response.words, offset_ms, chunk_end_ms, max_subtitle_chars);
         if !cues.is_empty() {
             return cues;
         }
@@ -3152,13 +3199,18 @@ fn response_to_cues(response: CloudResponse, range: ChunkRange) -> Vec<Cue> {
             }
             let bounded_start = start.min(chunk_end_ms.saturating_sub(1));
             let bounded_end = end.min(chunk_end_ms).max(bounded_start + 1);
-            cues.extend(build_even_cues(&segment.text, bounded_start, bounded_end));
+            cues.extend(build_even_cues(
+                &segment.text,
+                bounded_start,
+                bounded_end,
+                max_subtitle_chars,
+            ));
         }
         if !cues.is_empty() {
             return cues;
         }
     }
-    build_even_cues(&response.text, offset_ms, chunk_end_ms)
+    build_even_cues(&response.text, offset_ms, chunk_end_ms, max_subtitle_chars)
 }
 
 fn cancelled(cancel: &Option<tokio::sync::watch::Receiver<bool>>) -> bool {
@@ -3290,7 +3342,7 @@ impl AsrEngine for CloudAsrEngine {
                 request.await
             }
             .map_err(|error| FinalSubError::Validation(format!("云端 ASR 失败：{error}")))?;
-            let mut chunk_cues = response_to_cues(response, range);
+            let mut chunk_cues = response_to_cues(response, range, job.max_subtitle_chars);
             cues.append(&mut chunk_cues);
         }
 
@@ -3699,9 +3751,40 @@ mod tests {
                 start_sample: SAMPLE_RATE as usize * 5,
                 end_sample: SAMPLE_RATE as usize * 9,
             },
+            0,
         );
         assert_eq!(cues.first().unwrap().start_ms, 5_000);
         assert_eq!(cues.last().unwrap().end_ms, 9_000);
+    }
+
+    #[test]
+    fn cloud_word_cues_apply_custom_width_on_provider_timestamps() {
+        let words = vec![
+            CloudWord {
+                word: "Hello".into(),
+                start: 0.0,
+                end: 0.4,
+            },
+            CloudWord {
+                word: "world".into(),
+                start: 0.4,
+                end: 0.8,
+            },
+            CloudWord {
+                word: "again".into(),
+                start: 0.8,
+                end: 1.2,
+            },
+        ];
+        let custom = build_word_cues(&words, 5_000, 7_000, 8);
+        assert_eq!(custom.len(), 3);
+        assert_eq!(custom[0].text, "Hello");
+        assert_eq!(custom[0].end_ms, 5_400);
+        assert!(custom
+            .iter()
+            .all(|cue| crate::core::subtitle::subtitle_visual_width(&cue.text) <= 8));
+        let unlimited = build_word_cues(&words, 5_000, 7_000, -1);
+        assert_eq!(unlimited.len(), 1);
     }
 
     #[test]

@@ -178,6 +178,9 @@ export default function HomePage() {
     useState<TranslationContentMode>("target-only");
   const [outputFormat, setOutputFormat] = useState("srt");
   const [outputName, setOutputName] = useState("");
+  const [maxSubtitleChars, setMaxSubtitleChars] = useState(0);
+  const [customSubtitleChars, setCustomSubtitleChars] = useState(40);
+  const [customSubtitleDraft, setCustomSubtitleDraft] = useState("40");
   const [stripChinesePunctuation, setStripChinesePunctuation] = useState(false);
   const [reviewRequired, setReviewRequired] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -416,6 +419,7 @@ export default function HomePage() {
           output_name: resolvedOutputName,
           strip_chinese_punctuation: stripChinesePunctuation,
           review_required: reviewRequired,
+          max_subtitle_chars: maxSubtitleChars,
         };
       });
       await createTasks(requests);
@@ -498,6 +502,7 @@ export default function HomePage() {
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: false,
+        max_subtitle_chars: 0,
       },
     },
     {
@@ -515,6 +520,7 @@ export default function HomePage() {
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: true,
+        max_subtitle_chars: 0,
       },
     },
     {
@@ -532,6 +538,7 @@ export default function HomePage() {
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: true,
+        max_subtitle_chars: 0,
       },
     },
   ];
@@ -547,6 +554,7 @@ export default function HomePage() {
     output_name: outputName,
     strip_chinese_punctuation: stripChinesePunctuation,
     review_required: reviewRequired,
+    max_subtitle_chars: maxSubtitleChars,
   });
 
   const applyRecipe = (snapshot: TaskRecipeSnapshot, name: string) => {
@@ -606,6 +614,12 @@ export default function HomePage() {
     setOutputName(snapshot.output_name);
     setStripChinesePunctuation(snapshot.strip_chinese_punctuation);
     setReviewRequired(snapshot.review_required);
+    const recipeSubtitleChars = snapshot.max_subtitle_chars ?? 0;
+    setMaxSubtitleChars(recipeSubtitleChars);
+    if (recipeSubtitleChars > 0) {
+      setCustomSubtitleChars(recipeSubtitleChars);
+      setCustomSubtitleDraft(String(recipeSubtitleChars));
+    }
     setError("");
     setRecipeNotice(
       usedFallback
@@ -1093,6 +1107,95 @@ export default function HomePage() {
                 </fieldset>
               )}
 
+              <fieldset className="rounded-[1.05rem] border border-border-subtle bg-surface-overlay/35 p-4">
+                <legend className="sr-only">{t("home.subtitleBreakLabel")}</legend>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-text-primary">{t("home.subtitleBreakLabel")}</p>
+                    <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.subtitleBreakHint")}</p>
+                  </div>
+                  <div className="liquid-control grid shrink-0 grid-cols-3 rounded-xl p-1" role="radiogroup" aria-label={t("home.subtitleBreakLabel")}>
+                    {([
+                      [0, "home.subtitleBreakSmart"],
+                      [-1, "home.subtitleBreakUnlimited"],
+                      [40, "home.subtitleBreakCustom"],
+                    ] as const).map(([value, labelKey]) => {
+                      const isActive = value === 0
+                        ? maxSubtitleChars === 0
+                        : value === -1
+                          ? maxSubtitleChars === -1
+                          : maxSubtitleChars > 0;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          role="radio"
+                          aria-checked={isActive}
+                          tabIndex={isActive ? 0 : -1}
+                          onKeyDown={(event) => {
+                            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                            event.preventDefault();
+                            const modes = [0, -1, 40] as const;
+                            const currentMode = maxSubtitleChars === 0 ? 0 : maxSubtitleChars === -1 ? -1 : 40;
+                            const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+                            const nextIndex = (modes.indexOf(currentMode) + direction + modes.length) % modes.length;
+                            const nextMode = modes[nextIndex];
+                            setMaxSubtitleChars(nextMode === 40 ? customSubtitleChars : nextMode);
+                            const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
+                            requestAnimationFrame(() => radios?.[nextIndex]?.focus());
+                          }}
+                          onClick={() => {
+                            if (value === 40) {
+                              setMaxSubtitleChars(customSubtitleChars);
+                            } else {
+                              setMaxSubtitleChars(value);
+                            }
+                          }}
+                          className={`rounded-lg px-2.5 py-2 text-xs font-semibold transition ${isActive ? "theme-selected text-brand" : "text-text-tertiary hover:text-text-primary"}`}
+                          data-testid={`subtitle-break-${value === 0 ? "smart" : value === -1 ? "unlimited" : "custom"}`}
+                        >
+                          {t(labelKey as "home.subtitleBreakSmart" | "home.subtitleBreakUnlimited" | "home.subtitleBreakCustom")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {maxSubtitleChars > 0 && (
+                  <div className="mt-3 flex items-center gap-2 border-t border-border-subtle pt-3">
+                    <label htmlFor="task-max-subtitle-chars" className="text-xs font-medium text-text-secondary">{t("home.subtitleBreakCustomValue")}</label>
+                    <Input
+                      id="task-max-subtitle-chars"
+                      type="number"
+                      min={8}
+                      max={120}
+                      value={customSubtitleDraft}
+                      onChange={(event) => {
+                        const rawValue = event.target.value;
+                        if (!/^\d{0,3}$/.test(rawValue)) return;
+                        setCustomSubtitleDraft(rawValue);
+                        const parsed = Number(rawValue);
+                        if (Number.isInteger(parsed) && parsed >= 8 && parsed <= 120) {
+                          setCustomSubtitleChars(parsed);
+                          setMaxSubtitleChars(parsed);
+                        }
+                      }}
+                      onBlur={() => {
+                        const parsed = Number(customSubtitleDraft);
+                        const nextValue = Number.isFinite(parsed)
+                          ? Math.min(120, Math.max(8, Math.trunc(parsed)))
+                          : customSubtitleChars;
+                        setCustomSubtitleDraft(String(nextValue));
+                        setCustomSubtitleChars(nextValue);
+                        setMaxSubtitleChars(nextValue);
+                      }}
+                      className="h-9 w-20 text-right"
+                      data-testid="subtitle-break-custom-value"
+                    />
+                    <span className="text-xs text-text-tertiary">{t("home.subtitleBreakUnit")}</span>
+                  </div>
+                )}
+              </fieldset>
+
               <div className="grid gap-4 border-t border-border-subtle pt-6 sm:grid-cols-2">
                 <div>
                   <label htmlFor="task-output-format" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.outputFormat")}</label>
@@ -1183,6 +1286,16 @@ export default function HomePage() {
                 <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryFormat")}</dt>
                   <dd className="font-mono text-sm font-bold uppercase text-brand">{outputFormat}</dd>
+                </div>
+                <div className="system-row">
+                  <dt className="text-xs text-text-tertiary">{t("home.summarySubtitleBreak")}</dt>
+                  <dd className="text-right text-sm font-semibold text-text-primary">
+                    {maxSubtitleChars === 0
+                      ? t("home.subtitleBreakSmart")
+                      : maxSubtitleChars === -1
+                        ? t("home.subtitleBreakUnlimited")
+                        : `${t("home.subtitleBreakCustom")} · ${maxSubtitleChars}`}
+                  </dd>
                 </div>
                 <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryReview")}</dt>

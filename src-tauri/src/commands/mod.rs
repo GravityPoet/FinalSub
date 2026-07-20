@@ -337,6 +337,7 @@ pub async fn synthesize_local_tts(
         }
         controls.insert(generation_id.clone(), cancelled.clone());
     }
+    let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
     let cache = state.tts_engines.clone();
     let joined = tokio::task::spawn_blocking(move || {
         crate::core::tts::synthesize_local(&cache, model, request, cancelled)
@@ -400,6 +401,7 @@ pub async fn synthesize_cloud_tts(
         }
         controls.insert(generation_id.clone(), cancelled.clone());
     }
+    let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
     let result =
         crate::core::tts::synthesize_cloud(&state.app_config_dir, &ffmpeg, request, cancelled)
             .await
@@ -518,6 +520,7 @@ pub async fn synthesize_dubbing_cue(
         }
         controls.insert(generation_id.clone(), cancelled.clone());
     }
+    let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
 
     let prepared = match crate::core::tts::prepare_dubbing_cue(&state.app_config_dir, &request) {
         Ok(prepared) => prepared,
@@ -624,6 +627,7 @@ pub async fn accept_dubbing_overflow(
         }
         controls.insert(generation_id.clone(), cancelled.clone());
     }
+    let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
     let result = crate::core::tts::accept_dubbing_overflow(
         &state.app_config_dir,
         &ffmpeg,
@@ -655,6 +659,7 @@ pub async fn export_dubbing_audio(
         }
         controls.insert(generation_id.clone(), cancelled.clone());
     }
+    let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
     let result = crate::core::tts::export_dubbing_audio(
         &state.app_config_dir,
         &ffmpeg,
@@ -962,6 +967,7 @@ pub struct CreateTaskRequest {
     pub output_name: Option<String>,
     pub strip_chinese_punctuation: Option<bool>,
     pub review_required: Option<bool>,
+    pub max_subtitle_chars: Option<i32>,
 }
 
 fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
@@ -993,6 +999,7 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
     }
 
     let output_format = validate_subtitle_output_format(req.output_format)?;
+    let max_subtitle_chars = validate_max_subtitle_chars(req.max_subtitle_chars)?;
     let output_name = validate_output_name_template(req.output_name)?;
     let translation_content_mode = validate_translation_content_mode(req.translation_content_mode)?;
     let source_language = validate_source_language_for_engine(&engine_id, req.source_language)?;
@@ -1026,6 +1033,7 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
         output_name,
         strip_chinese_punctuation: req.strip_chinese_punctuation.unwrap_or(false),
         review_required: req.review_required.unwrap_or(false),
+        max_subtitle_chars,
     }))
 }
 
@@ -1144,6 +1152,7 @@ pub async fn create_preview_task(
         output_name: None,
         strip_chinese_punctuation: false,
         review_required: false,
+        max_subtitle_chars: 0,
     });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
@@ -1661,6 +1670,7 @@ pub async fn burn_subtitle(
         }
         controls.insert(burn_id.clone(), cancel_tx);
     }
+    let _power_save_lease = state.power_save.acquire(format!("burn:{burn_id}"));
     let video_path_display = req.video_path.clone();
     let mut total_duration_ms: Option<u64> = None;
 
@@ -2130,6 +2140,7 @@ pub async fn transcribe_audio(
         output_path: output_path.to_string_lossy().to_string(),
         language: req.language,
         model: model_ref,
+        max_subtitle_chars: 0,
     };
 
     let track = engine
@@ -2179,6 +2190,7 @@ pub async fn transcribe_parakeet(
         output_path: output_path.to_string_lossy().to_string(),
         language: req.language.or_else(|| Some("en".into())),
         model: model_ref,
+        max_subtitle_chars: 0,
     };
 
     let track = engine
@@ -2487,6 +2499,13 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 }
 
 #[tauri::command]
+pub fn get_power_save_status(
+    state: State<'_, AppState>,
+) -> crate::core::power_save::PowerSaveStatus {
+    state.power_save.status()
+}
+
+#[tauri::command]
 pub fn save_settings_cmd(
     state: State<'_, AppState>,
     new_settings: Settings,
@@ -2494,6 +2513,9 @@ pub fn save_settings_cmd(
     settings::save_settings(&state.app_config_dir, &new_settings).map_err(|e| e.to_string())?;
     // 并发数变更对之后新建的任务生效：保存时重建信号量，在飞任务持旧 permit 不受影响
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    state
+        .power_save
+        .set_enabled(new_settings.prevent_sleep_during_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
 }
@@ -2503,6 +2525,9 @@ pub fn reset_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let new_settings =
         settings::reset_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    state
+        .power_save
+        .set_enabled(new_settings.prevent_sleep_during_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
 }
@@ -2517,6 +2542,9 @@ pub fn import_config(state: State<'_, AppState>, json: String) -> Result<Setting
     let new_settings =
         settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    state
+        .power_save
+        .set_enabled(new_settings.prevent_sleep_during_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
 }
@@ -2544,6 +2572,9 @@ pub fn import_config_from_path(
     let new_settings =
         settings::import_config(&state.app_config_dir, &json).map_err(|e| e.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    state
+        .power_save
+        .set_enabled(new_settings.prevent_sleep_during_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
 }
@@ -2580,6 +2611,9 @@ pub fn import_encrypted_config_from_path(
         settings::import_encrypted_config(&state.app_config_dir, &encrypted, &passphrase)
             .map_err(|error| error.to_string())?;
     update_state_semaphore(&state, new_settings.max_concurrent_tasks);
+    state
+        .power_save
+        .set_enabled(new_settings.prevent_sleep_during_tasks);
     crate::set_telemetry_enabled(new_settings.enable_telemetry);
     Ok(new_settings)
 }
@@ -2779,6 +2813,13 @@ fn validate_subtitle_output_format(raw: Option<String>) -> Result<Option<String>
         "srt" | "vtt" | "txt" | "lrc" | "ass" => Ok(Some(format)),
         _ => Err("Output format only supports srt, vtt, txt, lrc, ass".into()),
     }
+}
+
+fn validate_max_subtitle_chars(raw: Option<i32>) -> Result<i32, String> {
+    let value = raw.unwrap_or(0);
+    crate::core::subtitle::parse_subtitle_length_mode(value)
+        .map(|_| value)
+        .map_err(|error| error.to_string())
 }
 
 fn validate_output_name_template(raw: Option<String>) -> Result<Option<String>, String> {
@@ -3613,6 +3654,20 @@ mod tests {
     }
 
     #[test]
+    fn validate_max_subtitle_chars_enforces_tri_state_range() {
+        for accepted in [-1, 0, 8, 40, 120] {
+            assert_eq!(
+                validate_max_subtitle_chars(Some(accepted)).unwrap(),
+                accepted
+            );
+        }
+        for rejected in [-2, 1, 7, 121] {
+            assert!(validate_max_subtitle_chars(Some(rejected)).is_err());
+        }
+        assert_eq!(validate_max_subtitle_chars(None).unwrap(), 0);
+    }
+
+    #[test]
     fn validate_translate_only_subtitle_extension_matches_picker_formats() {
         for ext in ["srt", "vtt", "ass", "lrc"] {
             let path = PathBuf::from(format!("/tmp/subtitle.{ext}"));
@@ -3799,6 +3854,7 @@ mod tests {
                 output_name: None,
                 strip_chinese_punctuation: false,
                 review_required: true,
+                max_subtitle_chars: 0,
             });
             task.status = TaskStatus::Review;
             task.output_path = Some(format!("/tmp/{name}.srt"));
@@ -3877,6 +3933,7 @@ mod tests {
             output_name: None,
             strip_chinese_punctuation: false,
             review_required: false,
+            max_subtitle_chars: 0,
         });
 
         task.status = TaskStatus::Paused;
@@ -3931,6 +3988,7 @@ mod tests {
             output_name: None,
             strip_chinese_punctuation: false,
             review_required: false,
+            max_subtitle_chars: 0,
         });
         task.status = TaskStatus::Error;
         task.progress = 0.87;

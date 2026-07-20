@@ -1,25 +1,6 @@
-# Third Party Notices
-
-This document details the licensing information and copyrights of third-party open-source components and baseline projects utilized in FinalSub.
-
----
-
-## 1. SmartSub (妙幕)
-
-FinalSub's early architectural design and baseline capabilities were built upon concepts and structures from the open-source project **SmartSub**, which is licensed under the MIT License.
-
-FinalSub uses **keepawake 0.6.0** by Segev Finer to hold native idle-sleep assertions while media work is running. keepawake is licensed under the MIT License; its license is bundled at `src-tauri/licenses/keepawake-LICENSE.txt`.
-
-- **Upstream Project**: [SmartSub](https://github.com/buxuku/SmartSub)
-- **License**: MIT License
-- **Copyright Notice**: Copyright (c) 2024 Lin Xiaodong
-
-### License Text (MIT)
-
-```text
 MIT License
 
-Copyright (c) 2024  Lin Xiaodong
+Copyright (c) 2022 Segev Finer
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -38,4 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```

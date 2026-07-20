@@ -206,7 +206,7 @@ fn contains_cjk(text: &str) -> bool {
     )
 }
 
-fn split_text_blocks(text: &str) -> Vec<String> {
+fn split_text_blocks(text: &str, max_subtitle_chars: i32) -> Vec<String> {
     let normalized = clean_text(text);
     if normalized.is_empty() {
         return Vec::new();
@@ -220,7 +220,13 @@ fn split_text_blocks(text: &str) -> Vec<String> {
                 current.push(' ');
             }
             current.push_str(word);
-            if ends_sentence(word) || current.chars().count() >= max_chars {
+            if ends_sentence(word)
+                || crate::core::subtitle::should_break_for_width(
+                    &current,
+                    max_subtitle_chars,
+                    current.chars().count() >= max_chars,
+                )
+            {
                 blocks.push(std::mem::take(&mut current));
             }
         }
@@ -234,7 +240,13 @@ fn split_text_blocks(text: &str) -> Vec<String> {
     let mut current = String::new();
     for character in normalized.chars() {
         current.push(character);
-        if ends_sentence(&current) || current.chars().count() >= max_chars {
+        if ends_sentence(&current)
+            || crate::core::subtitle::should_break_for_width(
+                &current,
+                max_subtitle_chars,
+                current.chars().count() >= max_chars,
+            )
+        {
             blocks.push(std::mem::take(&mut current));
         }
     }
@@ -244,8 +256,8 @@ fn split_text_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-fn build_even_cues(text: &str, start_ms: u64, end_ms: u64) -> Vec<Cue> {
-    let blocks = split_text_blocks(text);
+fn build_even_cues(text: &str, start_ms: u64, end_ms: u64, max_subtitle_chars: i32) -> Vec<Cue> {
+    let blocks = split_text_blocks(text, max_subtitle_chars);
     if blocks.is_empty() || end_ms <= start_ms {
         return Vec::new();
     }
@@ -319,6 +331,7 @@ fn build_segment_cues(
     timestamps: Option<&[f32]>,
     segment_start_ms: u64,
     segment_end_ms: u64,
+    max_subtitle_chars: i32,
 ) -> Vec<Cue> {
     if let Some(timestamps) = timestamps {
         if !timestamps.is_empty() && timestamps.len() == tokens.len() {
@@ -331,16 +344,40 @@ fn build_segment_cues(
                     continue;
                 }
                 let token_ms = segment_start_ms + (timestamps[index].max(0.0) * 1_000.0) as u64;
+                let normalized_token = normalize_token(token);
+                if !current.trim().is_empty() {
+                    let mut candidate = current.clone();
+                    candidate.push_str(&normalized_token);
+                    if crate::core::subtitle::exceeds_custom_subtitle_width(
+                        candidate.trim(),
+                        max_subtitle_chars,
+                    ) {
+                        push_timestamp_cue(
+                            &mut cues,
+                            &mut current,
+                            cue_start,
+                            token_ms,
+                            segment_end_ms,
+                        );
+                        cue_start = token_ms.min(segment_end_ms.saturating_sub(1));
+                    }
+                }
                 if current.is_empty() {
                     cue_start = token_ms.min(segment_end_ms.saturating_sub(1));
                 }
-                current.push_str(&normalize_token(token));
+                current.push_str(&normalized_token);
                 let next_ms = timestamps
                     .get(index + 1)
                     .map(|value| segment_start_ms + (value.max(0.0) * 1_000.0) as u64)
                     .unwrap_or(segment_end_ms);
                 let max_chars = if contains_cjk(&current) { 28 } else { 84 };
-                if ends_sentence(token) || current.chars().count() >= max_chars {
+                if ends_sentence(token)
+                    || crate::core::subtitle::should_break_for_width(
+                        current.trim(),
+                        max_subtitle_chars,
+                        current.chars().count() >= max_chars,
+                    )
+                {
                     push_timestamp_cue(&mut cues, &mut current, cue_start, next_ms, segment_end_ms);
                 }
             }
@@ -358,7 +395,7 @@ fn build_segment_cues(
             }
         }
     }
-    build_even_cues(text, segment_start_ms, segment_end_ms)
+    build_even_cues(text, segment_start_ms, segment_end_ms, max_subtitle_chars)
 }
 
 #[async_trait]
@@ -428,6 +465,7 @@ impl AsrEngine for SherpaNativeEngine {
         let model_dir = self.model_dir(&job.model);
         let vad_model_path = self.vad_model_path.clone();
         let audio_path = job.audio_path.clone();
+        let max_subtitle_chars = job.max_subtitle_chars;
         let worker_progress = progress.clone();
         let worker_cancel = cancel_rx.clone();
 
@@ -488,6 +526,7 @@ impl AsrEngine for SherpaNativeEngine {
                         result.timestamps.as_deref(),
                         start_ms,
                         end_ms,
+                        max_subtitle_chars,
                     );
                     cues.append(&mut segment_cues);
                     let fraction = (segment_index + 1) as f32 / total as f32;
@@ -603,7 +642,7 @@ mod tests {
     fn segment_cues_preserve_vad_offsets_and_real_token_timestamps() {
         let tokens = vec!["你".into(), "好".into(), "。".into()];
         let timestamps = [0.1, 0.3, 0.5];
-        let cues = build_segment_cues("你好。", &tokens, Some(&timestamps), 5_000, 7_000);
+        let cues = build_segment_cues("你好。", &tokens, Some(&timestamps), 5_000, 7_000, 0);
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].start_ms, 5_100);
         assert_eq!(cues[0].end_ms, 7_000);
@@ -613,13 +652,43 @@ mod tests {
     #[test]
     fn long_unpunctuated_cjk_text_is_split_into_readable_cues() {
         let text = "这是一段没有任何标点但是长度足够长所以需要自动切分成多条字幕避免整段文字覆盖屏幕影响阅读体验的中文文本";
-        let cues = build_even_cues(text, 1_000, 11_000);
+        let cues = build_even_cues(text, 1_000, 11_000, 0);
         assert!(cues.len() >= 2);
         assert_eq!(cues.first().unwrap().start_ms, 1_000);
         assert_eq!(cues.last().unwrap().end_ms, 11_000);
         assert!(cues
             .windows(2)
             .all(|pair| pair[0].end_ms == pair[1].start_ms));
+    }
+
+    #[test]
+    fn custom_width_uses_real_token_boundaries_and_unlimited_keeps_run() {
+        let tokens = vec!["▁Hello".into(), "▁world".into(), "▁again".into()];
+        let timestamps = [0.0, 0.4, 0.8];
+        let custom = build_segment_cues(
+            "Hello world again",
+            &tokens,
+            Some(&timestamps),
+            5_000,
+            6_600,
+            8,
+        );
+        assert_eq!(custom.len(), 3);
+        assert_eq!(custom[0].text, "Hello");
+        assert_eq!(custom[0].end_ms, 5_400);
+        assert!(custom
+            .iter()
+            .all(|cue| crate::core::subtitle::subtitle_visual_width(&cue.text) <= 8));
+
+        let unlimited = build_segment_cues(
+            "Hello world again",
+            &tokens,
+            Some(&timestamps),
+            5_000,
+            6_600,
+            -1,
+        );
+        assert_eq!(unlimited.len(), 1);
     }
 
     #[test]

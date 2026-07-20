@@ -375,6 +375,7 @@ export interface Task {
   output_name: string | null;
   strip_chinese_punctuation: boolean;
   review_required: boolean;
+  max_subtitle_chars: number;
   reviewed_at: string | null;
   progress: number;
   status_message: string;
@@ -590,6 +591,7 @@ export interface CreateTaskRequest {
   output_name?: string;
   strip_chinese_punctuation?: boolean;
   review_required?: boolean;
+  max_subtitle_chars?: number;
 }
 
 export interface TaskRecipeSnapshot {
@@ -603,6 +605,7 @@ export interface TaskRecipeSnapshot {
   output_name: string;
   strip_chinese_punctuation: boolean;
   review_required: boolean;
+  max_subtitle_chars: number;
 }
 
 export interface TaskRecipe {
@@ -908,6 +911,7 @@ export interface Settings {
   models_path: string;
   parakeet_models_path: string;
   max_concurrent_tasks: number;
+  prevent_sleep_during_tasks: boolean;
   subtitle_output_format: string;
   source_language: string;
   target_language: string;
@@ -942,8 +946,19 @@ export interface Settings {
   enable_telemetry: boolean;
 }
 
+export interface PowerSaveStatus {
+  enabled: boolean;
+  active: boolean;
+  active_count: number;
+  last_error: string | null;
+}
+
 export async function getSettings(): Promise<Settings> {
   return invoke("get_settings");
+}
+
+export async function getPowerSaveStatus(): Promise<PowerSaveStatus> {
+  return invoke("get_power_save_status");
 }
 
 export async function saveSettingsCmd(newSettings: Settings): Promise<Settings> {
@@ -1087,6 +1102,7 @@ function createMockSettings(): Settings {
     models_path: "~/Tools/Local-LLM/whisper-models",
     parakeet_models_path: "~/Tools/Local-LLM/parakeet-models",
     max_concurrent_tasks: 2,
+    prevent_sleep_during_tasks: true,
     subtitle_output_format: "srt",
     source_language: "auto",
     target_language: "zh",
@@ -1489,6 +1505,7 @@ function createMockTask(): Task {
     output_name: null,
     strip_chinese_punctuation: false,
     review_required: false,
+    max_subtitle_chars: 0,
     reviewed_at: null,
     progress: 1,
     status_message: "已完成",
@@ -1513,6 +1530,13 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return { name: "FinalSub", version: "1.0.10" } satisfies AppInfo;
     case "get_settings":
       return currentMockSettings();
+    case "get_power_save_status":
+      return {
+        enabled: currentMockSettings().prevent_sleep_during_tasks,
+        active: false,
+        active_count: 0,
+        last_error: null,
+      } satisfies PowerSaveStatus;
     case "reset_settings":
       mockSettingsState = createMockSettings();
       return mockSettingsState;

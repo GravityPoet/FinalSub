@@ -141,6 +141,7 @@ pub fn run() {
             commands::delete_provider_secret,
             commands::get_ffmpeg_version,
             commands::get_settings,
+            commands::get_power_save_status,
             commands::save_settings_cmd,
             commands::reset_settings,
             commands::export_config,

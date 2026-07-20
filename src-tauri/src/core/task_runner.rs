@@ -242,6 +242,10 @@ async fn run_task_impl(
         }
     };
 
+    // 持有并发 permit 的整个生命周期都算作“正在处理”；PowerSaveLease 在任务
+    // 成功、失败、暂停或取消返回时自动释放，Windows 的线程绑定也由独立 worker 保证。
+    let _power_save_lease = state.power_save.acquire(format!("task:{task_id}"));
+
     // 任务正式转入 Running 状态并启动
     {
         let mut task_map = tasks.write().await;
@@ -639,6 +643,7 @@ async fn run_task_impl(
                 output_path: asr_output_path.to_string_lossy().to_string(),
                 language: task.source_language.clone(),
                 model: model_ref,
+                max_subtitle_chars: task.max_subtitle_chars,
             };
 
             let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<ProgressUpdate>(32);
@@ -700,6 +705,21 @@ async fn run_task_impl(
     let mut track = current_track.ok_or_else(|| "未生成或解析到有效字幕轨道".to_string())?;
     if track.is_empty() {
         return Err("未生成或解析到有效字幕轨道".into());
+    }
+    let resplit_stats =
+        crate::core::subtitle::resplit_track_for_width(&mut track, task.max_subtitle_chars)
+            .map_err(|error| format!("字幕断句配置无效：{error}"))?;
+    if resplit_stats.split_cues > 0 {
+        write_task_log(
+            app,
+            &app_config_dir,
+            task_id,
+            &format!(
+                "已按任务宽度拆分 {} 条字幕，{} → {} 条",
+                resplit_stats.split_cues, resplit_stats.original_cues, resplit_stats.final_cues
+            ),
+        )
+        .await;
     }
     let source_track = track.clone();
 

@@ -170,7 +170,13 @@ impl AsrEngine for ParakeetNativeEngine {
             .ok();
 
         let (text, tokens, timestamps, duration_ms) = decoded;
-        let cues = build_cues(&text, &tokens, timestamps.as_deref(), duration_ms);
+        let cues = build_cues(
+            &text,
+            &tokens,
+            timestamps.as_deref(),
+            duration_ms,
+            job.max_subtitle_chars,
+        );
         if cues.is_empty() {
             return Err(FinalSubError::Validation(
                 "Parakeet 未识别到字幕内容。该模型仅适用于英文语音；其他语言请切换 Whisper.cpp 或 SenseVoice。".into(),
@@ -224,6 +230,7 @@ fn build_cues(
     tokens: &[String],
     timestamps: Option<&[f32]>,
     duration_ms: u64,
+    max_subtitle_chars: i32,
 ) -> Vec<Cue> {
     if let Some(timestamps) = timestamps {
         if !timestamps.is_empty() && timestamps.len() == tokens.len() {
@@ -246,14 +253,31 @@ fn build_cues(
                     cue_start = token_ms;
                 }
 
-                text.push_str(&normalize_token(token));
+                let normalized_token = normalize_token(token);
+                if !normalize_spaces(&text).is_empty() {
+                    let mut candidate = text.clone();
+                    candidate.push_str(&normalized_token);
+                    if crate::core::subtitle::exceeds_custom_subtitle_width(
+                        &normalize_spaces(&candidate),
+                        max_subtitle_chars,
+                    ) {
+                        push_cue(&mut cues, &mut text, cue_start, token_ms);
+                        cue_start = token_ms;
+                    }
+                }
+                text.push_str(&normalized_token);
                 previous_token_ms = token_ms;
                 let next_ms = timestamps
                     .get(index + 1)
                     .map(|next| (next.max(0.0) * 1_000.0) as u64)
                     .unwrap_or(duration_ms);
+                let normalized_text = normalize_spaces(&text);
                 let too_long = token_ms.saturating_sub(cue_start) >= 6_000
-                    || normalize_spaces(&text).chars().count() >= 84;
+                    || crate::core::subtitle::should_break_for_width(
+                        &normalized_text,
+                        max_subtitle_chars,
+                        normalized_text.chars().count() >= 84,
+                    );
                 if ends_sentence(token) || too_long {
                     push_cue(&mut cues, &mut text, cue_start, next_ms);
                 }
@@ -267,10 +291,10 @@ fn build_cues(
         }
     }
 
-    build_even_cues(full_text, duration_ms)
+    build_even_cues(full_text, duration_ms, max_subtitle_chars)
 }
 
-fn build_even_cues(full_text: &str, duration_ms: u64) -> Vec<Cue> {
+fn build_even_cues(full_text: &str, duration_ms: u64, max_subtitle_chars: i32) -> Vec<Cue> {
     let normalized = normalize_spaces(full_text);
     if normalized.is_empty() {
         return Vec::new();
@@ -282,7 +306,13 @@ fn build_even_cues(full_text: &str, duration_ms: u64) -> Vec<Cue> {
             current.push(' ');
         }
         current.push_str(word);
-        if ends_sentence(word) || current.chars().count() >= 84 {
+        if ends_sentence(word)
+            || crate::core::subtitle::should_break_for_width(
+                &current,
+                max_subtitle_chars,
+                current.chars().count() >= 84,
+            )
+        {
             blocks.push(std::mem::take(&mut current));
         }
     }
@@ -360,7 +390,13 @@ mod tests {
             "\u{2581}line!".into(),
         ];
         let timestamps = [0.0, 0.4, 1.2, 1.6];
-        let cues = build_cues("Hello world. Next line!", &tokens, Some(&timestamps), 2_200);
+        let cues = build_cues(
+            "Hello world. Next line!",
+            &tokens,
+            Some(&timestamps),
+            2_200,
+            0,
+        );
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "Hello world.");
         assert_eq!(cues[1].text, "Next line!");
@@ -369,9 +405,29 @@ mod tests {
 
     #[test]
     fn text_fallback_still_produces_subtitles() {
-        let cues = build_cues("One sentence. Another sentence!", &[], None, 4_000);
+        let cues = build_cues("One sentence. Another sentence!", &[], None, 4_000, 0);
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].index, 1);
         assert!(cues.iter().all(|cue| cue.end_ms > cue.start_ms));
+    }
+
+    #[test]
+    fn custom_width_uses_token_timestamps_and_unlimited_disables_width_cut() {
+        let tokens = vec![
+            "\u{2581}Hello".into(),
+            "\u{2581}world".into(),
+            "\u{2581}again".into(),
+        ];
+        let timestamps = [0.0, 0.4, 0.8];
+        let custom = build_cues("Hello world again", &tokens, Some(&timestamps), 1_600, 8);
+        assert_eq!(custom.len(), 3);
+        assert_eq!(custom[0].text, "Hello");
+        assert_eq!(custom[0].end_ms, 400);
+        assert!(custom
+            .iter()
+            .all(|cue| crate::core::subtitle::subtitle_visual_width(&cue.text) <= 8));
+
+        let unlimited = build_cues("Hello world again", &tokens, Some(&timestamps), 1_600, -1);
+        assert_eq!(unlimited.len(), 1);
     }
 }
