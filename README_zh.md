@@ -1,14 +1,10 @@
-<p align="center">
-  <a href="./README.md">
-    <img src="https://img.shields.io/badge/%F0%9F%87%BA%F0%9F%87%B8%20English%20Version-English%20Version-blue?style=for-the-badge" alt="English Version">
-  </a>
-</p>
+# 🌐 [Click here to switch to: English Version](./README.md)
 
 <p align="center">
   <img src="./src-tauri/icons/app-icon-source.png" alt="FinalSub Logo" width="120" height="120">
 </p>
 
-<h1 align="center">FinalSub (简体中文)</h1>
+<h1 align="center">FinalSub (中文版)</h1>
 
 <p align="center">
   <strong>彻底告别高昂的云端字幕按分计费！生成完美双语字幕与 AI 语音配音——100% 离线运行，零隐私泄露，完全免费。</strong>
@@ -23,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">🇺🇸 English</a> | 🇨🇳 <strong>简体中文</strong>
+  <a href="./README.md">🇺🇸 English</a> | 🇨🇳 <strong>中文版</strong>
 </p>
 
 ---
