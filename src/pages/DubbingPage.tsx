@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   AudioLines,
@@ -43,6 +43,7 @@ import {
   getDubbingSession,
   listTtsModels,
   listTtsProviders,
+  listVoiceProfiles,
   openDialog,
   revealItemInDir,
   saveDialog,
@@ -55,6 +56,7 @@ import {
   type TtsModelInfo,
   type TtsProviderProfile,
   type TtsVoice,
+  type VoiceProfile,
 } from "../lib/tauri";
 
 const LAST_SESSION_KEY = "finalsub:last-dubbing-session";
@@ -85,8 +87,12 @@ function subtitleExtension(subtitlePath: string): string {
 export default function DubbingPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedVoiceId = searchParams.get("voice") ?? "";
   const [models, setModels] = useState<TtsModelInfo[]>([]);
   const [providers, setProviders] = useState<TtsProviderProfile[]>([]);
+  const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([]);
+  const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState("");
   const [session, setSession] = useState<DubbingSession | null>(null);
   const [subtitlePath, setSubtitlePath] = useState("");
   const [videoPath, setVideoPath] = useState("");
@@ -123,6 +129,10 @@ export default function DubbingPage() {
     if (!engineValue.startsWith("cloud:")) return null;
     return providers.find((provider) => provider.id === engineValue.slice("cloud:".length)) ?? null;
   }, [engineValue, providers]);
+  const selectedVoiceProfile = useMemo(
+    () => voiceProfiles.find((profile) => profile.id === selectedVoiceProfileId) ?? null,
+    [selectedVoiceProfileId, voiceProfiles],
+  );
   const playbackCue = useMemo(
     () => session?.cues.find((cue) => currentTimeMs >= cue.start_ms && currentTimeMs < cue.end_ms) ?? null,
     [currentTimeMs, session],
@@ -143,21 +153,27 @@ export default function DubbingPage() {
     if (local) {
       setEngineValue(`local:${local.id}`);
       setVoice(local.default_voice_id);
-      return;
+      return local;
     }
     const cloud = loadedProviders[0];
     if (cloud) {
       setEngineValue(`cloud:${cloud.id}`);
       setVoice(cloud.voice);
     }
+    return null;
   };
 
   useEffect(() => {
-    Promise.all([listTtsModels(), listTtsProviders()])
-      .then(async ([loadedModels, loadedProviders]) => {
+    Promise.all([listTtsModels(), listTtsProviders(), listVoiceProfiles()])
+      .then(async ([loadedModels, loadedProviders, loadedVoiceProfiles]) => {
         setModels(loadedModels);
         setProviders(loadedProviders);
-        applyDefaultEngine(loadedModels, loadedProviders);
+        setVoiceProfiles(loadedVoiceProfiles);
+        const defaultModel = applyDefaultEngine(loadedModels, loadedProviders);
+        const requestedProfile = requestedVoiceId
+          ? loadedVoiceProfiles.find((profile) => profile.id === requestedVoiceId)
+          : undefined;
+        let restoredConfig = false;
         const previous = localStorage.getItem(LAST_SESSION_KEY);
         if (previous) {
           try {
@@ -166,31 +182,68 @@ export default function DubbingPage() {
             setSubtitlePath(restored.subtitle_path);
             setVideoPath(restored.video_path ?? "");
             if (restored.last_config) {
+              restoredConfig = true;
               const engine = restored.last_config.engine;
               setEngineValue(engine.kind === "local" ? `local:${engine.model_id}` : `cloud:${engine.provider_id}`);
               setVoice(restored.last_config.voice);
               setGlobalSpeed(restored.last_config.global_speed);
               setReferenceAudio(restored.last_config.reference_audio_path ?? "");
               setReferenceText(restored.last_config.reference_text ?? "");
+              const restoredProfile = loadedVoiceProfiles.find(
+                (profile) => profile.reference_audio_path === restored.last_config?.reference_audio_path,
+              );
+              setSelectedVoiceProfileId(restoredProfile?.id ?? "");
               setCloneQuality((restored.last_config.num_steps ?? 4) >= 8 ? "high" : "standard");
             }
           } catch {
             localStorage.removeItem(LAST_SESSION_KEY);
           }
         }
+
+        // An explicit “Use for dubbing” action must win over a restored
+        // session and select a clone-capable local engine automatically.
+        if (requestedProfile) {
+          const cloneModel = loadedModels.find((model) => model.status === "ready" && model.clone_only);
+          if (cloneModel) {
+            setEngineValue(`local:${cloneModel.id}`);
+            setVoice(cloneModel.default_voice_id);
+          } else {
+            setEngineValue("");
+            setVoice("");
+            setSettingsOpen(true);
+            setMessage({ type: "warn", text: t("dubbing.cloneEngineUnavailable") });
+          }
+          setSelectedVoiceProfileId(requestedProfile.id);
+          setReferenceAudio(requestedProfile.reference_audio_path);
+          setReferenceText(requestedProfile.reference_text);
+        } else if (!restoredConfig && defaultModel?.clone_only && loadedVoiceProfiles.length > 0) {
+          const profile = loadedVoiceProfiles[0];
+          setSelectedVoiceProfileId(profile.id);
+          setReferenceAudio(profile.reference_audio_path);
+          setReferenceText(profile.reference_text);
+        }
       })
       .catch((error) => setMessage({ type: "err", text: String(error) }))
       .finally(() => setLoading(false));
-  }, []);
+  }, [requestedVoiceId]);
 
   const changeEngine = (value: string) => {
     setEngineValue(value);
     if (value.startsWith("local:")) {
       const model = models.find((item) => item.id === value.slice("local:".length));
       setVoice(model?.default_voice_id ?? "");
+      if (model?.clone_only && voiceProfiles.length > 0) {
+        const profile = selectedVoiceProfile ?? voiceProfiles[0];
+        setSelectedVoiceProfileId(profile.id);
+        setReferenceAudio(profile.reference_audio_path);
+        setReferenceText(profile.reference_text);
+      } else if (!model?.clone_only) {
+        setSelectedVoiceProfileId("");
+      }
     } else {
       const provider = providers.find((item) => item.id === value.slice("cloud:".length));
       setVoice(provider?.voice ?? "");
+      setSelectedVoiceProfileId("");
     }
     setMessage(null);
   };
@@ -214,9 +267,25 @@ export default function DubbingPage() {
   const chooseReference = async () => {
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: t("dubbing.audioFiles"), extensions: ["wav"] }],
+      filters: [{ name: t("dubbing.audioFiles"), extensions: ["wav", "mp3", "m4a", "flac", "ogg", "opus"] }],
     });
-    if (typeof selected === "string") setReferenceAudio(selected);
+    if (typeof selected === "string") {
+      setSelectedVoiceProfileId("");
+      setReferenceAudio(selected);
+      setReferenceText("");
+    }
+  };
+
+  const selectVoiceProfile = (profileId: string) => {
+    setSelectedVoiceProfileId(profileId);
+    const profile = voiceProfiles.find((item) => item.id === profileId);
+    if (profile) {
+      setReferenceAudio(profile.reference_audio_path);
+      setReferenceText(profile.reference_text);
+    } else {
+      setReferenceAudio("");
+      setReferenceText("");
+    }
   };
 
   const createSession = async () => {
@@ -542,7 +611,7 @@ export default function DubbingPage() {
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Gauge size={16} className="text-brand" /> {t("dubbing.settingsTitle")}</p>
                   <p className="mt-1 truncate text-xs text-text-tertiary">
-                    {selectedLocalModel?.name ?? selectedProvider?.name ?? t("dubbing.chooseEngine")} · {voice || "—"} · {globalSpeed.toFixed(2)}×
+                    {selectedLocalModel?.name ?? selectedProvider?.name ?? t("dubbing.chooseEngine")} · {(selectedVoiceProfile?.name ?? voice) || "—"} · {globalSpeed.toFixed(2)}×
                   </p>
                 </div>
                 <span className="flex shrink-0 items-center gap-2 text-xs font-semibold text-brand">
@@ -597,11 +666,28 @@ export default function DubbingPage() {
                 {selectedLocalModel?.clone_only && (
                   <div className="space-y-3 rounded-2xl border border-brand/15 bg-brand/5 p-4">
                     <div className="flex items-center gap-2 text-sm font-semibold text-text-primary"><WandSparkles size={16} className="text-brand" /> {t("dubbing.cloneConfig")}</div>
-                    <div className="flex gap-2">
-                      <Input value={referenceAudio} readOnly placeholder={t("dubbing.referenceAudio")} />
-                      <Button type="button" variant="secondary" size="sm" onClick={chooseReference}><FolderOpen size={14} /> {t("common.browse")}</Button>
-                    </div>
-                    <Textarea value={referenceText} onChange={(event) => setReferenceText(event.target.value)} rows={3} placeholder={t("dubbing.referenceText")} />
+                    <label className="block space-y-1.5 text-xs font-semibold text-text-secondary">
+                      <span>{t("dubbing.myVoice")}</span>
+                      <Select value={selectedVoiceProfileId} onChange={(event) => selectVoiceProfile(event.target.value)}>
+                        <option value="">{t("dubbing.temporaryReference")}</option>
+                        {voiceProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.language === "zh" ? t("language.zh") : t("language.en")}</option>)}
+                      </Select>
+                    </label>
+                    {selectedVoiceProfile ? (
+                      <div className="flex items-start gap-2 rounded-xl border border-success/20 bg-success/10 px-3 py-2.5 text-xs leading-5 text-success">
+                        <CheckCircle2 size={15} className="mt-0.5 shrink-0" />
+                        <span className="min-w-0"><strong className="block">{t("dubbing.savedVoiceActive", { name: selectedVoiceProfile.name })}</strong>{t("dubbing.savedVoiceHint", { seconds: (selectedVoiceProfile.quality.duration_ms / 1000).toFixed(1) })}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex gap-2">
+                          <Input value={referenceAudio} readOnly placeholder={t("dubbing.referenceAudio")} />
+                          <Button type="button" variant="secondary" size="sm" onClick={chooseReference}><FolderOpen size={14} /> {t("common.browse")}</Button>
+                        </div>
+                        <Textarea value={referenceText} onChange={(event) => setReferenceText(event.target.value)} rows={3} placeholder={t("dubbing.referenceText")} />
+                        <button type="button" onClick={() => navigate("/voices")} className="text-left text-xs font-semibold text-brand underline underline-offset-4">{t("dubbing.createSavedVoice")}</button>
+                      </>
+                    )}
                     <label className="block space-y-1.5 text-xs font-medium text-text-secondary">
                       <span>{t("dubbing.cloneQuality")}</span>
                       <Select value={cloneQuality} onChange={(event) => setCloneQuality(event.target.value as "standard" | "high")}>

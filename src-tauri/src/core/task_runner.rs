@@ -69,7 +69,7 @@ enum AlignedBatchResult {
     Failed(String),
 }
 
-fn sherpa_vad_model_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn sherpa_vad_model_path(app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
     {
         let _ = app;

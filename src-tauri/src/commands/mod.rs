@@ -19,9 +19,10 @@ use crate::core::task_queue::{
 };
 use crate::core::translation::{self, TranslationProvider};
 use crate::core::tts::{
-    CloudTtsSynthesisRequest, DubbingEngineSelection, DubbingSession, DubbingSubtitleWriteResult,
-    DubbingSynthesizeCueRequest, LocalTtsSynthesisRequest, SaveTtsProviderRequest, TtsModelInfo,
-    TtsProviderProfile, TtsSynthesisResult, UpdateDubbingCueRequest,
+    CloudTtsSynthesisRequest, CreateVoiceProfileRequest, DubbingEngineSelection, DubbingSession,
+    DubbingSubtitleWriteResult, DubbingSynthesizeCueRequest, LocalTtsSynthesisRequest,
+    PrepareVoiceSampleRequest, PreparedVoiceSample, SaveTtsProviderRequest, TtsModelInfo,
+    TtsProviderProfile, TtsSynthesisResult, UpdateDubbingCueRequest, VoiceProfile, VoiceSourceInfo,
 };
 use crate::state::AppState;
 use tauri_plugin_fs::FsExt;
@@ -188,6 +189,140 @@ pub fn scan_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, Stri
 #[tauri::command]
 pub fn list_tts_models(state: State<'_, AppState>) -> Result<Vec<TtsModelInfo>, String> {
     crate::core::tts::list_models(&state.app_config_dir).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_voice_profiles(state: State<'_, AppState>) -> Result<Vec<VoiceProfile>, String> {
+    let profiles = state.voice_profiles.read().await;
+    let mut values = profiles.values().cloned().collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(values)
+}
+
+#[tauri::command]
+pub async fn inspect_voice_source(
+    app: AppHandle,
+    source_path: String,
+) -> Result<VoiceSourceInfo, String> {
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    crate::core::tts::inspect_voice_source(&ffmpeg_path, &source_path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn save_voice_recording(
+    state: State<'_, AppState>,
+    data_base64: String,
+    mime_type: String,
+) -> Result<String, String> {
+    crate::core::tts::save_voice_recording(&state.app_config_dir, &data_base64, &mime_type)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn discard_voice_recording(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    crate::core::tts::discard_voice_recording(&state.app_config_dir, &path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn prepare_voice_sample(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: PrepareVoiceSampleRequest,
+) -> Result<PreparedVoiceSample, String> {
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let vad_model_path = crate::core::task_runner::sherpa_vad_model_path(&app)?;
+    let _power_save_lease = state.power_save.acquire("voice-profile:prepare");
+    crate::core::tts::prepare_voice_sample(
+        &state.app_config_dir,
+        &ffmpeg_path,
+        &vad_model_path,
+        request,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn discard_prepared_voice_sample(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<(), String> {
+    crate::core::tts::discard_prepared_voice_sample(&state.app_config_dir, &token)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_voice_profile(
+    state: State<'_, AppState>,
+    request: CreateVoiceProfileRequest,
+) -> Result<VoiceProfile, String> {
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::create_voice_profile(&state.app_config_dir, &mut profiles, request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_voice_profile(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<VoiceProfile, String> {
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::rename_voice_profile(&state.app_config_dir, &mut profiles, &id, &name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_voice_profile(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::remove_voice_profile(&state.app_config_dir, &mut profiles, &id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn export_voice_profile(
+    state: State<'_, AppState>,
+    id: String,
+    output_path: String,
+) -> Result<String, String> {
+    let profile = state
+        .voice_profiles
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "音色不存在".to_string())?;
+    crate::core::tts::export_voice_profile(&profile, &output_path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn import_voice_profile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input_path: String,
+) -> Result<VoiceProfile, String> {
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let vad_model_path = crate::core::task_runner::sherpa_vad_model_path(&app)?;
+    let _power_save_lease = state.power_save.acquire("voice-profile:import");
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::import_voice_profile(
+        &state.app_config_dir,
+        &ffmpeg_path,
+        &vad_model_path,
+        &mut profiles,
+        &input_path,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// 将固定清单中的 TTS 工件下载到受管目录。下载只接受内置模型 ID，

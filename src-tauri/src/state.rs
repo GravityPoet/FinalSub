@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 
 use crate::core::models::AsrModelInfo;
 use crate::core::task_queue::Task;
+use crate::core::tts::VoiceProfile;
 
 pub struct AppState {
     pub tasks: Arc<RwLock<std::collections::HashMap<String, Task>>>,
@@ -18,6 +19,7 @@ pub struct AppState {
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     pub tts_controls: Arc<RwLock<std::collections::HashMap<String, Arc<AtomicBool>>>>,
     pub tts_engines: crate::core::tts::TtsEngineCache,
+    pub voice_profiles: Arc<RwLock<std::collections::HashMap<String, VoiceProfile>>>,
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
     pub task_semaphore: Arc<std::sync::Mutex<Arc<tokio::sync::Semaphore>>>,
@@ -42,13 +44,17 @@ impl AppState {
         if dirty {
             let _ = crate::core::task_queue::save_tasks(&app_config_dir, &loaded_tasks);
         }
-        let settings = crate::core::settings::load_settings(&app_config_dir).unwrap_or_default();
+        let settings = crate::core::settings::load_settings(&app_config_dir)
+            .unwrap_or_else(|_| crate::core::settings::system_default_settings());
         let initial_limit = settings.max_concurrent_tasks.max(1) as usize;
         let task_semaphore = Arc::new(std::sync::Mutex::new(Arc::new(
             tokio::sync::Semaphore::new(initial_limit),
         )));
         let power_save =
             crate::core::power_save::PowerSaveManager::new(settings.prevent_sleep_during_tasks);
+        crate::core::tts::cleanup_voice_profile_transients(&app_config_dir);
+        let voice_profiles =
+            crate::core::tts::load_voice_profiles(&app_config_dir).unwrap_or_default();
 
         Self {
             tasks: Arc::new(RwLock::new(loaded_tasks)),
@@ -58,6 +64,7 @@ impl AppState {
             burn_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_engines: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            voice_profiles: Arc::new(RwLock::new(voice_profiles)),
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,
             task_semaphore,
