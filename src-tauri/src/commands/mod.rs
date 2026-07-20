@@ -22,10 +22,12 @@ use crate::core::task_queue::{
 };
 use crate::core::translation::{self, TranslationProvider};
 use crate::core::tts::{
-    CloudTtsSynthesisRequest, CreateVoiceProfileRequest, DubbingEngineSelection, DubbingSession,
-    DubbingSubtitleWriteResult, DubbingSynthesizeCueRequest, LocalTtsSynthesisRequest,
-    PrepareVoiceSampleRequest, PreparedVoiceSample, SaveTtsProviderRequest, TtsModelInfo,
-    TtsProviderProfile, TtsSynthesisResult, UpdateDubbingCueRequest, VoiceProfile, VoiceSourceInfo,
+    CloudTtsSynthesisRequest, CloudVoiceSummary, CreateCloudVoiceProfileRequest,
+    CreateVoiceProfileRequest, DubbingEngineSelection, DubbingSession, DubbingSubtitleWriteResult,
+    DubbingSynthesizeCueRequest, LinkCloudVoiceProfileRequest, LocalTtsSynthesisRequest,
+    PrepareVoiceSampleRequest, PreparedVoiceSample, RetrainCloudVoiceProfileRequest,
+    SaveTtsProviderRequest, TtsModelInfo, TtsProviderProfile, TtsSynthesisResult,
+    UpdateDubbingCueRequest, VoiceProfile, VoiceSourceInfo, VoiceSubtitleCue,
 };
 use crate::state::AppState;
 use tauri_plugin_fs::FsExt;
@@ -223,6 +225,11 @@ pub async fn inspect_voice_source(
 }
 
 #[tauri::command]
+pub fn list_voice_subtitle_cues(source_path: String) -> Result<Vec<VoiceSubtitleCue>, String> {
+    crate::core::tts::list_voice_subtitle_cues(&source_path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn save_voice_recording(
     state: State<'_, AppState>,
     data_base64: String,
@@ -273,6 +280,78 @@ pub async fn create_voice_profile(
 ) -> Result<VoiceProfile, String> {
     let mut profiles = state.voice_profiles.write().await;
     crate::core::tts::create_voice_profile(&state.app_config_dir, &mut profiles, request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_cloud_voice_profile(
+    state: State<'_, AppState>,
+    request: CreateCloudVoiceProfileRequest,
+) -> Result<VoiceProfile, String> {
+    let _power_save_lease = state.power_save.acquire("voice-profile:cloud-create");
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::create_cloud_voice_profile(&state.app_config_dir, &mut profiles, request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_cloud_voices(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<CloudVoiceSummary>, String> {
+    crate::core::tts::list_cloud_voices(&state.app_config_dir, &provider_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn link_cloud_voice_profile(
+    state: State<'_, AppState>,
+    request: LinkCloudVoiceProfileRequest,
+) -> Result<VoiceProfile, String> {
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::link_cloud_voice_profile(&state.app_config_dir, &mut profiles, request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_cloud_voice_remote(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let profile = state
+        .voice_profiles
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "音色不存在".to_string())?;
+    crate::core::tts::delete_cloud_voice_remote(&state.app_config_dir, &profile)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn refresh_cloud_voice_status(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<VoiceProfile, String> {
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::refresh_cloud_voice_status(&state.app_config_dir, &mut profiles, &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn retrain_cloud_voice_profile(
+    state: State<'_, AppState>,
+    request: RetrainCloudVoiceProfileRequest,
+) -> Result<VoiceProfile, String> {
+    let _power_save_lease = state.power_save.acquire("voice-profile:cloud-retrain");
+    let mut profiles = state.voice_profiles.write().await;
+    crate::core::tts::retrain_cloud_voice_profile(&state.app_config_dir, &mut profiles, request)
+        .await
         .map_err(|error| error.to_string())
 }
 
@@ -521,7 +600,19 @@ pub fn save_tts_provider(
 }
 
 #[tauri::command]
-pub fn delete_tts_provider(state: State<'_, AppState>, provider_id: String) -> Result<(), String> {
+pub async fn delete_tts_provider(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<(), String> {
+    if state
+        .voice_profiles
+        .read()
+        .await
+        .values()
+        .any(|profile| profile.provider_id.as_deref() == Some(provider_id.as_str()))
+    {
+        return Err("该在线 TTS 实例仍被云端音色使用；请先在“我的音色”中解绑这些音色".into());
+    }
     crate::core::tts::delete_provider(&state.app_config_dir, &provider_id)
         .map_err(|error| error.to_string())
 }

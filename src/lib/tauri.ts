@@ -244,6 +244,8 @@ export interface TtsModelInfo {
 }
 
 export type VoiceProfileLanguage = "zh" | "en";
+export type VoiceCloneEngine = "zipvoice" | "elevenlabs" | "volcengine";
+export type CloudVoiceStatus = "training" | "ready" | "failed";
 export type VoiceQualityVerdict = "good" | "fair" | "poor";
 export type VoiceQualityIssueCode =
   | "no-speech"
@@ -278,12 +280,16 @@ export interface VoiceQualityReport {
 export interface VoiceProfile {
   id: string;
   name: string;
-  engine: "zipvoice";
+  engine: VoiceCloneEngine;
   language: VoiceProfileLanguage;
   reference_audio_path: string;
   reference_text: string;
   source_name: string | null;
   quality: VoiceQualityReport;
+  provider_id: string | null;
+  cloud_voice_id: string | null;
+  cloud_status: CloudVoiceStatus | null;
+  volc_training_times_left: number | null;
   created_at: number;
 }
 
@@ -294,10 +300,18 @@ export interface VoiceSourceInfo {
   default_selection_ms: number;
 }
 
+export interface VoiceSubtitleCue {
+  start_ms: number;
+  end_ms: number;
+  text: string;
+}
+
 export interface PrepareVoiceSampleRequest {
   source_path: string;
   start_ms: number;
   duration_ms: number;
+  engine: VoiceCloneEngine;
+  local_denoise?: boolean;
 }
 
 export interface PreparedVoiceSample {
@@ -308,6 +322,7 @@ export interface PreparedVoiceSample {
   duration_ms: number;
   quality: VoiceQualityReport;
   can_create: boolean;
+  engine: VoiceCloneEngine;
 }
 
 export interface CreateVoiceProfileRequest {
@@ -316,6 +331,39 @@ export interface CreateVoiceProfileRequest {
   language: VoiceProfileLanguage;
   reference_text: string;
   consent: boolean;
+}
+
+export interface CreateCloudVoiceProfileRequest {
+  token: string;
+  name: string;
+  language: VoiceProfileLanguage;
+  provider_id: string;
+  consent: boolean;
+  upload_consent: boolean;
+  voice_id: string;
+  remove_background_noise: boolean;
+  enable_mss: boolean;
+}
+
+export interface LinkCloudVoiceProfileRequest {
+  name: string;
+  language: VoiceProfileLanguage;
+  provider_id: string;
+  voice_id: string;
+  consent: boolean;
+}
+
+export interface RetrainCloudVoiceProfileRequest {
+  id: string;
+  remove_background_noise: boolean;
+  enable_mss: boolean;
+}
+
+export interface CloudVoiceSummary {
+  provider_id: string;
+  voice_id: string;
+  name: string;
+  engine: "elevenlabs";
 }
 
 export interface LocalTtsSynthesisRequest {
@@ -601,6 +649,10 @@ export async function inspectVoiceSource(sourcePath: string): Promise<VoiceSourc
   return invoke("inspect_voice_source", { sourcePath });
 }
 
+export async function listVoiceSubtitleCues(sourcePath: string): Promise<VoiceSubtitleCue[]> {
+  return invoke("list_voice_subtitle_cues", { sourcePath });
+}
+
 export async function saveVoiceRecording(dataBase64: string, mimeType: string): Promise<string> {
   return invoke("save_voice_recording", { dataBase64, mimeType });
 }
@@ -623,6 +675,36 @@ export async function createVoiceProfile(
   request: CreateVoiceProfileRequest,
 ): Promise<VoiceProfile> {
   return invoke("create_voice_profile", { request });
+}
+
+export async function createCloudVoiceProfile(
+  request: CreateCloudVoiceProfileRequest,
+): Promise<VoiceProfile> {
+  return invoke("create_cloud_voice_profile", { request });
+}
+
+export async function listCloudVoices(providerId: string): Promise<CloudVoiceSummary[]> {
+  return invoke("list_cloud_voices", { providerId });
+}
+
+export async function linkCloudVoiceProfile(
+  request: LinkCloudVoiceProfileRequest,
+): Promise<VoiceProfile> {
+  return invoke("link_cloud_voice_profile", { request });
+}
+
+export async function deleteCloudVoiceRemote(id: string): Promise<void> {
+  return invoke("delete_cloud_voice_remote", { id });
+}
+
+export async function refreshCloudVoiceStatus(id: string): Promise<VoiceProfile> {
+  return invoke("refresh_cloud_voice_status", { id });
+}
+
+export async function retrainCloudVoiceProfile(
+  request: RetrainCloudVoiceProfileRequest,
+): Promise<VoiceProfile> {
+  return invoke("retrain_cloud_voice_profile", { request });
 }
 
 export async function renameVoiceProfile(id: string, name: string): Promise<VoiceProfile> {
@@ -1465,6 +1547,19 @@ let mockTtsProvidersState: TtsProviderProfile[] = [
   },
   {
     id: "00000000-0000-4000-8000-000000000302",
+    name: "ElevenLabs Voice",
+    protocol: "elevenlabs",
+    endpoint: "https://api.elevenlabs.io/v1",
+    model: "eleven_multilingual_v2",
+    voice: "21m00Tcm4TlvDq8ikWAM",
+    region: "",
+    resource_id: "",
+    text_upload_consent: true,
+    timeout_seconds: 120,
+    request_concurrency: 1,
+  },
+  {
+    id: "00000000-0000-4000-8000-000000000304",
     name: "Edge TTS 免费试用",
     protocol: "edge-tts",
     endpoint: "",
@@ -1512,7 +1607,26 @@ let mockVoiceProfilesState: VoiceProfile[] = [
     reference_text: "欢迎使用 FinalSub，这是我的本地旁白音色。",
     source_name: "narrator.wav",
     quality: mockVoiceQuality,
+    provider_id: null,
+    cloud_voice_id: null,
+    cloud_status: null,
+    volc_training_times_left: null,
     created_at: Date.now() - 86_400_000,
+  },
+  {
+    id: "00000000-0000-4000-8000-000000000502",
+    name: "Cloud Narrator",
+    engine: "elevenlabs",
+    language: "en",
+    reference_audio_path: "/Users/example/FinalSub/voices/cloud-narrator/ref.wav",
+    reference_text: "",
+    source_name: null,
+    quality: { ...mockVoiceQuality, duration_ms: 0, speech_ms: 0 },
+    provider_id: "00000000-0000-4000-8000-000000000302",
+    cloud_voice_id: "mock-cloud-voice-1",
+    cloud_status: "ready",
+    volc_training_times_left: null,
+    created_at: Date.now() - 43_200_000,
   },
 ];
 let mockDubbingSessionState: DubbingSession | null = null;
@@ -1947,6 +2061,13 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
         duration_ms: 42600,
         default_selection_ms: 8000,
       } satisfies VoiceSourceInfo;
+    case "list_voice_subtitle_cues":
+      return [
+        { start_ms: 1000, end_ms: 3100, text: "欢迎来到 FinalSub 配音工作台。" },
+        { start_ms: 3300, end_ms: 5200, text: "从字幕行直接选择参考片段。" },
+        { start_ms: 5450, end_ms: 7350, text: "相邻台词会自动吸收到推荐时长。" },
+        { start_ms: 12000, end_ms: 14000, text: "间隔过大时不会跨越语境。" },
+      ] satisfies VoiceSubtitleCue[];
     case "save_voice_recording":
       return "/Users/example/Library/Application Support/FinalSub/tts/voice-profiles/.recordings/mock.webm";
     case "discard_voice_recording":
@@ -1962,6 +2083,7 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
         duration_ms: request?.duration_ms ?? 8000,
         quality: mockVoiceQuality,
         can_create: true,
+        engine: request?.engine ?? "zipvoice",
       } satisfies PreparedVoiceSample;
     }
     case "create_voice_profile": {
@@ -1976,10 +2098,90 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
         reference_text: request.reference_text,
         source_name: "voice.wav",
         quality: mockVoiceQuality,
+        provider_id: null,
+        cloud_voice_id: null,
+        cloud_status: null,
+        volc_training_times_left: null,
         created_at: Date.now(),
       };
       mockVoiceProfilesState = [profile, ...mockVoiceProfilesState];
       return profile;
+    }
+    case "create_cloud_voice_profile": {
+      const request = args?.request as CreateCloudVoiceProfileRequest | undefined;
+      if (!request) throw new Error("Cloud voice profile request is missing");
+      const provider = mockTtsProvidersState.find((item) => item.id === request.provider_id);
+      const engine = provider?.protocol === "volcengine" ? "volcengine" : "elevenlabs";
+      const profile: VoiceProfile = {
+        id: `00000000-0000-4000-8000-${String(mockVoiceProfilesState.length + 702).padStart(12, "0")}`,
+        name: request.name,
+        engine,
+        language: request.language,
+        reference_audio_path: "/Users/example/FinalSub/voices/cloud/ref.wav",
+        reference_text: "",
+        source_name: "voice.wav",
+        quality: mockVoiceQuality,
+        provider_id: request.provider_id,
+        cloud_voice_id: engine === "volcengine" ? request.voice_id : `mock-cloud-${mockVoiceProfilesState.length + 1}`,
+        cloud_status: engine === "volcengine" ? "training" : "ready",
+        volc_training_times_left: engine === "volcengine" ? 2 : null,
+        created_at: Date.now(),
+      };
+      mockVoiceProfilesState = [profile, ...mockVoiceProfilesState];
+      return profile;
+    }
+    case "list_cloud_voices":
+      return [
+        {
+          provider_id: String(args?.providerId ?? "00000000-0000-4000-8000-000000000302"),
+          voice_id: "mock-cloud-recovered-1",
+          name: "Recovered Studio Voice",
+          engine: "elevenlabs",
+        },
+      ] satisfies CloudVoiceSummary[];
+    case "link_cloud_voice_profile": {
+      const request = args?.request as LinkCloudVoiceProfileRequest | undefined;
+      if (!request) throw new Error("Cloud voice link request is missing");
+      const provider = mockTtsProvidersState.find((item) => item.id === request.provider_id);
+      const profile: VoiceProfile = {
+        id: `00000000-0000-4000-8000-${String(mockVoiceProfilesState.length + 802).padStart(12, "0")}`,
+        name: request.name,
+        engine: provider?.protocol === "volcengine" ? "volcengine" : "elevenlabs",
+        language: request.language,
+        reference_audio_path: "",
+        reference_text: "",
+        source_name: null,
+        quality: { ...mockVoiceQuality, duration_ms: 0, speech_ms: 0 },
+        provider_id: request.provider_id,
+        cloud_voice_id: request.voice_id,
+        cloud_status: "ready",
+        volc_training_times_left: null,
+        created_at: Date.now(),
+      };
+      mockVoiceProfilesState = [profile, ...mockVoiceProfilesState];
+      return profile;
+    }
+    case "delete_cloud_voice_remote":
+      return undefined;
+    case "refresh_cloud_voice_status": {
+      const id = String(args?.id ?? "");
+      const profile = mockVoiceProfilesState.find((item) => item.id === id);
+      if (!profile) throw new Error("Voice profile not found");
+      const refreshed = {
+        ...profile,
+        cloud_status: "ready" as const,
+        volc_training_times_left: profile.engine === "volcengine" ? 1 : null,
+      };
+      mockVoiceProfilesState = mockVoiceProfilesState.map((item) => item.id === id ? refreshed : item);
+      return refreshed;
+    }
+    case "retrain_cloud_voice_profile": {
+      const request = args?.request as RetrainCloudVoiceProfileRequest | undefined;
+      const profile = mockVoiceProfilesState.find((item) => item.id === request?.id);
+      if (!profile || profile.engine !== "volcengine") throw new Error("Doubao voice profile not found");
+      const retrained = { ...profile, cloud_status: "training" as const, volc_training_times_left: 1 };
+      mockVoiceProfilesState = mockVoiceProfilesState.map((item) => item.id === profile.id ? retrained : item);
+      return retrained;
     }
     case "rename_voice_profile": {
       const id = String(args?.id ?? "");

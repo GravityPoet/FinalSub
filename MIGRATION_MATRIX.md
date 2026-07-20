@@ -1,6 +1,6 @@
 # FinalSub 功能与发布矩阵
 
-更新时间：2026-07-20
+更新时间：2026-07-21
 对照基线：SmartSub `dd38b8aecd8934b7218b8973131a88fd9826c208`（2026-07-20 当前上游 HEAD）与 FinalSub 当前主线的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
 
 状态定义：
@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出与配音复用；当前主要差距收敛到云声音克隆、独立 worker 和跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；当前主要差距收敛到付费账号真实 E2E、独立 worker 和跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -29,7 +29,7 @@ FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动�
 | 字幕校对 | 🟢 | 视频联动、导入/检测、编辑、拆分、合并、时间偏移、搜索替换、撤销重做、保存及错误恢复 |
 | 视频合成工作台 | 🟢 | 硬/软字幕结构分离，进度、取消、10 秒预览、字体/描边/阴影/背景、九宫格位置、CRF、编码 preset 与配音音轨组合 |
 | 软字幕 / MKV 封装 | 🟢 | stream-copy 视频与原声，SRT/VTT 转 SubRip、ASS 保留 ASS，语言/标题 metadata 与默认轨道 disposition；双音轨自动使用 MKV |
-| TTS 配音与声音克隆 | 🟠 | 已交付本地/云端引擎、逐行/批量工作台、会话恢复、时间轴对齐、持久本地音色库及 WAV/MP3 导出；云声音克隆仍缺，见第 5 节 |
+| TTS 配音与声音克隆 | 🟠 | 已交付本地/云端引擎、逐行/批量工作台、会话恢复、时间轴对齐、本地/云端音色资产及 WAV/MP3 导出；云端创建、找回、状态刷新、训练次数、一键重训和 `.svoice` 迁移已接入，仍需付费账号真实 E2E，见第 5 节 |
 | 端到端流水线 | 🟢 | 新建任务按交付目标生成转录 → 翻译 → 字幕校对 → 配音 → 配音确认 → 成片 → 完成阶段；状态与产物路径持久化，批准、暂停、重启和重试均从当前阶段续跑 |
 | 配置导入导出 | 🟢 | 普通 JSON 与 Argon2id + XChaCha20-Poly1305 加密格式；Keychain 密钥不导出 |
 
@@ -110,8 +110,8 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 行级配音工作台 | 🟢 | 已支持字幕导入、视频播放/行级跳转/当前行高亮、逐行/批量生成、试听、重生成、状态统计和恢复；可修改单行文本、覆盖或恢复全局音色，编辑后只失效对应 WAV 与最终导出；可另存字幕副本，并仅在源文件哈希未改变时创建精确备份后原子写回 |
 | 本地 TTS | 🟠 | Rust 原生 sherpa-onnx 已接 Kokoro 103 音色、VITS 174 说话人与 ZipVoice；支持受管下载、取消、最多两个引擎缓存和原子 WAV，但缺真实本地 TTS 模型音质 E2E 与多进程并行 |
 | 云 TTS | 🟡 | OpenAI-compatible、Azure Speech、ElevenLabs、火山引擎豆包语音 V3 与 Edge TTS 免费试用档已接入；豆包固定官方 Endpoint、资源版本/音色路由、chunked base64 PCM、Keychain 与定向错误诊断已有协议测试，仍缺付费账号真实 E2E；Edge 无需 Key 但不承诺稳定性 |
-| 本地声音克隆 | 🟠 | ZipVoice 已支持参考 WAV + 逐字文本、4/8 步质量档与 30 秒/64 MB 边界；已补录音/文件导入、质量确认、持久音色实体、`.svoice` v1 导入导出和工作台复用，仍缺 ASR 预填、选段降噪、A/B 对比 |
-| 云声音克隆 | 🔴 | 火山声音复刻 2.0、ElevenLabs IVC、云端音色找回 |
+| 本地声音克隆 | 🟠 | ZipVoice 已支持参考 WAV + 逐字文本、4/8 步质量档与 30 秒/64 MB 边界；已补录音/文件导入、质量确认、持久音色实体、`.svoice` v1 导入导出、字幕行选段、参考文本预填和 FFmpeg `afftdn` 本地降噪兜底，仍缺真实模型音质 E2E 与 A/B 音色比较 |
+| 云声音克隆 | 🟡 | ElevenLabs 使用当前 IVC `POST /v1/voices/add`、V2 cloned 列表、找回与可选远端删除；豆包声音复刻 2.0 支持 S_ 槽位上传训练、V3 状态查询 + V1 回退、状态刷新、剩余训练次数、一键重训、手动找回、`.svoice` 导入导出和 `seed-icl-2.0` 合成路由。训练凭据与 TTS API Key 分离并只存 Keychain，音频上传逐次授权；仍需两家付费账号真实 E2E |
 | 时间轴对齐 | 🟠 | 已实现静音借时、原重叠保留、实测复检、`atempo`、1.5× 人工红线；缺按语言估时的合成前预控与自动重合成策略 |
 | 会话恢复 | 🟢 | 每行完成即原子保存；崩溃时 synthesizing → pending，单个 WAV 丢失只回退对应行，源字幕改变/消失可见 |
 | 输出模式 | 🟢 | 配音工作台可按原始 start_ms 多路混合并导出 WAV/MP3；视频合成页可继续做替换、sidechain ducking 混音或双轨 MKV |
@@ -146,7 +146,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 视觉系统 | 🟢 | 深浅主题液态玻璃、统一组件、F 品牌图标、清晰状态色与减少动态效果适配；主题入口集中到设置页 |
 | 响应式 | 🟢 | 桌面侧栏、移动底栏；1200×575/800 与 390×844 无页面横向溢出，矮窗口侧栏可独立滚动且不覆盖快速命令 |
 | 导航效率 | 🟢 | `⌘K` 根级命令面板、`⌘1`–`⌘9`、活动中心、首次引导和可折叠侧栏；选中态使用导轨而非通知圆点 |
-| 国际化 | 🟢 | 中文、英文、日文各 1,300 个 key 完全对齐，duplicate 0；首次启动及自动模式按系统语言列表选择，无法匹配时回退英文，并支持手动覆盖 |
+| 国际化 | 🟢 | 中文、英文、日文各 1,400 个 key 完全对齐，duplicate 0；首次启动及自动模式按系统语言列表选择，无法匹配时回退英文，并支持手动覆盖 |
 | 路由体积 | 🟢 | 页面 lazy loading；生产构建按页面拆包 |
 | 浏览器 QA | 🟢 | 本地/云端模型分区、本地 TTS 路径、目标向导、配音/compose 配置、双审核闸门与批准续跑均已实测；切换“仅生成字幕 / 生成并翻译 / 仅翻译”不会清空已选媒体；样式完整应用、个人预设保存/更新/重排/删除、重复名拦截、新建任务复用及硬软字幕往返保留选择均已实测；1200×700 与 390×844 无横向溢出，控制台 0 error / 0 warning |
 
@@ -157,9 +157,9 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 密钥存储 | 🟢 macOS / Windows；🟡 Linux | Apple/Windows 原生后端与 Linux Secret Service + Keyutils 持久后端已配置；密钥不进普通配置、不通过 IPC 返回前端 |
 | Endpoint 绑定 | 🟢 | 导入配置或切换地址不会向新 endpoint 发送旧密钥 |
 | 配置加密 | 🟢 | Argon2id + XChaCha20-Poly1305；错误口令和篡改均拒绝 |
-| 文件边界 | 🟢 | 绝对路径、扩展名、存在性、敏感目录和路径逃逸校验；ZipVoice 参考 WAV 限 64 MB / 30 秒，字幕会话限 20 MB / 2,000 行 |
+| 文件边界 | 🟢 | 绝对路径、扩展名、存在性、敏感目录和路径逃逸校验；ZipVoice 参考 WAV 限 64 MB / 30 秒，豆包训练音频限 10 MB、响应限 64 KB，字幕会话限 20 MB / 2,000 行 |
 | 外部命令 | 🟢 | FFmpeg 与自定义 ASR 使用结构化 argv，不经过 shell |
-| 隐私默认值 | 🟢 | 云 ASR 音频、云 TTS 文本与遥测均需显式开启；本地 TTS/ZipVoice 参考音频不外发；自动启动更新检查默认关闭 |
+| 隐私默认值 | 🟢 | 云 ASR 音频、云 TTS 文本、云声音克隆参考音频与遥测均需显式授权；本地 TTS/ZipVoice 参考音频不外发；自动启动更新检查默认关闭 |
 | Linux 系统密钥库 | 🟡 | `linux-native-sync-persistent`、Secret Service 与 Keyutils 依赖已接入 CI；仍需 Linux 桌面会话中的真实存取 E2E |
 
 ## 10. 发布与平台
@@ -174,15 +174,15 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 签名应用内更新 | 🟡 | Rust updater 固定 HTTPS manifest、限定 FinalSub 官方 GitHub Release asset、签名校验、进度、安装前任务/控制句柄竞态复检与重启已接入；CI 从 Secret 原子生成 git-ignored release 配置并产出 macOS App、Linux AppImage/DEB 与 Windows NSIS 签名包，`latest.json` 缺任一目标即熔断发布；仍需生产根密钥 ceremony 与真实远端升级 E2E |
 | 质量 CI | 🟢 | 前端 build、Rust fmt/test/clippy、macOS sidecar 重编与最低版本检查；工作流 YAML 与 Bash 脚本静态校验通过 |
 
-## 11. 新鲜验证（2026-07-20）
+## 11. 新鲜验证（2026-07-21）
 
-- SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control 与字幕样式预设。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制，以及可命名、更新、重排并跨任务复用的完整样式预设；当前差距项为云声音克隆、独立 worker 与跨平台真实安装验收。
+- SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设与云声音复刻。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC 与豆包声音复刻主链路，并在本轮补齐训练次数/重训、字幕选段与文本预填、本地降噪和云音色包迁移；当前差距项为独立 worker、付费账号 E2E 与跨平台真实安装验收。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- 全量 `cargo test --lib` 为 295 passed / 0 failed / 8 ignored；新增覆盖样式预设原子 CRUD/重排、重复名与注入拦截、旧数据默认值、1 MB 上限、任务与配方样式快照，以及既有 provider thinking 控制。`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1300 项且键集合一致、duplicate 0。
+- 全量 `cargo test --lib` 为 301 passed / 0 failed / 8 ignored；新增覆盖 ElevenLabs 云音色持久化/ID 边界、豆包 ICL 2.0 训练体、状态解析与 S_ 合成资源路由、字幕时间轴读取和云音色包结构，并保留样式预设、provider thinking 控制等既有覆盖。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1,400 项且键集合一致、duplicate 0。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
-- 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体后切换三种任务类型路径始终保留，类型不匹配只给提示，不要求重新上传。翻译页已实测思考开关默认关闭、provider 独立状态、纯思考模型提示与测试结果徽章。字幕样式已实测 6 套内置样式完整应用、个人预设保存/更新/重排/重复名拦截/删除、合成页回填、新建任务复用，以及硬字幕 → 软字幕 → 硬字幕后选择不丢失；桌面与窄屏均无横向溢出，冷启动控制台无 error/warning。
-- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与真实运行路径唯一通过，构建目录残留 `.app` 为 0。DMG SHA-256 `0adc79808db9d0c566ce1063a0ff8b692d22793ce51124415182a7ee74a60112`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-205654/FinalSub.app.zip` 并通过完整性检查。
+- 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体后切换三种任务类型路径始终保留，类型不匹配只给提示，不要求重新上传。模型页本地/云端分区与“无需下载模型”说明可见；豆包实例可独立保存 API Key、APP ID、Access Token。我的音色页已实测本地/云端分区、ElevenLabs 找回、豆包三步创建、上传授权、训练状态刷新、字幕行选段/参考文本预填、本地降噪选项、云端 `.svoice` 导出入口，以及带已保存豆包音色直接进入配音会话；控制台 0 error / 0 warning。
+- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与真实运行路径唯一通过，构建目录残留 `.app` 为 0。DMG SHA-256 `366efbaf0578ce0d29651895a1fdeeae97a70fc5759bcc278f140e9442ee84db`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-234309/FinalSub.app.zip` 并通过完整性检查。
 
 ## 12. 新鲜验证（2026-07-19）
 
@@ -211,5 +211,5 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 4. Linux Secret Service 后端已配置，但尚缺真实 Linux 桌面会话的密钥存取 E2E。
 5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
 6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-7. 本地/云端 TTS、持久本地音色库、配音会话、视频联动、字幕安全写回与时间轴导出已交付；仍缺真实本地 TTS 模型音质 E2E、豆包付费账号 smoke test、ASR 自动预填/降噪/A-B 音色比较、云声音克隆与独立 worker。
-8. 统一阶段编排、批准后自动进入配音/compose、provider 感知的显式 AI thinking 控制与可复用字幕样式预设已交付；仍缺云声音克隆、独立 worker 和跨平台 runner 的真实安装验收。
+7. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回与时间轴导出已交付；仍缺真实本地 TTS 模型音质 E2E、ElevenLabs/豆包付费账号 smoke test、A/B 音色比较和独立 worker。
+8. 统一阶段编排、批准后自动进入配音/compose、provider 感知的显式 AI thinking 控制与可复用字幕样式预设已交付；仍缺独立 worker、付费云服务 E2E 和跨平台 runner 的真实安装验收。

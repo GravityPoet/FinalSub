@@ -103,6 +103,10 @@ export function CloudTtsPanel() {
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [keyConfigured, setKeyConfigured] = useState(false);
+  const [cloneAppId, setCloneAppId] = useState("");
+  const [cloneAccessToken, setCloneAccessToken] = useState("");
+  const [showCloneToken, setShowCloneToken] = useState(false);
+  const [cloneCredentialsConfigured, setCloneCredentialsConfigured] = useState(false);
   const [busy, setBusy] = useState<"save" | "test" | "delete" | null>(null);
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
@@ -128,18 +132,32 @@ export function CloudTtsPanel() {
   );
 
   useEffect(() => {
+    let cancelled = false;
     setApiKey("");
+    setKeyConfigured(false);
+    setCloneAppId("");
+    setCloneAccessToken("");
+    setShowCloneToken(false);
+    setCloneCredentialsConfigured(false);
     if (!selected?.id) return;
     if (selected.protocol === "edge-tts") {
       setKeyConfigured(true);
       return;
     }
-    setKeyConfigured(false);
     const endpoint = resolvedEndpoint(selected);
     if (!endpoint || endpoint.includes("//.tts.")) return;
     hasProviderSecret(secretProviderId(selected.id), endpoint, "apiKey")
-      .then(setKeyConfigured)
-      .catch(() => setKeyConfigured(false));
+      .then((configured) => { if (!cancelled) setKeyConfigured(configured); })
+      .catch(() => { if (!cancelled) setKeyConfigured(false); });
+    if (selected.protocol === "volcengine") {
+      Promise.all([
+        hasProviderSecret(secretProviderId(selected.id), endpoint, "cloneAppId"),
+        hasProviderSecret(secretProviderId(selected.id), endpoint, "cloneAccessToken"),
+      ])
+        .then(([hasAppId, hasAccessToken]) => { if (!cancelled) setCloneCredentialsConfigured(hasAppId && hasAccessToken); })
+        .catch(() => { if (!cancelled) setCloneCredentialsConfigured(false); });
+    }
+    return () => { cancelled = true; };
   }, [selected]);
 
   const selectProfile = (id: string) => {
@@ -147,6 +165,9 @@ export function CloudTtsPanel() {
     if (!profile) return;
     setSelectedId(id);
     setDraft({ ...profile });
+    setApiKey("");
+    setCloneAppId("");
+    setCloneAccessToken("");
     setMessage(null);
   };
 
@@ -155,6 +176,10 @@ export function CloudTtsPanel() {
     setDraft({ ...blankDraft(), name: t("models.ttsCloudDefaultName", { count: profiles.length + 1 }) });
     setApiKey("");
     setKeyConfigured(false);
+    setCloneAppId("");
+    setCloneAccessToken("");
+    setShowCloneToken(false);
+    setCloneCredentialsConfigured(false);
     setMessage(null);
   };
 
@@ -166,6 +191,10 @@ export function CloudTtsPanel() {
     }));
     setApiKey("");
     setKeyConfigured(false);
+    setCloneAppId("");
+    setCloneAccessToken("");
+    setShowCloneToken(false);
+    setCloneCredentialsConfigured(false);
   };
 
   const save = async () => {
@@ -177,6 +206,21 @@ export function CloudTtsPanel() {
       if (saved.protocol !== "edge-tts" && apiKey.trim()) {
         await setProviderSecret(secretProviderId(saved.id), endpoint, "apiKey", apiKey.trim());
       }
+      if (saved.protocol === "volcengine") {
+        if (cloneAppId.trim()) {
+          await setProviderSecret(secretProviderId(saved.id), endpoint, "cloneAppId", cloneAppId.trim());
+        }
+        if (cloneAccessToken.trim()) {
+          await setProviderSecret(secretProviderId(saved.id), endpoint, "cloneAccessToken", cloneAccessToken.trim());
+        }
+        const [hasAppId, hasAccessToken] = await Promise.all([
+          cloneAppId.trim() ? Promise.resolve(true) : hasProviderSecret(secretProviderId(saved.id), endpoint, "cloneAppId"),
+          cloneAccessToken.trim() ? Promise.resolve(true) : hasProviderSecret(secretProviderId(saved.id), endpoint, "cloneAccessToken"),
+        ]);
+        setCloneCredentialsConfigured(hasAppId && hasAccessToken);
+      } else {
+        setCloneCredentialsConfigured(false);
+      }
       const configured = saved.protocol === "edge-tts"
         ? true
         : apiKey.trim()
@@ -187,6 +231,8 @@ export function CloudTtsPanel() {
       setSelectedId(saved.id);
       setDraft({ ...saved });
       setApiKey("");
+      setCloneAppId("");
+      setCloneAccessToken("");
       setMessage({ type: "ok", text: t("models.ttsCloudSaved") });
     } catch (error) {
       setMessage({ type: "err", text: String(error) });
@@ -476,6 +522,47 @@ export function CloudTtsPanel() {
                 <CheckCircle2 size={15} className="text-success" /> {t("models.ttsCloudEdgeNoKey")}
               </div>
               <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudEdgeNoKeyDesc")}</p>
+            </div>
+          )}
+
+          {draft.protocol === "volcengine" && (
+            <div className="rounded-2xl border border-brand/20 bg-brand-subtle/35 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="inline-flex items-center gap-2 text-sm font-semibold text-text-primary">
+                  <KeyRound size={15} className="text-brand" /> {t("models.ttsCloudVolcCloneTitle")}
+                </span>
+                <span className={`text-xs font-semibold ${cloneCredentialsConfigured ? "text-success" : "text-text-tertiary"}`}>
+                  {cloneCredentialsConfigured ? t("models.ttsCloudVolcCloneSaved") : t("models.ttsCloudVolcCloneMissing")}
+                </span>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1.5 text-xs font-semibold text-text-secondary">
+                  <span>{t("models.ttsCloudVolcCloneAppId")}</span>
+                  <Input
+                    value={cloneAppId}
+                    onChange={(event) => setCloneAppId(event.target.value)}
+                    placeholder={cloneCredentialsConfigured ? t("models.ttsCloudKeyKeep") : "APP ID"}
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="space-y-1.5 text-xs font-semibold text-text-secondary">
+                  <span>{t("models.ttsCloudVolcCloneAccessToken")}</span>
+                  <span className="relative block">
+                    <Input
+                      type={showCloneToken ? "text" : "password"}
+                      value={cloneAccessToken}
+                      onChange={(event) => setCloneAccessToken(event.target.value)}
+                      placeholder={cloneCredentialsConfigured ? t("models.ttsCloudKeyKeep") : "Access Token"}
+                      className="pr-11"
+                      autoComplete="new-password"
+                    />
+                    <button type="button" onClick={() => setShowCloneToken((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-primary">
+                      {showCloneToken ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </span>
+                </label>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudVolcCloneHint")}</p>
             </div>
           )}
 
