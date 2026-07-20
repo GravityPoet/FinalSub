@@ -11,6 +11,7 @@ const ModelsPage = lazy(() => import("./pages/ModelsPage"));
 const TranslationPage = lazy(() => import("./pages/TranslationPage"));
 const DubbingPage = lazy(() => import("./pages/DubbingPage"));
 const VoiceProfilesPage = lazy(() => import("./pages/VoiceProfilesPage"));
+const LogsPage = lazy(() => import("./pages/LogsPage"));
 const SubtitleMergePage = lazy(() => import("./pages/SubtitleMergePage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const ProofreadPage = lazy(() => import("./pages/proofread/ProofreadPage"));
@@ -28,6 +29,7 @@ function App() {
                 <Route path="/models" element={<ModelsPage />} />
                 <Route path="/translation" element={<TranslationPage />} />
                 <Route path="/voices" element={<VoiceProfilesPage />} />
+                <Route path="/logs" element={<LogsPage />} />
                 <Route path="/dubbing" element={<DubbingPage />} />
                 <Route path="/proofread" element={<ProofreadPage />} />
                 <Route path="/subtitle-merge" element={<SubtitleMergePage />} />

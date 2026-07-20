@@ -15,6 +15,7 @@ import {
   Languages,
   ListTodo,
   Search,
+  ScrollText,
   Settings,
   Sparkles,
   X,
@@ -34,6 +35,7 @@ const commands: Array<{
   { path: "/tasks", label: "nav.queue", hint: "command.openQueue", icon: ListTodo },
   { path: "/models", label: "nav.models", hint: "command.manageModels", icon: Bot },
   { path: "/translation", label: "nav.translation", hint: "command.configureTranslation", icon: Languages },
+  { path: "/logs", label: "nav.logs", hint: "command.openLogs", icon: ScrollText },
   { path: "/dubbing", label: "nav.dubbing", hint: "command.openDubbing", icon: AudioLines },
   { path: "/proofread", label: "nav.proofread", hint: "command.openProofread", icon: Edit3 },
   { path: "/subtitle-merge", label: "nav.merge", hint: "command.openMerge", icon: Film },
@@ -61,7 +63,7 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
         setOpen((value) => !value);
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && /^[1-8]$/.test(event.key)) {
+      if ((event.metaKey || event.ctrlKey) && /^[1-9]$/.test(event.key)) {
         event.preventDefault();
         navigate(commands[Number(event.key) - 1].path);
       }

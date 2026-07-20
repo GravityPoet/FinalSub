@@ -465,6 +465,24 @@ export interface TaskDeletedPayload {
   task_id: string;
 }
 
+export type LogLevel = "info" | "warn" | "error";
+
+export interface LogEntry {
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  task_id?: string | null;
+  project_id?: string | null;
+}
+
+export interface LogQuery {
+  date?: string;
+  limit?: number;
+  levels?: LogLevel[];
+  project_id?: string;
+  task_id?: string;
+}
+
 export interface AudioExtractPlan {
   ffmpeg_bin: string;
   args: string[];
@@ -808,6 +826,32 @@ export async function retryTask(taskId: string): Promise<Task> {
 
 export async function getTaskLogs(taskId: string): Promise<string> {
   return invoke("get_task_logs", { taskId });
+}
+
+export async function getLogs(query: LogQuery = {}): Promise<LogEntry[]> {
+  return invoke("get_logs", { query });
+}
+
+export async function getLogDates(): Promise<string[]> {
+  return invoke("get_log_dates");
+}
+
+export async function clearLogs(projectId?: string): Promise<void> {
+  return invoke("clear_logs", { projectId: projectId ?? null });
+}
+
+export async function addLog(
+  level: LogLevel,
+  message: string,
+  taskId?: string,
+  projectId?: string,
+): Promise<LogEntry> {
+  return invoke("add_log", {
+    level,
+    message,
+    taskId: taskId ?? null,
+    projectId: projectId ?? null,
+  });
 }
 
 export async function normalizeSrt(srtContent: string): Promise<string> {
@@ -1342,6 +1386,30 @@ let mockVoiceProfilesState: VoiceProfile[] = [
   },
 ];
 let mockDubbingSessionState: DubbingSession | null = null;
+let mockLogsState: LogEntry[] = [
+  {
+    timestamp: new Date(Date.now() - 12_000).toISOString(),
+    level: "info",
+    message: "任务已进入队列，等待并发通道…",
+    task_id: "00000000-0000-4000-8000-000000000001",
+    project_id: "00000000-0000-4000-8000-000000000001",
+  },
+  {
+    timestamp: new Date(Date.now() - 4_000).toISOString(),
+    level: "warn",
+    message: "示例日志：硬件编码不可用时将自动回退 CPU。",
+    task_id: "00000000-0000-4000-8000-000000000001",
+    project_id: "00000000-0000-4000-8000-000000000001",
+  },
+];
+
+function mockLogDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 function createMockDubbingSession(subtitlePath = "/Users/example/Subtitles/demo.srt"): DubbingSession {
   const now = new Date().toISOString();
@@ -1977,6 +2045,38 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return String(args?.recipeId ?? "");
     case "get_task_logs":
       return "[dev browser mock] Task log stream is available inside the Tauri app.";
+    case "get_logs": {
+      const query = (args?.query ?? {}) as LogQuery;
+      const levels = query.levels ?? [];
+      const date = query.date ?? mockLogDate(new Date().toISOString());
+      const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
+      return mockLogsState
+        .filter((entry) => mockLogDate(entry.timestamp) === date)
+        .filter((entry) => levels.length === 0 || levels.includes(entry.level))
+        .filter((entry) => !query.task_id || entry.task_id === query.task_id)
+        .filter((entry) => !query.project_id || entry.project_id === query.project_id)
+        .slice(-limit);
+    }
+    case "get_log_dates":
+      return [...new Set(mockLogsState.map((entry) => mockLogDate(entry.timestamp)))].sort().reverse();
+    case "clear_logs": {
+      const projectId = typeof args?.projectId === "string" ? args.projectId : undefined;
+      mockLogsState = projectId
+        ? mockLogsState.filter((entry) => entry.project_id !== projectId)
+        : [];
+      return undefined;
+    }
+    case "add_log": {
+      const entry: LogEntry = {
+        timestamp: new Date().toISOString(),
+        level: (args?.level as LogLevel) ?? "info",
+        message: String(args?.message ?? ""),
+        task_id: typeof args?.taskId === "string" ? args.taskId : null,
+        project_id: typeof args?.projectId === "string" ? args.projectId : null,
+      };
+      mockLogsState = [...mockLogsState, entry];
+      return entry;
+    }
     case "list_translation_providers":
       return createMockProviders();
     case "list_translation_models":
