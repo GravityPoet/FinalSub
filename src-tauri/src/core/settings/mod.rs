@@ -47,6 +47,15 @@ impl Default for CloudAsrProfile {
 #[serde(default)]
 pub struct Settings {
     pub language: String,
+    /// Whether the interface language follows the host operating system.
+    ///
+    /// The field defaults to `true` when it is read from an older settings
+    /// file that does not contain the field, so existing installs receive the
+    /// new system-language default. `Settings::default()` remains an explicit
+    /// Chinese value for internal/test struct literals; production first-run
+    /// and reset paths use `system_default_settings()` below.
+    #[serde(default = "default_language_auto")]
+    pub language_auto: bool,
     #[serde(alias = "asrEngine")]
     pub asr_engine: String,
     #[serde(alias = "cloudAsrProtocol")]
@@ -150,6 +159,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             language: "zh".into(),
+            language_auto: false,
             asr_engine: "parakeet-mlx".into(),
             cloud_asr_protocol: "openai-compatible".into(),
             cloud_asr_endpoint: "https://api.openai.com/v1".into(),
@@ -241,19 +251,35 @@ fn detect_os_language() -> String {
     }
 }
 
+fn default_language_auto() -> bool {
+    true
+}
+
+pub(crate) fn system_default_settings() -> Settings {
+    Settings {
+        language: detect_os_language(),
+        language_auto: true,
+        ..Settings::default()
+    }
+}
+
 pub fn load_settings(app_config_dir: &Path) -> Result<Settings> {
     let path = settings_path(app_config_dir);
     if !path.exists() {
-        let s = Settings {
-            language: detect_os_language(),
-            ..Settings::default()
-        };
+        let s = system_default_settings();
         save_settings(app_config_dir, &s)?;
         return Ok(s);
     }
     let content = std::fs::read_to_string(&path)?;
-    let settings: Settings = serde_json::from_str(&content)?;
+    let mut settings: Settings = serde_json::from_str(&content)?;
     validate_settings(&settings)?;
+    if settings.language_auto {
+        let detected = detect_os_language();
+        if settings.language != detected {
+            settings.language = detected;
+            save_settings(app_config_dir, &settings)?;
+        }
+    }
     Ok(settings)
 }
 
@@ -271,7 +297,7 @@ pub fn save_settings(app_config_dir: &Path, settings: &Settings) -> Result<()> {
 }
 
 pub fn reset_settings(app_config_dir: &Path) -> Result<Settings> {
-    let settings = Settings::default();
+    let settings = system_default_settings();
     save_settings(app_config_dir, &settings)?;
     Ok(settings)
 }
@@ -819,6 +845,15 @@ mod tests {
         let (_tmp, dir) = test_config_dir();
         let settings = load_settings(&dir).unwrap();
         assert!(matches!(settings.language.as_str(), "zh" | "en" | "ja"));
+        assert!(settings.language_auto);
+    }
+
+    #[test]
+    fn legacy_settings_without_language_mode_follow_system_by_default() {
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("language_auto");
+        let parsed: Settings = serde_json::from_value(value).unwrap();
+        assert!(parsed.language_auto);
     }
 
     #[test]
@@ -900,10 +935,12 @@ mod tests {
         super::save_settings(&dir, &settings).unwrap();
 
         let reset = super::reset_settings(&dir).unwrap();
-        assert_eq!(reset.language, "zh");
+        assert!(matches!(reset.language.as_str(), "zh" | "en" | "ja"));
+        assert!(reset.language_auto);
 
         let loaded = super::load_settings(&dir).unwrap();
-        assert_eq!(loaded.language, "zh");
+        assert_eq!(loaded.language, reset.language);
+        assert!(loaded.language_auto);
     }
 
     #[test]

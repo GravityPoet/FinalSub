@@ -26,6 +26,7 @@ import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 
 export const TASK_UPDATED_EVENT = "task-updated";
 export const TASK_DELETED_EVENT = "task-deleted";
+const MOCK_PREPARED_VOICE_ID = "00000000-0000-4000-8000-000000000599";
 
 type InvokeArgs = Record<string, unknown> | undefined;
 
@@ -242,6 +243,81 @@ export interface TtsModelInfo {
   missing_files: string[];
 }
 
+export type VoiceProfileLanguage = "zh" | "en";
+export type VoiceQualityVerdict = "good" | "fair" | "poor";
+export type VoiceQualityIssueCode =
+  | "no-speech"
+  | "too-short"
+  | "short-for-engine"
+  | "low-snr"
+  | "clipping"
+  | "low-volume"
+  | "low-speech-ratio"
+  | "long-silence";
+export type VoiceQualityIssueSeverity = "error" | "warning" | "info";
+
+export interface VoiceQualityIssue {
+  code: VoiceQualityIssueCode;
+  severity: VoiceQualityIssueSeverity;
+  value: number | null;
+}
+
+export interface VoiceQualityReport {
+  duration_ms: number;
+  speech_ms: number;
+  speech_ratio: number;
+  longest_silence_ms: number;
+  rms_db: number;
+  peak_db: number;
+  clipping_ratio: number;
+  snr_db: number;
+  verdict: VoiceQualityVerdict;
+  issues: VoiceQualityIssue[];
+}
+
+export interface VoiceProfile {
+  id: string;
+  name: string;
+  engine: "zipvoice";
+  language: VoiceProfileLanguage;
+  reference_audio_path: string;
+  reference_text: string;
+  source_name: string | null;
+  quality: VoiceQualityReport;
+  created_at: number;
+}
+
+export interface VoiceSourceInfo {
+  path: string;
+  file_name: string;
+  duration_ms: number;
+  default_selection_ms: number;
+}
+
+export interface PrepareVoiceSampleRequest {
+  source_path: string;
+  start_ms: number;
+  duration_ms: number;
+}
+
+export interface PreparedVoiceSample {
+  token: string;
+  audio_path: string;
+  source_name: string;
+  start_ms: number;
+  duration_ms: number;
+  quality: VoiceQualityReport;
+  can_create: boolean;
+}
+
+export interface CreateVoiceProfileRequest {
+  token: string;
+  name: string;
+  language: VoiceProfileLanguage;
+  reference_text: string;
+  consent: boolean;
+}
+
 export interface LocalTtsSynthesisRequest {
   model_id: string;
   text: string;
@@ -410,6 +486,54 @@ export async function scanModels(): Promise<AsrModelInfo[]> {
 
 export async function listTtsModels(): Promise<TtsModelInfo[]> {
   return invoke("list_tts_models");
+}
+
+export async function listVoiceProfiles(): Promise<VoiceProfile[]> {
+  return invoke("list_voice_profiles");
+}
+
+export async function inspectVoiceSource(sourcePath: string): Promise<VoiceSourceInfo> {
+  return invoke("inspect_voice_source", { sourcePath });
+}
+
+export async function saveVoiceRecording(dataBase64: string, mimeType: string): Promise<string> {
+  return invoke("save_voice_recording", { dataBase64, mimeType });
+}
+
+export async function discardVoiceRecording(path: string): Promise<void> {
+  return invoke("discard_voice_recording", { path });
+}
+
+export async function prepareVoiceSample(
+  request: PrepareVoiceSampleRequest,
+): Promise<PreparedVoiceSample> {
+  return invoke("prepare_voice_sample", { request });
+}
+
+export async function discardPreparedVoiceSample(token: string): Promise<void> {
+  return invoke("discard_prepared_voice_sample", { token });
+}
+
+export async function createVoiceProfile(
+  request: CreateVoiceProfileRequest,
+): Promise<VoiceProfile> {
+  return invoke("create_voice_profile", { request });
+}
+
+export async function renameVoiceProfile(id: string, name: string): Promise<VoiceProfile> {
+  return invoke("rename_voice_profile", { id, name });
+}
+
+export async function removeVoiceProfile(id: string): Promise<void> {
+  return invoke("remove_voice_profile", { id });
+}
+
+export async function exportVoiceProfile(id: string, outputPath: string): Promise<string> {
+  return invoke("export_voice_profile", { id, outputPath });
+}
+
+export async function importVoiceProfile(inputPath: string): Promise<VoiceProfile> {
+  return invoke("import_voice_profile", { inputPath });
 }
 
 export async function downloadTtsModel(modelId: string): Promise<void> {
@@ -897,6 +1021,7 @@ export interface TranslationGlossary {
 
 export interface Settings {
   language: string;
+  language_auto: boolean;
   asr_engine: string;
   cloud_asr_protocol: CloudAsrProtocol;
   cloud_asr_endpoint: string;
@@ -1088,6 +1213,7 @@ export async function downloadAndInstallUpdate(
 function createMockSettings(): Settings {
   return {
     language: "zh",
+    language_auto: true,
     asr_engine: "parakeet-mlx",
     cloud_asr_protocol: "openai-compatible",
     cloud_asr_endpoint: "https://api.openai.com/v1",
@@ -1188,6 +1314,31 @@ let mockTtsProvidersState: TtsProviderProfile[] = [
     text_upload_consent: false,
     timeout_seconds: 60,
     request_concurrency: 2,
+  },
+];
+const mockVoiceQuality: VoiceQualityReport = {
+  duration_ms: 8000,
+  speech_ms: 7160,
+  speech_ratio: 0.895,
+  longest_silence_ms: 420,
+  rms_db: -20.4,
+  peak_db: -3.2,
+  clipping_ratio: 0,
+  snr_db: 27.5,
+  verdict: "good",
+  issues: [],
+};
+let mockVoiceProfilesState: VoiceProfile[] = [
+  {
+    id: "00000000-0000-4000-8000-000000000501",
+    name: "中文旁白",
+    engine: "zipvoice",
+    language: "zh",
+    reference_audio_path: "/Users/example/FinalSub/voices/narrator/ref.wav",
+    reference_text: "欢迎使用 FinalSub，这是我的本地旁白音色。",
+    source_name: "narrator.wav",
+    quality: mockVoiceQuality,
+    created_at: Date.now() - 86_400_000,
   },
 ];
 let mockDubbingSessionState: DubbingSession | null = null;
@@ -1519,7 +1670,13 @@ function createMockTask(): Task {
 function savedSettingsFromArgs(args: InvokeArgs): Settings {
   const candidate = args?.newSettings;
   if (candidate && typeof candidate === "object") {
-    return candidate as Settings;
+    const base = createMockSettings();
+    const next = candidate as Partial<Settings>;
+    return {
+      ...base,
+      ...next,
+      language_auto: typeof next.language_auto === "boolean" ? next.language_auto : true,
+    };
   }
   return createMockSettings();
 }
@@ -1548,6 +1705,72 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return createMockModels();
     case "list_tts_models":
       return currentMockTtsModels();
+    case "list_voice_profiles":
+      return mockVoiceProfilesState;
+    case "inspect_voice_source":
+      return {
+        path: String(args?.sourcePath ?? "/Users/example/Audio/voice.wav"),
+        file_name: String(args?.sourcePath ?? "voice.wav").split(/[\\/]/).pop() ?? "voice.wav",
+        duration_ms: 42600,
+        default_selection_ms: 8000,
+      } satisfies VoiceSourceInfo;
+    case "save_voice_recording":
+      return "/Users/example/Library/Application Support/FinalSub/tts/voice-profiles/.recordings/mock.webm";
+    case "discard_voice_recording":
+    case "discard_prepared_voice_sample":
+      return undefined;
+    case "prepare_voice_sample": {
+      const request = args?.request as PrepareVoiceSampleRequest | undefined;
+      return {
+        token: MOCK_PREPARED_VOICE_ID,
+        audio_path: "/Users/example/Library/Application Support/FinalSub/tts/voice-profiles/.staging/mock/ref.wav",
+        source_name: request?.source_path.split(/[\\/]/).pop() ?? "voice.wav",
+        start_ms: request?.start_ms ?? 0,
+        duration_ms: request?.duration_ms ?? 8000,
+        quality: mockVoiceQuality,
+        can_create: true,
+      } satisfies PreparedVoiceSample;
+    }
+    case "create_voice_profile": {
+      const request = args?.request as CreateVoiceProfileRequest | undefined;
+      if (!request) throw new Error("Voice profile request is missing");
+      const profile: VoiceProfile = {
+        id: `00000000-0000-4000-8000-${String(mockVoiceProfilesState.length + 502).padStart(12, "0")}`,
+        name: request.name,
+        engine: "zipvoice",
+        language: request.language,
+        reference_audio_path: "/Users/example/FinalSub/voices/new/ref.wav",
+        reference_text: request.reference_text,
+        source_name: "voice.wav",
+        quality: mockVoiceQuality,
+        created_at: Date.now(),
+      };
+      mockVoiceProfilesState = [profile, ...mockVoiceProfilesState];
+      return profile;
+    }
+    case "rename_voice_profile": {
+      const id = String(args?.id ?? "");
+      const profile = mockVoiceProfilesState.find((item) => item.id === id);
+      if (!profile) throw new Error("Voice profile not found");
+      const renamed = { ...profile, name: String(args?.name ?? profile.name) };
+      mockVoiceProfilesState = mockVoiceProfilesState.map((item) => item.id === id ? renamed : item);
+      return renamed;
+    }
+    case "remove_voice_profile":
+      mockVoiceProfilesState = mockVoiceProfilesState.filter((item) => item.id !== args?.id);
+      return undefined;
+    case "export_voice_profile":
+      return String(args?.outputPath ?? "/Users/example/Downloads/voice.svoice");
+    case "import_voice_profile": {
+      const profile: VoiceProfile = {
+        ...mockVoiceProfilesState[0],
+        id: `00000000-0000-4000-8000-${String(mockVoiceProfilesState.length + 602).padStart(12, "0")}`,
+        name: "导入的音色",
+        created_at: Date.now(),
+      };
+      mockVoiceProfilesState = [profile, ...mockVoiceProfilesState];
+      return profile;
+    }
     case "download_tts_model":
       return undefined;
     case "cancel_tts_model_download":

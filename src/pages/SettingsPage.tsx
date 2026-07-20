@@ -27,6 +27,7 @@ import { Input, Select } from "../components/ui/Input";
 import { Card } from "../components/ui/Card";
 
 const languages = [
+  { value: "system", label: "settings.languageSystem" },
   { value: "zh", label: "language.zh" },
   { value: "en", label: "language.en" },
   { value: "ja", label: "language.ja" },
@@ -69,6 +70,7 @@ function normalizeMaxContext(value: unknown): number {
 function normalizeSettings(settings: Settings): Settings {
   return {
     ...settings,
+    language_auto: settings.language_auto !== false,
     max_concurrent_tasks: clampInteger(settings.max_concurrent_tasks, 1, 8),
     max_context: normalizeMaxContext(settings.max_context),
   };
@@ -373,8 +375,17 @@ export default function SettingsPage() {
           <div className="px-5">
             <SettingRow label={t("settings.langLabel")} description={t("settings.langDesc")}>
               <Select
-                value={settings.language}
-                onChange={(e) => update("language", e.target.value)}
+                value={settings.language_auto ? "system" : settings.language}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setSettings((prev) => prev
+                    ? {
+                        ...prev,
+                        language_auto: value === "system",
+                        ...(value === "system" ? {} : { language: value }),
+                      }
+                    : prev);
+                }}
                 className="w-32 h-9 py-1"
               >
                 {languages.map((l) => (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -59,6 +59,8 @@ const mediaExtensions = [
 ];
 
 const subtitleExtensions = ["srt", "vtt", "ass", "lrc"];
+
+type SourceInputKind = "media" | "subtitle";
 
 const sourceLanguageOptions = [
   { value: "auto", labelKey: "language.auto" },
@@ -146,13 +148,12 @@ function isSubtitleInputPath(path: string): boolean {
   return subtitleExtensions.includes(fileExtensionFromPath(path));
 }
 
-function inputMatchesTaskType(path: string, taskType: string): boolean {
-  if (taskType === "translate-only") {
-    return isSubtitleInputPath(path);
-  }
-  // The Rust media validator accepts any existing file; only a subtitle input
-  // is definitely incompatible with an audio/video workflow here.
-  return !isSubtitleInputPath(path);
+function sourceInputKindForPath(path: string): SourceInputKind {
+  return isSubtitleInputPath(path) ? "subtitle" : "media";
+}
+
+function sourceInputKindForTaskType(taskType: string): SourceInputKind {
+  return taskType === "translate-only" ? "subtitle" : "media";
 }
 
 export default function HomePage() {
@@ -161,6 +162,11 @@ export default function HomePage() {
   const [ffmpegVersion, setFfmpegVersion] = useState<string>("detecting");
   const [models, setModels] = useState<AsrModelInfo[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  // The imported source is an asset, while taskType is only a processing
+  // recipe. Keep the asset kind separately so changing the recipe cannot
+  // accidentally replace/clear the uploaded path.
+  const [selectedInputKind, setSelectedInputKind] = useState<SourceInputKind | null>(null);
+  const selectionRequestRef = useRef(0);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string>("");
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "error">("loading");
@@ -195,6 +201,39 @@ export default function HomePage() {
 
   const { t } = useI18n();
   const selectedPath = selectedPaths[0] ?? "";
+
+  const commitSelectedPaths = useCallback((paths: string[]) => {
+    if (paths.length === 0) return;
+    const nextKind = sourceInputKindForPath(paths[0]);
+    setSelectedPaths(paths);
+    setSelectedInputKind(nextKind);
+  }, []);
+
+  const clearSelectedPaths = useCallback(() => {
+    selectionRequestRef.current += 1;
+    setSelectedPaths([]);
+    setSelectedInputKind(null);
+  }, []);
+
+  const discoverAndCommit = useCallback(async (paths: string[], kind: SourceInputKind) => {
+    const requestId = ++selectionRequestRef.current;
+    const discovered = await discoverBatchInputs(
+      paths,
+      kind === "subtitle" ? "translate-only" : "generate-only",
+      true,
+    );
+    // A stale drag/paste/dialog response must never overwrite a newer source.
+    if (requestId !== selectionRequestRef.current) return;
+    commitSelectedPaths(discovered);
+  }, [commitSelectedPaths]);
+
+  const handleTaskTypeChange = useCallback((nextTaskType: string) => {
+    // Deliberately do not touch selectedPaths here. The same uploaded asset
+    // can be inspected against another workflow and remains available when
+    // the user switches back.
+    setTaskType(nextTaskType);
+    setError("");
+  }, []);
 
   const loadWorkspace = useCallback(async () => {
     setBootstrapState("loading");
@@ -287,8 +326,7 @@ export default function HomePage() {
         setDragActive(false);
       } else if (event.type === "drop") {
         setDragActive(false);
-        void discoverBatchInputs(event.paths, taskType, true)
-          .then(setSelectedPaths)
+        void discoverAndCommit(event.paths, sourceInputKindForTaskType(taskType))
           .catch((dropError) => setError(String(dropError)));
       }
     }).then((unlisten) => { stop = unlisten; });
@@ -302,8 +340,7 @@ export default function HomePage() {
         .filter((value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value));
       if (!paths?.length) return;
       event.preventDefault();
-      void discoverBatchInputs(paths, taskType, true)
-        .then(setSelectedPaths)
+      void discoverAndCommit(paths, sourceInputKindForTaskType(taskType))
         .catch((pasteError) => setError(String(pasteError)));
     };
     window.addEventListener("paste", onPaste);
@@ -311,7 +348,7 @@ export default function HomePage() {
       stop?.();
       window.removeEventListener("paste", onPaste);
     };
-  }, [taskType]);
+  }, [discoverAndCommit, taskType]);
 
   const engineModels = models.filter((m) => m.engine_id === engineId);
   const engines = [...new Set(models.map((m) => m.engine_id))];
@@ -325,7 +362,8 @@ export default function HomePage() {
   );
   const activeModel = models.find((m) => m.id === modelId && m.engine_id === engineId);
   const inputTypeMismatch = selectedPaths.length > 0
-    && selectedPaths.some((path) => !inputMatchesTaskType(path, taskType));
+    && selectedInputKind !== null
+    && selectedInputKind !== sourceInputKindForTaskType(taskType);
   const inputTypeMismatchHint = inputTypeMismatch
     ? (taskType === "translate-only" ? t("home.inputMismatchSubtitle") : t("home.inputMismatchMedia"))
     : "";
@@ -343,9 +381,10 @@ export default function HomePage() {
     }
   }, [sourceLanguageSupported]);
 
-  const selectedFileKind = taskType === "translate-only"
+  const selectedFileKind = (selectedInputKind ?? sourceInputKindForTaskType(taskType)) === "subtitle"
     ? t("home.subFile")
     : t("home.mediaFile");
+  const displayedInputKind = selectedInputKind ?? sourceInputKindForTaskType(taskType);
     
   const missingFileHint = !selectedPath
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
@@ -355,16 +394,16 @@ export default function HomePage() {
   const handleSelectMedia = async () => {
     setError("");
     try {
-      const isTranslateOnly = taskType === "translate-only";
+      const selectionKind = sourceInputKindForTaskType(taskType);
       const selected = await openDialog({
         multiple: true,
-        filters: isTranslateOnly
+        filters: selectionKind === "subtitle"
           ? [{ name: t("home.subFile"), extensions: ["srt", "vtt", "ass", "lrc"] }]
           : [{ name: t("home.mediaFile"), extensions: mediaExtensions }],
       });
       const paths = typeof selected === "string" ? [selected] : selected;
       if (paths?.length) {
-        setSelectedPaths(await discoverBatchInputs(paths, taskType, true));
+        await discoverAndCommit(paths, selectionKind);
       }
     } catch (dialogError) {
       console.error("Failed to open file picker:", dialogError);
@@ -375,10 +414,11 @@ export default function HomePage() {
   const handleSelectFolder = async () => {
     setError("");
     try {
+      const selectionKind = sourceInputKindForTaskType(taskType);
       const selected = await openDialog({ directory: true, multiple: true });
       const paths = typeof selected === "string" ? [selected] : selected;
       if (paths?.length) {
-        setSelectedPaths(await discoverBatchInputs(paths, taskType, true));
+        await discoverAndCommit(paths, selectionKind);
       }
     } catch (dialogError) {
       console.error("Failed to scan selected folder:", dialogError);
@@ -563,7 +603,7 @@ export default function HomePage() {
     ) ? snapshot.task_type : "generate-only";
     // A recipe changes processing parameters, not the imported source. Keep
     // the current selection and let the input guard explain any type mismatch.
-    setTaskType(nextTaskType);
+    handleTaskTypeChange(nextTaskType);
 
     let usedFallback = false;
     if (nextTaskType !== "translate-only") {
@@ -791,12 +831,20 @@ export default function HomePage() {
                   </p>
                 </div>
 
-                <div className={`file-stage rounded-[1.3rem] p-4 transition sm:p-5 ${dragActive ? "ring-2 ring-brand/70 bg-brand/10" : ""}`}>
+                <div
+                  className={`file-stage rounded-[1.3rem] p-4 transition sm:p-5 ${dragActive ? "ring-2 ring-brand/70 bg-brand/10" : ""}`}
+                  data-testid="source-asset"
+                >
                   <div className="flex flex-wrap items-center gap-4">
                     <span className="file-icon">
-                      {taskType === "translate-only" ? <FileText size={24} /> : <FileVideo size={24} />}
+                      {displayedInputKind === "subtitle" ? <FileText size={24} /> : <FileVideo size={24} />}
                     </span>
                     <div className="min-w-[12rem] flex-[1_1_14rem]">
+                      {selectedPath && (
+                        <Badge variant="info" className="mb-1.5">
+                          {t("home.selectedFile")} · {selectedFileKind}
+                        </Badge>
+                      )}
                       <p className={`${selectedPath ? "truncate" : "leading-6"} font-semibold text-text-primary`}>
                         {selectedPaths.length > 1
                           ? t("home.batchSelected", { count: selectedPaths.length })
@@ -846,7 +894,7 @@ export default function HomePage() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => setSelectedPaths([])}
+                        onClick={clearSelectedPaths}
                         className="mt-3 text-xs font-semibold text-text-tertiary underline-offset-4 hover:text-text-primary hover:underline"
                       >
                         {t("home.clearSelection")}
@@ -987,15 +1035,12 @@ export default function HomePage() {
                           const currentIndex = taskTypes.findIndex(({ value }) => value === taskType);
                           const nextIndex = (currentIndex + direction + taskTypes.length) % taskTypes.length;
                           const nextTaskType = taskTypes[nextIndex].value;
-                          setTaskType(nextTaskType);
-                          setError("");
+                          handleTaskTypeChange(nextTaskType);
                           const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
                           requestAnimationFrame(() => radios?.[nextIndex]?.focus());
                         }}
                         onClick={() => {
-                          const nextTaskType = item.value;
-                          setTaskType(nextTaskType);
-                          setError("");
+                          handleTaskTypeChange(item.value);
                         }}
                         className={`flex min-h-24 items-start gap-3 rounded-[1.15rem] border p-3.5 text-left text-sm transition-all duration-200 ${
                           isActive
