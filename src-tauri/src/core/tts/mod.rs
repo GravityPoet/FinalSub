@@ -6,9 +6,9 @@ mod providers;
 mod voice_profiles;
 mod volcengine;
 mod volcengine_clone;
+mod worker;
 
 pub(crate) use download::download_model_impl;
-pub(crate) use engine::{synthesize_local, TtsEngineCache};
 pub use engine::{LocalTtsSynthesisRequest, TtsSynthesisResult};
 pub(crate) use models::find_spec;
 pub use models::{
@@ -33,6 +33,8 @@ pub use voice_profiles::{
     VoiceQualityIssueSeverity, VoiceQualityReport, VoiceQualityVerdict, VoiceSourceInfo,
     VoiceSubtitleCue,
 };
+pub use worker::maybe_run_tts_worker;
+pub(crate) use worker::TtsWorkerManager;
 
 pub(crate) use dubbing::synthesis_speed_for_alignment;
 pub use dubbing::{

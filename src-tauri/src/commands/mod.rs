@@ -501,43 +501,57 @@ pub async fn delete_tts_model(state: State<'_, AppState>, model_id: String) -> R
     if !state.tts_controls.read().await.is_empty() {
         return Err("配音正在进行，请等待当前配音任务完成后再删除模型".into());
     }
-    // 引擎对象可能仍持有已删除目录的文件句柄；先从缓存移除，避免删除后
-    // 下一次请求继续复用旧实例。正在运行的合成已由上面的闸门排除。
-    let cache_key_prefix = format!("{normalized}|");
-    state
-        .tts_engines
-        .lock()
-        .map_err(|_| "TTS 引擎缓存不可用".to_string())?
-        .retain(|key, _| !key.starts_with(&cache_key_prefix));
+    // 独立 worker 可能仍持有模型文件句柄；正在运行的合成已由上面的闸门
+    // 排除，因此先优雅停止 worker，再删除受管目录。下一次合成会自动重建。
+    state.tts_worker.stop().await;
     crate::core::tts::delete_managed_model(&state.app_config_dir, &normalized)
         .map_err(|error| error.to_string())
 }
 
 /// 登记外部 TTS 模型目录。只保存绝对路径，不复制模型，也不会取得源目录删除权。
 #[tauri::command]
-pub fn register_tts_model_path(
+pub async fn register_tts_model_path(
     state: State<'_, AppState>,
     model_id: String,
     source_path: String,
 ) -> Result<TtsModelInfo, String> {
-    crate::core::tts::register_external_model(&state.app_config_dir, &model_id, &source_path)
-        .map_err(|error| error.to_string())
+    if !state.tts_controls.read().await.is_empty() {
+        return Err("配音正在进行，请完成或取消后再更改模型目录".into());
+    }
+    let info =
+        crate::core::tts::register_external_model(&state.app_config_dir, &model_id, &source_path)
+            .map_err(|error| error.to_string())?;
+    state.tts_worker.stop().await;
+    Ok(info)
 }
 
 /// 仅移除外部路径登记；源模型文件永远保留。
 #[tauri::command]
-pub fn forget_tts_model_path(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
+pub async fn forget_tts_model_path(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    if !state.tts_controls.read().await.is_empty() {
+        return Err("配音正在进行，请完成或取消后再更改模型目录".into());
+    }
     crate::core::tts::remove_external_registration(&state.app_config_dir, &model_id)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    state.tts_worker.stop().await;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_tts_models_root(
+pub async fn set_tts_models_root(
     state: State<'_, AppState>,
     models_root: String,
 ) -> Result<Vec<TtsModelInfo>, String> {
-    crate::core::tts::set_models_root(&state.app_config_dir, &models_root)
-        .map_err(|error| error.to_string())
+    if !state.tts_controls.read().await.is_empty() {
+        return Err("配音正在进行，请完成或取消后再更改模型目录".into());
+    }
+    let models = crate::core::tts::set_models_root(&state.app_config_dir, &models_root)
+        .map_err(|error| error.to_string())?;
+    state.tts_worker.stop().await;
+    Ok(models)
 }
 
 #[tauri::command]
@@ -559,15 +573,9 @@ pub async fn synthesize_local_tts(
         controls.insert(generation_id.clone(), cancelled.clone());
     }
     let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
-    let cache = state.tts_engines.clone();
-    let joined = tokio::task::spawn_blocking(move || {
-        crate::core::tts::synthesize_local(&cache, model, request, cancelled)
-    })
-    .await;
+    let result = state.tts_worker.synthesize(model, request, cancelled).await;
     state.tts_controls.write().await.remove(&generation_id);
-    joined
-        .map_err(|error| format!("本地 TTS 工作线程异常：{error}"))?
-        .map_err(|error| error.to_string())
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -747,7 +755,6 @@ async fn synthesize_prepared_dubbing_once(
         DubbingEngineSelection::Local { model_id } => {
             let model = crate::core::tts::resolve_ready_model(&state.app_config_dir, model_id)
                 .map_err(|error| error.to_string())?;
-            let cache = state.tts_engines.clone();
             let request = LocalTtsSynthesisRequest {
                 model_id: model_id.clone(),
                 text: prepared.text.clone(),
@@ -759,12 +766,11 @@ async fn synthesize_prepared_dubbing_once(
                 reference_text: prepared.config.reference_text.clone(),
                 num_steps: prepared.config.num_steps,
             };
-            tokio::task::spawn_blocking(move || {
-                crate::core::tts::synthesize_local(&cache, model, request, cancelled)
-            })
-            .await
-            .map_err(|error| format!("本地 TTS 工作线程异常：{error}"))?
-            .map_err(|error| error.to_string())
+            state
+                .tts_worker
+                .synthesize(model, request, cancelled)
+                .await
+                .map_err(|error| error.to_string())
         }
         DubbingEngineSelection::Cloud { provider_id } => crate::core::tts::synthesize_cloud(
             &state.app_config_dir,
@@ -4213,6 +4219,9 @@ pub async fn download_and_install_update(
     }
 
     send_update_event(&on_progress, AppUpdatePhase::Installing, 0, None);
+    // Windows 无法替换仍在运行的可执行文件。安装前关闭复用当前应用二进制
+    // 的本地 TTS 子进程；后续若安装中止，下一次合成会自动重建 worker。
+    state.tts_worker.stop().await;
     update
         .install(&bytes)
         .map_err(|e| format!("更新包安装失败：{e}"))?;

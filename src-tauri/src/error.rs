@@ -32,6 +32,11 @@ pub enum FinalSubError {
 
     #[error("validation error: {0}")]
     Validation(String),
+
+    /// 已在受控子进程中完成分类与脱敏的错误；保留原文，避免跨进程边界
+    /// 再次包裹成 `validation error: validation error: ...`。
+    #[error("{0}")]
+    Worker(String),
 }
 
 pub type Result<T> = std::result::Result<T, FinalSubError>;
