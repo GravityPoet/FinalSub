@@ -13,8 +13,8 @@ pub use engine::{LocalTtsSynthesisRequest, TtsSynthesisResult};
 pub(crate) use models::find_spec;
 pub use models::{
     delete_managed_model, list_models, register_external_model, remove_external_registration,
-    set_models_root, TtsModelFamily, TtsModelInfo, TtsModelLocation, TtsModelSpec, TtsModelStatus,
-    TtsVoice,
+    resolved_models_root, set_models_root, TtsModelFamily, TtsModelInfo, TtsModelLocation,
+    TtsModelSpec, TtsModelStatus, TtsVoice,
 };
 pub use providers::{
     delete_provider, list_cloud_voices, list_providers, save_provider, synthesize_cloud,

@@ -1285,6 +1285,7 @@ export interface Settings {
   cloud_asr_request_interval_ms: number;
   cloud_asr_active_profile_id: string;
   cloud_asr_profiles: CloudAsrProfile[];
+  storage_root: string;
   models_path: string;
   parakeet_models_path: string;
   max_concurrent_tasks: number;
@@ -1324,6 +1325,21 @@ export interface Settings {
   enable_telemetry: boolean;
 }
 
+export type StoragePathSource = "unified-root" | "override" | "system-default";
+
+export interface ResolvedStoragePath {
+  path: string;
+  source: StoragePathSource;
+}
+
+export interface StorageLayout {
+  storage_root: string;
+  whisper_models: ResolvedStoragePath;
+  parakeet_models: ResolvedStoragePath;
+  tts_models: ResolvedStoragePath;
+  temp_files: ResolvedStoragePath;
+}
+
 export interface PowerSaveStatus {
   enabled: boolean;
   active: boolean;
@@ -1333,6 +1349,10 @@ export interface PowerSaveStatus {
 
 export async function getSettings(): Promise<Settings> {
   return invoke("get_settings");
+}
+
+export async function getStorageLayout(): Promise<StorageLayout> {
+  return invoke("get_storage_layout");
 }
 
 export async function getPowerSaveStatus(): Promise<PowerSaveStatus> {
@@ -1478,6 +1498,7 @@ function createMockSettings(): Settings {
     cloud_asr_request_interval_ms: 0,
     cloud_asr_active_profile_id: "",
     cloud_asr_profiles: [],
+    storage_root: "~/Tools/Local-LLM",
     models_path: "~/Tools/Local-LLM/whisper-models",
     parakeet_models_path: "~/Tools/Local-LLM/parakeet-models",
     max_concurrent_tasks: 2,
@@ -1705,6 +1726,57 @@ function mockSecretIdentity(args?: InvokeArgs): string {
 function currentMockSettings(): Settings {
   mockSettingsState ??= createMockSettings();
   return mockSettingsState;
+}
+
+function mockAbsoluteStoragePath(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("~/") ? `/Users/example/${trimmed.slice(2)}` : trimmed;
+}
+
+function mockResolvedStoragePath(
+  configured: string,
+  factoryDefault: string,
+  storageRoot: string,
+  subdirectory: string,
+): ResolvedStoragePath {
+  const configuredPath = mockAbsoluteStoragePath(configured);
+  const factoryPath = mockAbsoluteStoragePath(factoryDefault);
+  if (configuredPath && configuredPath !== factoryPath) {
+    return { path: configuredPath, source: "override" };
+  }
+  if (storageRoot) {
+    return { path: `${storageRoot}/${subdirectory}`, source: "unified-root" };
+  }
+  return { path: configuredPath || factoryPath, source: "system-default" };
+}
+
+function mockStorageLayout(): StorageLayout {
+  const settings = currentMockSettings();
+  const storageRoot = mockAbsoluteStoragePath(settings.storage_root);
+  const temp = settings.use_custom_temp_dir && settings.custom_temp_dir.trim()
+    ? { path: mockAbsoluteStoragePath(settings.custom_temp_dir), source: "override" as const }
+    : storageRoot
+      ? { path: `${storageRoot}/temp`, source: "unified-root" as const }
+      : { path: "/tmp/FinalSub", source: "system-default" as const };
+  return {
+    storage_root: settings.storage_root,
+    whisper_models: mockResolvedStoragePath(
+      settings.models_path,
+      "~/Tools/Local-LLM/whisper-models",
+      storageRoot,
+      "whisper-models",
+    ),
+    parakeet_models: mockResolvedStoragePath(
+      settings.parakeet_models_path,
+      "~/Tools/Local-LLM/parakeet-models",
+      storageRoot,
+      "parakeet-models",
+    ),
+    tts_models: storageRoot
+      ? { path: `${storageRoot}/tts-models`, source: "unified-root" }
+      : { path: "/Users/example/Tools/Local-LLM/tts-models", source: "system-default" },
+    temp_files: temp,
+  };
 }
 
 function createMockTtsModels(): TtsModelInfo[] {
@@ -2034,6 +2106,8 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return { name: "FinalSub", version: "1.0.10" } satisfies AppInfo;
     case "get_settings":
       return currentMockSettings();
+    case "get_storage_layout":
+      return mockStorageLayout();
     case "get_power_save_status":
       return {
         enabled: currentMockSettings().prevent_sleep_during_tasks,

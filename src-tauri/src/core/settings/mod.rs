@@ -78,6 +78,14 @@ pub struct Settings {
     pub cloud_asr_active_profile_id: String,
     #[serde(alias = "cloudAsrProfiles")]
     pub cloud_asr_profiles: Vec<CloudAsrProfile>,
+    /// Unified base directory for managed local models and transient media.
+    ///
+    /// Existing engine-specific paths remain valid overrides. Factory-default
+    /// paths are treated as "follow the unified root", so existing installs
+    /// keep their current layout while a root change updates every unpinned
+    /// engine together.
+    #[serde(alias = "storageRoot")]
+    pub storage_root: String,
     #[serde(alias = "modelsPath")]
     pub models_path: String,
     #[serde(alias = "parakeetModelsPath")]
@@ -176,6 +184,7 @@ impl Default for Settings {
             cloud_asr_request_interval_ms: 0,
             cloud_asr_active_profile_id: String::new(),
             cloud_asr_profiles: Vec::new(),
+            storage_root: default_storage_root(),
             models_path: default_models_path(),
             parakeet_models_path: default_parakeet_models_path(),
             max_concurrent_tasks: 1,
@@ -225,6 +234,14 @@ fn default_models_path() -> String {
         .to_string()
 }
 
+pub fn default_storage_root() -> String {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Tools/Local-LLM")
+        .to_string_lossy()
+        .to_string()
+}
+
 fn default_parakeet_models_path() -> String {
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -238,6 +255,139 @@ fn home_dir() -> Option<PathBuf> {
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.is_dir())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StoragePathSource {
+    UnifiedRoot,
+    Override,
+    SystemDefault,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedStoragePath {
+    pub path: String,
+    pub source: StoragePathSource,
+}
+
+fn expand_home_storage_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(trimmed)
+}
+
+fn paths_match(left: &str, right: &str) -> bool {
+    expand_home_storage_path(left) == expand_home_storage_path(right)
+}
+
+pub fn resolve_model_storage_path(
+    configured_path: &str,
+    factory_default: &str,
+    storage_root: &str,
+    subdirectory: &str,
+) -> ResolvedStoragePath {
+    let configured = configured_path.trim();
+    if !configured.is_empty() && !paths_match(configured, factory_default) {
+        return ResolvedStoragePath {
+            path: expand_home_storage_path(configured)
+                .to_string_lossy()
+                .to_string(),
+            source: StoragePathSource::Override,
+        };
+    }
+    if !storage_root.trim().is_empty() {
+        return ResolvedStoragePath {
+            path: expand_home_storage_path(storage_root)
+                .join(subdirectory)
+                .to_string_lossy()
+                .to_string(),
+            source: StoragePathSource::UnifiedRoot,
+        };
+    }
+    ResolvedStoragePath {
+        path: expand_home_storage_path(if configured.is_empty() {
+            factory_default
+        } else {
+            configured
+        })
+        .to_string_lossy()
+        .to_string(),
+        source: StoragePathSource::SystemDefault,
+    }
+}
+
+pub fn resolve_whisper_models_path(settings: &Settings) -> ResolvedStoragePath {
+    resolve_model_storage_path(
+        &settings.models_path,
+        &default_models_path(),
+        &settings.storage_root,
+        "whisper-models",
+    )
+}
+
+pub fn resolve_parakeet_models_path(settings: &Settings) -> ResolvedStoragePath {
+    resolve_model_storage_path(
+        &settings.parakeet_models_path,
+        &default_parakeet_models_path(),
+        &settings.storage_root,
+        "parakeet-models",
+    )
+}
+
+pub fn resolve_temp_storage_path(
+    settings: &Settings,
+    system_temp_dir: &Path,
+) -> ResolvedStoragePath {
+    if settings.use_custom_temp_dir && !settings.custom_temp_dir.trim().is_empty() {
+        return ResolvedStoragePath {
+            path: expand_home_storage_path(&settings.custom_temp_dir)
+                .to_string_lossy()
+                .to_string(),
+            source: StoragePathSource::Override,
+        };
+    }
+    if !settings.storage_root.trim().is_empty() {
+        return ResolvedStoragePath {
+            path: expand_home_storage_path(&settings.storage_root)
+                .join("temp")
+                .to_string_lossy()
+                .to_string(),
+            source: StoragePathSource::UnifiedRoot,
+        };
+    }
+    ResolvedStoragePath {
+        path: system_temp_dir
+            .join("FinalSub")
+            .to_string_lossy()
+            .to_string(),
+        source: StoragePathSource::SystemDefault,
+    }
+}
+
+pub fn resolved_temp_dir(app_config_dir: &Path) -> Result<PathBuf> {
+    let settings = load_settings(app_config_dir)?;
+    let system_temp = std::env::temp_dir();
+    let resolved = resolve_temp_storage_path(&settings, &system_temp);
+    let path = PathBuf::from(&resolved.path);
+    match std::fs::create_dir_all(&path) {
+        Ok(()) => Ok(path),
+        Err(error) if resolved.source == StoragePathSource::UnifiedRoot => {
+            let fallback = system_temp.join("FinalSub");
+            eprintln!(
+                "FinalSub unified temp directory is unavailable ({}); falling back to {}: {error}",
+                path.display(),
+                fallback.display()
+            );
+            std::fs::create_dir_all(&fallback)?;
+            Ok(fallback)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub fn settings_path(app_config_dir: &Path) -> PathBuf {
@@ -455,6 +605,30 @@ fn decrypt_config(encrypted_json: &str, passphrase: &str) -> Result<String> {
         .map_err(|_| crate::error::FinalSubError::Validation("解密后的配置不是有效 UTF-8".into()))
 }
 
+fn validate_storage_path_setting(value: &str, label: &str, allow_empty: bool) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return if allow_empty {
+            Ok(())
+        } else {
+            Err(crate::error::FinalSubError::Validation(format!(
+                "{label}不能为空"
+            )))
+        };
+    }
+    if trimmed.len() > 4_096 || trimmed.chars().any(char::is_control) {
+        return Err(crate::error::FinalSubError::Validation(format!(
+            "{label}过长或包含非法字符"
+        )));
+    }
+    if !expand_home_storage_path(trimmed).is_absolute() {
+        return Err(crate::error::FinalSubError::Validation(format!(
+            "{label}必须使用绝对路径"
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_settings(settings: &Settings) -> Result<()> {
     if !matches!(settings.language.as_str(), "zh" | "en" | "ja") {
         return Err(crate::error::FinalSubError::Validation(format!(
@@ -462,16 +636,9 @@ pub fn validate_settings(settings: &Settings) -> Result<()> {
             settings.language
         )));
     }
-    if settings.models_path.trim().is_empty() {
-        return Err(crate::error::FinalSubError::Validation(
-            "模型路径不能为空".into(),
-        ));
-    }
-    if settings.parakeet_models_path.trim().is_empty() {
-        return Err(crate::error::FinalSubError::Validation(
-            "Parakeet 模型路径不能为空".into(),
-        ));
-    }
+    validate_storage_path_setting(&settings.storage_root, "统一存储根目录", true)?;
+    validate_storage_path_setting(&settings.models_path, "模型路径", false)?;
+    validate_storage_path_setting(&settings.parakeet_models_path, "Parakeet 模型路径", false)?;
     crate::core::asr::cloud::validate_service_settings(
         &settings.cloud_asr_protocol,
         &settings.cloud_asr_endpoint,
@@ -661,6 +828,9 @@ pub fn validate_settings(settings: &Settings) -> Result<()> {
             "启用自定义临时目录时路径不能为空".into(),
         ));
     }
+    if !settings.custom_temp_dir.trim().is_empty() {
+        validate_storage_path_setting(&settings.custom_temp_dir, "自定义临时目录", false)?;
+    }
     if settings.max_context < -1 || settings.max_context > 65_536 {
         return Err(crate::error::FinalSubError::Validation(
             "最大上下文必须为 -1 或 0-65536".into(),
@@ -698,9 +868,69 @@ mod tests {
     fn settings_serialize_as_snake_case() {
         let content = serde_json::to_string(&Settings::default()).unwrap();
         assert!(content.contains("asr_engine"));
+        assert!(content.contains("storage_root"));
         assert!(content.contains("models_path"));
         assert!(content.contains("parakeet_models_path"));
         assert!(!content.contains("asrEngine"));
+    }
+
+    #[test]
+    fn unified_storage_root_applies_only_to_factory_default_model_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = Settings {
+            storage_root: root.path().to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let whisper = resolve_whisper_models_path(&settings);
+        let parakeet = resolve_parakeet_models_path(&settings);
+        assert_eq!(whisper.source, StoragePathSource::UnifiedRoot);
+        assert_eq!(
+            PathBuf::from(whisper.path),
+            root.path().join("whisper-models")
+        );
+        assert_eq!(parakeet.source, StoragePathSource::UnifiedRoot);
+        assert_eq!(
+            PathBuf::from(parakeet.path),
+            root.path().join("parakeet-models")
+        );
+
+        let custom = root.path().join("独立-Parakeet");
+        settings.parakeet_models_path = custom.to_string_lossy().into_owned();
+        let pinned = resolve_parakeet_models_path(&settings);
+        assert_eq!(pinned.source, StoragePathSource::Override);
+        assert_eq!(PathBuf::from(pinned.path), custom);
+    }
+
+    #[test]
+    fn temp_storage_prefers_explicit_override_then_unified_root() {
+        let root = tempfile::tempdir().unwrap();
+        let system_temp = root.path().join("system-temp");
+        let mut settings = Settings {
+            storage_root: root.path().join("library").to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        let unified = resolve_temp_storage_path(&settings, &system_temp);
+        assert_eq!(unified.source, StoragePathSource::UnifiedRoot);
+        assert_eq!(
+            PathBuf::from(unified.path),
+            root.path().join("library/temp")
+        );
+
+        settings.use_custom_temp_dir = true;
+        settings.custom_temp_dir = root.path().join("临时文件").to_string_lossy().into_owned();
+        let custom = resolve_temp_storage_path(&settings, &system_temp);
+        assert_eq!(custom.source, StoragePathSource::Override);
+        assert_eq!(PathBuf::from(custom.path), root.path().join("临时文件"));
+    }
+
+    #[test]
+    fn storage_validation_accepts_unicode_absolute_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            storage_root: root.path().join("模型仓库").to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        validate_settings(&settings).unwrap();
     }
 
     #[test]

@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；当前主要差距收敛到付费账号真实 E2E、独立 worker 和跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
+FinalSub 的字幕生成、批处理、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、视频联动与安全写回的可恢复配音会话、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、统一存储根目录与引擎覆盖来源可视化、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；当前主要差距收敛到付费账号真实 E2E、独立 worker 和跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -84,6 +84,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 本地导入 | 🟢 | Whisper 与受管模型导入入口 |
 | 本地 / 云端分类 | 🟣 | 顶层按运行位置拆为“本地模型 / 云端服务”，本地再拆 ASR/TTS；云端区明确是 API 配置并标注无需下载模型 |
 | 外部模型目录复用 | 🟣 | Whisper、Parakeet 与 TTS 使用独立根目录；真实 2.9 GB Parakeet 模型无需搬移或重下；TTS 选择已有目录只保存规范化路径，取消登记不删除源文件 |
+| 统一本地存储根目录 | 🟣 | ASR、TTS 与字幕预览临时目录统一由可选根目录派生；保留逐引擎/逐 TTS 外部目录覆盖优先级，设置页与模型页同时显示实际解析路径和“跟随根目录 / 单独覆盖 / 系统默认”来源；不自动搬移既有文件，现有 Parakeet 目录可直接复用 |
 | 本地 TTS 发现 | 🟢 | 有限深度扫描配置目录与 `~/Tools/Local-LLM`，按真实必需文件把 Kokoro/VITS/ZipVoice 标为 ready / incomplete / not-installed |
 | TTS 受管下载 | 🟢 | 固定目录清单；镜像 → 官方回退；`.part` 断点续传；主包/独立 vocoder 固定大小与 SHA-256；安全 tar 解包、staging + 原子替换、取消/删除边界均已接入；VITS 与 ZipVoice 官方 Release 布局真实夹具通过 |
 | 外部运行时依赖 | 🟢 | Parakeet/SenseVoice/Paraformer/Qwen/FireRed 均不需要 Python 或 uv |
@@ -146,7 +147,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 视觉系统 | 🟢 | 深浅主题液态玻璃、统一组件、F 品牌图标、清晰状态色与减少动态效果适配；主题入口集中到设置页 |
 | 响应式 | 🟢 | 桌面侧栏、移动底栏；1200×575/800 与 390×844 无页面横向溢出，矮窗口侧栏可独立滚动且不覆盖快速命令 |
 | 导航效率 | 🟢 | `⌘K` 根级命令面板、`⌘1`–`⌘9`、活动中心、首次引导和可折叠侧栏；选中态使用导轨而非通知圆点 |
-| 国际化 | 🟢 | 中文、英文、日文各 1,400 个 key 完全对齐，duplicate 0；首次启动及自动模式按系统语言列表选择，无法匹配时回退英文，并支持手动覆盖 |
+| 国际化 | 🟢 | 中文、英文、日文各 1,415 个 key 完全对齐，duplicate 0；首次启动及自动模式按系统语言列表选择，无法匹配时回退英文，并支持手动覆盖 |
 | 路由体积 | 🟢 | 页面 lazy loading；生产构建按页面拆包 |
 | 浏览器 QA | 🟢 | 本地/云端模型分区、本地 TTS 路径、目标向导、配音/compose 配置、双审核闸门与批准续跑均已实测；切换“仅生成字幕 / 生成并翻译 / 仅翻译”不会清空已选媒体；样式完整应用、个人预设保存/更新/重排/删除、重复名拦截、新建任务复用及硬软字幕往返保留选择均已实测；1200×700 与 390×844 无横向溢出，控制台 0 error / 0 warning |
 
@@ -178,11 +179,12 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 - SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设与云声音复刻。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC 与豆包声音复刻主链路，并在本轮补齐训练次数/重训、字幕选段与文本预填、本地降噪和云音色包迁移；当前差距项为独立 worker、付费账号 E2E 与跨平台真实安装验收。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- 全量 `cargo test --lib` 为 301 passed / 0 failed / 8 ignored；新增覆盖 ElevenLabs 云音色持久化/ID 边界、豆包 ICL 2.0 训练体、状态解析与 S_ 合成资源路由、字幕时间轴读取和云音色包结构，并保留样式预设、provider thinking 控制等既有覆盖。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1,400 项且键集合一致、duplicate 0。
+- 全量 `cargo test --lib` 为 306 passed / 0 failed / 8 ignored（314 项）；新增覆盖统一存储根目录跟随、逐引擎覆盖、临时目录解析、Unicode 路径和已有 Parakeet 目录无需下载的扫描闭环，并保留 ElevenLabs 云音色持久化/ID 边界、豆包 ICL 2.0 训练体、状态解析与 S_ 合成资源路由、字幕时间轴读取和云音色包结构。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`git diff --check` 与 `npm run build` 通过；中英日 locale 均为 1,415 项且键集合一致、duplicate 0。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
-- 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体后切换三种任务类型路径始终保留，类型不匹配只给提示，不要求重新上传。模型页本地/云端分区与“无需下载模型”说明可见；豆包实例可独立保存 API Key、APP ID、Access Token。我的音色页已实测本地/云端分区、ElevenLabs 找回、豆包三步创建、上传授权、训练状态刷新、字幕行选段/参考文本预填、本地降噪选项、云端 `.svoice` 导出入口，以及带已保存豆包音色直接进入配音会话；控制台 0 error / 0 warning。
-- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与真实运行路径唯一通过，构建目录残留 `.app` 为 0。DMG SHA-256 `366efbaf0578ce0d29651895a1fdeeae97a70fc5759bcc278f140e9442ee84db`；安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260720-234309/FinalSub.app.zip` 并通过完整性检查。
+- 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体后切换三种任务类型路径始终保留，类型不匹配只给提示，不要求重新上传。设置页与模型页均显示统一根目录、四类实际解析路径和来源徽标，切换根目录后 Parakeet 派生路径即时更新；移动宽度无横向溢出。模型页本地/云端分区与“无需下载模型”说明可见；豆包实例可独立保存 API Key、APP ID、Access Token。我的音色页已实测本地/云端分区、ElevenLabs 找回、豆包三步创建、上传授权、训练状态刷新、字幕行选段/参考文本预填、本地降噪选项、云端 `.svoice` 导出入口，以及带已保存豆包音色直接进入配音会话；控制台 0 error / 0 warning。
+- 本轮 Universal 1.0.10 已原子安装到唯一 `/Applications/FinalSub.app`；主程序、FFmpeg、Whisper 均为 `x86_64 arm64`，deep strict 签名、Spotlight、LaunchServices 与真实运行路径唯一通过，构建目录残留 `.app` 为 0。最新 DMG SHA-256 `a4e1c05eddb9a897f89073bbdb5e83ef69f2f0ba80606759bc9ad45ac47a1e6c`；本轮安装前回滚 ZIP 位于 `~/Library/Application Support/FinalSub/Backups/20260721-012500/FinalSub.app.zip`，`unzip -tq` 通过。
+- 真实 Universal 应用 UI：新建任务页的 Parakeet Native 显示“本地运行 / 已就绪”；模型管理页显示“本地模型 / 云端服务”分区、Parakeet 已安装，并实际展示 `~/Tools/Local-LLM/parakeet-models`、统一根目录 `~/Tools/Local-LLM`、TTS 与临时目录的解析结果，确认不会因本地模型存在而触发重复下载。
 
 ## 12. 新鲜验证（2026-07-19）
 

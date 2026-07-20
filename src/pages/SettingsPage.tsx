@@ -4,6 +4,7 @@ import { type TranslationKey, useI18n } from "../lib/i18n";
 import { type Theme, useTheme } from "../lib/theme";
 import {
   getSettings,
+  getStorageLayout,
   getPowerSaveStatus,
   saveSettingsCmd,
   resetSettings,
@@ -18,6 +19,8 @@ import {
   saveDialog,
   type AppUpdateEvent,
   type Settings,
+  type StorageLayout,
+  type StoragePathSource,
   type PowerSaveStatus,
   type UpdateInfo,
 } from "../lib/tauri";
@@ -120,6 +123,7 @@ export default function SettingsPage() {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [storageLayout, setStorageLayout] = useState<StorageLayout | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [cryptoDialog, setCryptoDialog] = useState<{ mode: "export" | "import"; path?: string } | null>(null);
@@ -131,8 +135,17 @@ export default function SettingsPage() {
   const [powerSaveStatus, setPowerSaveStatus] = useState<PowerSaveStatus | null>(null);
 
   useEffect(() => {
-    getSettings().then(setSettings).catch(console.error);
+    Promise.all([getSettings(), getStorageLayout()])
+      .then(([nextSettings, nextStorageLayout]) => {
+        setSettings(nextSettings);
+        setStorageLayout(nextStorageLayout);
+      })
+      .catch(console.error);
   }, []);
+
+  const refreshStorageLayout = () => {
+    getStorageLayout().then(setStorageLayout).catch(console.error);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -167,6 +180,7 @@ export default function SettingsPage() {
       const normalized = normalizeSettings(settings);
       const savedSettings = await saveSettingsCmd(normalized);
       setSettings(savedSettings);
+      refreshStorageLayout();
       showMsg("ok", t("settings.saved"));
       window.dispatchEvent(new CustomEvent("settings-changed"));
     } catch (err) {
@@ -180,6 +194,7 @@ export default function SettingsPage() {
     try {
       const defaults = await resetSettings();
       setSettings(defaults);
+      refreshStorageLayout();
       setConfirmReset(false);
       showMsg("ok", t("settings.restored"));
       window.dispatchEvent(new CustomEvent("settings-changed"));
@@ -212,6 +227,7 @@ export default function SettingsPage() {
       if (typeof selected === "string") {
         const imported = await importConfigFromPath(selected);
         setSettings(imported);
+        refreshStorageLayout();
         showMsg("ok", t("settings.imported"));
         window.dispatchEvent(new CustomEvent("settings-changed"));
       }
@@ -252,6 +268,7 @@ export default function SettingsPage() {
           configPassphrase,
         );
         setSettings(imported);
+        refreshStorageLayout();
         showMsg("ok", t("settings.encryptedImported"));
         window.dispatchEvent(new CustomEvent("settings-changed"));
       }
@@ -269,10 +286,33 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSelectStorageRoot = async () => {
+    const selected = await openDialog({ directory: true });
+    if (typeof selected === "string") {
+      update("storage_root", selected);
+    }
+  };
+
   const handleSelectParakeetModelsPath = async () => {
     const selected = await openDialog({ directory: true });
     if (typeof selected === "string") {
       update("parakeet_models_path", selected);
+    }
+  };
+
+  const storageSourceLabel = (source: StoragePathSource): string => {
+    switch (source) {
+      case "unified-root": return t("settings.storageSourceUnified");
+      case "override": return t("settings.storageSourceOverride");
+      default: return t("settings.storageSourceDefault");
+    }
+  };
+
+  const storageSourceClass = (source: StoragePathSource): string => {
+    switch (source) {
+      case "unified-root": return "border-brand/20 bg-brand-subtle text-brand-text";
+      case "override": return "border-warning/25 bg-warning/10 text-warning";
+      default: return "border-border-subtle bg-surface-overlay text-text-tertiary";
     }
   };
 
@@ -400,38 +440,81 @@ export default function SettingsPage() {
 
         {/* 模型存储 */}
         <SettingGroup icon={FolderOpen} title={t("settings.modelStorageGroup")}>
-          <div className="px-5">
-            <SettingRow label={t("settings.modelStorageLabel")} description={t("settings.modelStorageDesc")}>
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
-                <span className="min-w-0 max-w-full truncate rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2 font-mono text-sm text-text-secondary sm:max-w-[420px]">
-                  {settings.models_path}
-                </span>
-                <Button
-                  onClick={handleSelectModelsPath}
-                  variant="secondary"
-                  size="sm"
-                >
-                  {t("settings.change")}
-                </Button>
+          <div className="space-y-2 px-5 py-2">
+            <div className="my-3 rounded-2xl border border-brand/15 bg-brand-subtle/60 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold text-text-primary">{t("settings.storageRootLabel")}</div>
+                  <p className="mt-1 text-sm leading-5 text-text-secondary">{t("settings.storageRootDesc")}</p>
+                </div>
+                <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+                  <span
+                    data-testid="storage-root-value"
+                    className="min-w-0 flex-1 truncate rounded-xl border border-brand/15 bg-surface px-3 py-2 font-mono text-sm text-text-secondary sm:max-w-[30rem]"
+                  >
+                    {settings.storage_root || t("settings.storageRootEmpty")}
+                  </span>
+                  <Button onClick={handleSelectStorageRoot} variant="secondary" size="sm">
+                    {t("settings.storageRootChange")}
+                  </Button>
+                  {settings.storage_root && (
+                    <Button onClick={() => update("storage_root", "")} variant="ghost" size="sm">
+                      {t("settings.storageRootClear")}
+                    </Button>
+                  )}
+                </div>
               </div>
-            </SettingRow>
-            <SettingRow
-              label={t("settings.parakeetStorageLabel")}
-              description={t("settings.parakeetStorageDesc")}
-            >
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
-                <span className="min-w-0 max-w-full truncate rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2 font-mono text-sm text-text-secondary sm:max-w-[420px]">
-                  {settings.parakeet_models_path}
-                </span>
-                <Button
-                  onClick={handleSelectParakeetModelsPath}
-                  variant="secondary"
-                  size="sm"
-                >
-                  {t("settings.change")}
-                </Button>
+              <p className="mt-3 text-xs leading-5 text-text-tertiary">{t("settings.storageNoMove")}</p>
+            </div>
+
+            {storageLayout && (
+              <div className="grid gap-2 pb-2 md:grid-cols-2">
+                {([
+                  ["settings.storageWhisper", storageLayout.whisper_models],
+                  ["settings.storageParakeet", storageLayout.parakeet_models],
+                  ["settings.storageTts", storageLayout.tts_models],
+                  ["settings.storageTemp", storageLayout.temp_files],
+                ] as const).map(([labelKey, resolved]) => (
+                  <div key={labelKey} className="min-w-0 rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-text-secondary">{t(labelKey)}</span>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${storageSourceClass(resolved.source)}`}>
+                        {storageSourceLabel(resolved.source)}
+                      </span>
+                    </div>
+                    <div className="mt-1 truncate font-mono text-xs text-text-tertiary" title={resolved.path}>{resolved.path}</div>
+                  </div>
+                ))}
               </div>
-            </SettingRow>
+            )}
+
+            <div className="border-t border-border-subtle pt-2">
+              <div className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">{t("settings.storageAdvancedTitle")}</div>
+              <p className="mb-1 text-xs leading-5 text-text-tertiary">{t("settings.storageAdvancedDesc")}</p>
+              <SettingRow label={t("settings.modelStorageLabel")} description={t("settings.modelStorageDesc")}>
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
+                  <span className="min-w-0 max-w-full truncate rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2 font-mono text-sm text-text-secondary sm:max-w-[420px]">
+                    {settings.models_path}
+                  </span>
+                  <Button onClick={handleSelectModelsPath} variant="secondary" size="sm">
+                    {t("settings.change")}
+                  </Button>
+                </div>
+              </SettingRow>
+              <SettingRow
+                label={t("settings.parakeetStorageLabel")}
+                description={t("settings.parakeetStorageDesc")}
+              >
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
+                  <span className="min-w-0 max-w-full truncate rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2 font-mono text-sm text-text-secondary sm:max-w-[420px]">
+                    {settings.parakeet_models_path}
+                  </span>
+                  <Button onClick={handleSelectParakeetModelsPath} variant="secondary" size="sm">
+                    {t("settings.change")}
+                  </Button>
+                </div>
+              </SettingRow>
+            </div>
           </div>
         </SettingGroup>
 
