@@ -1550,6 +1550,8 @@ pub struct BurnSubtitleRequest {
     pub margin_v: Option<u32>,
     pub crf: Option<u8>,
     pub preset: Option<String>,
+    /// hard 字幕的视频编码方式：auto / cpu / hardware。
+    pub encoder_mode: Option<String>,
     pub soft_subtitle: Option<bool>,
     pub audio_path: Option<String>,
     pub audio_mode: Option<String>,
@@ -1557,6 +1559,12 @@ pub struct BurnSubtitleRequest {
     pub subtitle_title: Option<String>,
     pub audio_language: Option<String>,
     pub audio_title: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_video_encoder_info(app: AppHandle) -> Result<audio::HardwareEncoderInfo, String> {
+    let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    Ok(audio::get_hardware_encoder_info(&ffmpeg_path).await)
 }
 
 #[tauri::command]
@@ -1570,6 +1578,12 @@ pub async fn burn_subtitle(
     let output_path = validate_new_output_path(&req.output_path, "Video output path")?;
     let burn_id = output_path.to_string_lossy().to_string();
     let audio_mode = audio::ComposeAudioMode::parse(req.audio_mode.as_deref())?;
+    let soft_subtitle = req.soft_subtitle.unwrap_or(false);
+    let encoder_mode = if soft_subtitle {
+        audio::VideoEncoderMode::Cpu
+    } else {
+        audio::VideoEncoderMode::parse(req.encoder_mode.as_deref())?
+    };
     let audio_path = match audio_mode {
         audio::ComposeAudioMode::Keep => None,
         audio::ComposeAudioMode::Replace
@@ -1601,6 +1615,8 @@ pub async fn burn_subtitle(
         preset: req.preset,
     };
     let ffmpeg_path = resolve_sidecar(&app, "ffmpeg")?;
+    let video_encoding =
+        audio::resolve_video_encoding(&ffmpeg_path, encoder_mode, &style, &video_path).await;
     let original_audio_tracks = if matches!(
         audio_mode,
         audio::ComposeAudioMode::Mix | audio::ComposeAudioMode::AddTrack
@@ -1619,8 +1635,9 @@ pub async fn burn_subtitle(
     let audio_title = validate_track_title("Audio title", req.audio_title.as_deref())?
         .or_else(|| Some("FinalSub Dub".into()));
     let options = audio::ComposeOptions {
-        soft_subtitle: req.soft_subtitle.unwrap_or(false),
+        soft_subtitle,
         audio_mode,
+        video_encoding: Some(video_encoding.clone()),
         audio_path: audio_path.map(|path| path.to_string_lossy().to_string()),
         subtitle_language,
         subtitle_title,
@@ -1628,7 +1645,7 @@ pub async fn burn_subtitle(
         audio_title,
         original_audio_tracks,
     };
-    let args = audio::compose_args(
+    let initial_args = audio::compose_args(
         &video_path.to_string_lossy(),
         &subtitle_path.to_string_lossy(),
         &output_path.to_string_lossy(),
@@ -1636,102 +1653,96 @@ pub async fn burn_subtitle(
         &options,
     )?;
 
-    let mut child = tokio::process::Command::new(ffmpeg_path)
-        .args(&args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
-
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Unable to get FFmpeg error stream".to_string())?;
-    let reader = tokio::io::BufReader::new(stderr);
-
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     {
         let mut controls = state.burn_controls.write().await;
         if controls.contains_key(&burn_id) {
-            let _ = child.kill().await;
             return Err("A burn task is already running for this output path".to_string());
         }
         controls.insert(burn_id.clone(), cancel_tx);
     }
-
-    let app_handle_clone = app.clone();
-    let video_path_clone = req.video_path.clone();
-    let burn_id_clone = burn_id.clone();
-    let output_path_clone = output_path.clone();
-
+    let video_path_display = req.video_path.clone();
     let mut total_duration_ms: Option<u64> = None;
 
-    let result = tokio::select! {
-        _ = &mut cancel_rx => {
-            let _ = child.kill().await;
-            Err("Subtitle burning cancelled".to_string())
-        }
-        res = async {
-            use tokio::io::AsyncBufReadExt;
-            let mut stderr_tail = std::collections::VecDeque::with_capacity(40);
-            let mut lines_stream = reader.lines();
-            while let Ok(Some(line)) = lines_stream.next_line().await {
-                if stderr_tail.len() == 40 {
-                    stderr_tail.pop_front();
-                }
-                stderr_tail.push_back(line.clone());
-                if let Some(duration_ms) = audio::parse_duration_ms(&line) {
-                    total_duration_ms = Some(duration_ms);
-                }
-
-                if let Some(time_ms) = audio::parse_current_time_ms(&line) {
-                    if let Some(total_ms) = total_duration_ms {
-                        let progress =
-                            (time_ms as f64 / total_ms as f64 * 100.0).clamp(0.0, 100.0);
-                        #[derive(serde::Serialize, Clone)]
-                        struct BurnProgress {
-                            burn_id: String,
-                            video_path: String,
-                            progress: f64,
-                        }
-                        let _ = app_handle_clone.emit(
-                            "subtitle-burn-updated",
-                            BurnProgress {
-                                burn_id: burn_id_clone.clone(),
-                                video_path: video_path_clone.clone(),
-                                progress,
-                            }
-                        );
+    let mut args = initial_args;
+    let mut encoding = video_encoding;
+    let result = loop {
+        let child = match tokio::process::Command::new(&ffmpeg_path)
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                if encoding.hardware && encoder_mode != audio::VideoEncoderMode::Cpu {
+                    emit_burn_fallback(&app, &burn_id, &encoding.encoder_id);
+                    encoding = audio::cpu_video_encoding_for_style(&style);
+                    match audio::compose_args(
+                        &video_path.to_string_lossy(),
+                        &subtitle_path.to_string_lossy(),
+                        &output_path.to_string_lossy(),
+                        &style,
+                        &audio::ComposeOptions {
+                            video_encoding: Some(encoding.clone()),
+                            ..options.clone()
+                        },
+                    ) {
+                        Ok(cpu_args) => args = cpu_args,
+                        Err(error) => break Err(error),
                     }
+                    continue;
                 }
+                break Err(format!("Failed to start FFmpeg: {error}"));
             }
+        };
 
-            let status = child.wait().await.map_err(|e| format!("Failed to wait for FFmpeg: {e}"))?;
-            if status.success() {
-                #[derive(serde::Serialize, Clone)]
-                struct BurnProgress {
-                    burn_id: String,
-                    video_path: String,
-                    progress: f64,
+        match run_burn_attempt(
+            child,
+            &app,
+            &burn_id,
+            &video_path_display,
+            &output_path,
+            &mut cancel_rx,
+            &mut total_duration_ms,
+        )
+        .await
+        {
+            Ok(path) => break Ok(path),
+            Err(BurnAttemptError::Cancelled) => break Err("Subtitle burning cancelled".into()),
+            Err(BurnAttemptError::Failed(_error))
+                if encoding.hardware && encoder_mode != audio::VideoEncoderMode::Cpu =>
+            {
+                emit_burn_fallback(&app, &burn_id, &encoding.encoder_id);
+                if output_path.exists() {
+                    let _ = std::fs::remove_file(&output_path);
                 }
-                let _ = app_handle_clone.emit(
+                encoding = audio::cpu_video_encoding_for_style(&style);
+                match audio::compose_args(
+                    &video_path.to_string_lossy(),
+                    &subtitle_path.to_string_lossy(),
+                    &output_path.to_string_lossy(),
+                    &style,
+                    &audio::ComposeOptions {
+                        video_encoding: Some(encoding.clone()),
+                        ..options.clone()
+                    },
+                ) {
+                    Ok(cpu_args) => args = cpu_args,
+                    Err(error) => break Err(error),
+                }
+                let _ = app.emit(
                     "subtitle-burn-updated",
                     BurnProgress {
-                        burn_id: burn_id_clone.clone(),
-                        video_path: video_path_clone.clone(),
-                        progress: 100.0,
-                    }
+                        burn_id: burn_id.clone(),
+                        video_path: video_path_display.clone(),
+                        progress: 0.0,
+                    },
                 );
-                Ok(output_path_clone.to_string_lossy().to_string())
-            } else {
-                let details = stderr_tail.into_iter().collect::<Vec<_>>().join("\n");
-                if details.trim().is_empty() {
-                    Err("FFmpeg execution failed without diagnostic output".to_string())
-                } else {
-                    Err(format!("FFmpeg execution failed:\n{details}"))
-                }
+                continue;
             }
-        } => res
+            Err(BurnAttemptError::Failed(error)) => break Err(error),
+        }
     };
 
     state.burn_controls.write().await.remove(&burn_id);
@@ -1740,6 +1751,109 @@ pub async fn burn_subtitle(
         let _ = std::fs::remove_file(&output_path);
     }
 
+    result
+}
+
+#[derive(serde::Serialize, Clone)]
+struct BurnProgress {
+    burn_id: String,
+    video_path: String,
+    progress: f64,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct BurnFallback {
+    burn_id: String,
+    encoder: String,
+}
+
+fn emit_burn_fallback(app: &AppHandle, burn_id: &str, encoder: &str) {
+    let _ = app.emit(
+        "subtitle-burn-fallback",
+        BurnFallback {
+            burn_id: burn_id.to_string(),
+            encoder: encoder.to_string(),
+        },
+    );
+}
+
+enum BurnAttemptError {
+    Cancelled,
+    Failed(String),
+}
+
+async fn run_burn_attempt(
+    mut child: tokio::process::Child,
+    app: &AppHandle,
+    burn_id: &str,
+    video_path: &str,
+    output_path: &Path,
+    cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
+    total_duration_ms: &mut Option<u64>,
+) -> Result<String, BurnAttemptError> {
+    use tokio::io::AsyncBufReadExt;
+
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill().await;
+        return Err(BurnAttemptError::Failed(
+            "Unable to get FFmpeg error stream".into(),
+        ));
+    };
+    let reader = tokio::io::BufReader::new(stderr);
+    let result = tokio::select! {
+        _ = &mut *cancel_rx => {
+            let _ = child.kill().await;
+            Err(BurnAttemptError::Cancelled)
+        }
+        res = async {
+            let mut stderr_tail = std::collections::VecDeque::with_capacity(40);
+            let mut lines_stream = reader.lines();
+            while let Ok(Some(line)) = lines_stream.next_line().await {
+                if stderr_tail.len() == 40 {
+                    stderr_tail.pop_front();
+                }
+                stderr_tail.push_back(line.clone());
+                if let Some(duration_ms) = audio::parse_duration_ms(&line) {
+                    *total_duration_ms = Some(duration_ms);
+                }
+                if let Some(time_ms) = audio::parse_current_time_ms(&line) {
+                    if let Some(total_ms) = *total_duration_ms {
+                        let progress = (time_ms as f64 / total_ms as f64 * 100.0).clamp(0.0, 100.0);
+                        let _ = app.emit(
+                            "subtitle-burn-updated",
+                            BurnProgress {
+                                burn_id: burn_id.to_string(),
+                                video_path: video_path.to_string(),
+                                progress,
+                            },
+                        );
+                    }
+                }
+            }
+            let status = child
+                .wait()
+                .await
+                .map_err(|error| BurnAttemptError::Failed(format!("Failed to wait for FFmpeg: {error}")))?;
+            if status.success() {
+                let _ = app.emit(
+                    "subtitle-burn-updated",
+                    BurnProgress {
+                        burn_id: burn_id.to_string(),
+                        video_path: video_path.to_string(),
+                        progress: 100.0,
+                    },
+                );
+                Ok(output_path.to_string_lossy().to_string())
+            } else {
+                let details = stderr_tail.into_iter().collect::<Vec<_>>().join("\n");
+                if details.trim().is_empty() {
+                    Err(BurnAttemptError::Failed("FFmpeg execution failed without diagnostic output".into()))
+                } else {
+                    Err(BurnAttemptError::Failed(format!("FFmpeg execution failed:\n{details}")))
+                }
+            }
+        } => res
+    };
     result
 }
 
@@ -2769,6 +2883,7 @@ fn validate_translation_content_mode(
 }
 
 fn validate_burn_style(req: &BurnSubtitleRequest) -> Result<(), String> {
+    audio::VideoEncoderMode::parse(req.encoder_mode.as_deref())?;
     if let Some(font_name) = req.font_name.as_deref() {
         let valid = !font_name.trim().is_empty()
             && font_name.len() <= 128

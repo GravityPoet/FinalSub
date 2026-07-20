@@ -714,6 +714,7 @@ export interface BurnSubtitleRequest {
   margin_v?: number;
   crf?: number;
   preset?: string;
+  encoder_mode?: "auto" | "cpu" | "hardware";
   soft_subtitle?: boolean;
   audio_path?: string;
   audio_mode?: "keep" | "replace" | "mix" | "add-track";
@@ -721,6 +722,20 @@ export interface BurnSubtitleRequest {
   subtitle_title?: string;
   audio_language?: string;
   audio_title?: string;
+}
+
+export type VideoEncoderMode = "auto" | "cpu" | "hardware";
+
+export interface VideoEncoderInfo {
+  available: boolean;
+  encoder_id?: string;
+  encoder_label?: string;
+  rate_mode?: "cq" | "bitrate";
+  platform_supported: boolean;
+}
+
+export async function getVideoEncoderInfo(): Promise<VideoEncoderInfo> {
+  return invoke("get_video_encoder_info");
 }
 
 export async function burnSubtitle(req: BurnSubtitleRequest): Promise<string> {
@@ -1761,6 +1776,14 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return "[]";
     case "get_ffmpeg_version":
       return "ffmpeg dev-browser mock";
+    case "get_video_encoder_info":
+      return {
+        available: true,
+        encoder_id: "h264_videotoolbox",
+        encoder_label: "VideoToolbox",
+        rate_mode: "cq",
+        platform_supported: true,
+      } satisfies VideoEncoderInfo;
     case "get_video_metadata":
       return {
         duration_seconds: 62.4,

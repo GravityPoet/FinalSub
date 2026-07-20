@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2, AudioLines, X } from "lucide-react";
+import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2, AudioLines, X, Cpu, Zap } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import {
   composeRequiresMkv,
@@ -10,11 +10,14 @@ import {
 import {
   burnSubtitle,
   cancelBurnSubtitle,
+  getVideoEncoderInfo,
   getVideoMetadata,
   generateSubtitlePreview,
   listen,
   openDialog,
   saveDialog,
+  type VideoEncoderInfo,
+  type VideoEncoderMode,
   type VideoMetadata,
 } from "../lib/tauri";
 
@@ -77,6 +80,9 @@ export default function SubtitleMergePage() {
   const [marginV, setMarginV] = useState(30);
   const [crf, setCrf] = useState(20);
   const [encodingPreset, setEncodingPreset] = useState("medium");
+  const [encoderMode, setEncoderMode] = useState<VideoEncoderMode>("auto");
+  const [encoderInfo, setEncoderInfo] = useState<VideoEncoderInfo | null>(null);
+  const [loadingEncoderInfo, setLoadingEncoderInfo] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState("");
@@ -97,6 +103,13 @@ export default function SubtitleMergePage() {
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const requiresMkv = composeRequiresMkv(softSubtitle, audioPath, audioMode);
+  const encoderStatus = loadingEncoderInfo
+    ? t("merge.hardwareChecking")
+    : encoderInfo?.available
+      ? `${encoderInfo.encoder_label ?? "Hardware"} · ${encoderInfo.rate_mode === "bitrate" ? "bitrate" : "CQ"}`
+      : encoderInfo?.platform_supported
+        ? t("merge.hardwareUnavailable")
+        : t("merge.hardwareUnsupported");
 
   const missingInputs = [
     !videoPath ? t("merge.missingVideo") : "",
@@ -128,6 +141,24 @@ export default function SubtitleMergePage() {
   }, [videoPath]);
 
   useEffect(() => {
+    let active = true;
+    setLoadingEncoderInfo(true);
+    getVideoEncoderInfo()
+      .then((info) => {
+        if (active) setEncoderInfo(info);
+      })
+      .catch(() => {
+        if (active) setEncoderInfo({ available: false, platform_supported: true });
+      })
+      .finally(() => {
+        if (active) setLoadingEncoderInfo(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (metadata?.audio_tracks === 0 && audioMode === "mix") {
       setAudioMode("replace");
     }
@@ -141,7 +172,9 @@ export default function SubtitleMergePage() {
 
   // Listen for burn progress updates
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenFallback: (() => void) | undefined;
+    let disposed = false;
 
     if (processing && outputPath) {
       listen<{ burn_id: string; video_path: string; progress: number }>("subtitle-burn-updated", (event) => {
@@ -149,14 +182,25 @@ export default function SubtitleMergePage() {
           setProgress(event.payload.progress);
         }
       }).then((unsub) => {
-        unlisten = unsub;
+        if (disposed) unsub();
+        else unlistenProgress = unsub;
+      });
+      listen<{ burn_id: string; encoder: string }>("subtitle-burn-fallback", (event) => {
+        if (event.payload.burn_id === outputPath) {
+          setNotice(t("merge.hardwareFallback", { encoder: event.payload.encoder }));
+        }
+      }).then((unsub) => {
+        if (disposed) unsub();
+        else unlistenFallback = unsub;
       });
     } else {
       setProgress(null);
     }
 
     return () => {
-      if (unlisten) unlisten();
+      disposed = true;
+      unlistenProgress?.();
+      unlistenFallback?.();
     };
   }, [processing, outputPath]);
 
@@ -233,6 +277,7 @@ export default function SubtitleMergePage() {
         margin_v: marginV,
         crf,
         preset: encodingPreset,
+        encoder_mode: softSubtitle ? "cpu" : encoderMode,
         soft_subtitle: softSubtitle,
         audio_path: audioPath || undefined,
         audio_mode: audioPath ? audioMode : "keep",
@@ -288,6 +333,7 @@ export default function SubtitleMergePage() {
         margin_v: marginV,
         crf,
         preset: "ultrafast",
+        encoder_mode: "cpu",
       });
       setNotice(t("merge.previewSuccess"));
     } catch (err) {
@@ -537,6 +583,11 @@ export default function SubtitleMergePage() {
             <span className="rounded-full bg-surface-overlay px-3 py-1.5 text-text-secondary">
               {softSubtitle ? t("merge.summary.subtitleSwitchable") : t("merge.summary.subtitlePermanent")}
             </span>
+            {!softSubtitle && (
+              <span className="rounded-full bg-surface-overlay px-3 py-1.5 text-text-secondary">
+                {t(`merge.summary.encoder.${encoderMode}` as any)}
+              </span>
+            )}
             <span className="rounded-full bg-surface-overlay px-3 py-1.5 text-text-secondary">
               {audioPath ? t(`merge.summary.audio.${audioMode}` as any) : t("merge.summary.audio.keep")}
             </span>
@@ -606,9 +657,63 @@ export default function SubtitleMergePage() {
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.encodingPreset")}</label>
-              <Select value={encodingPreset} disabled={processing || softSubtitle} onChange={(e) => setEncodingPreset(e.target.value)} className="h-9">
+              <Select value={encodingPreset} disabled={processing || softSubtitle || encoderMode === "hardware"} onChange={(e) => setEncodingPreset(e.target.value)} className="h-9">
                 {['ultrafast', 'veryfast', 'fast', 'medium', 'slow', 'veryslow'].map((value) => <option key={value} value={value}>{value}</option>)}
               </Select>
+            </div>
+            <div
+              data-testid="video-encoder-panel"
+              className="col-span-2 rounded-xl border border-border-subtle bg-surface-overlay p-3.5 sm:col-span-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                      <Cpu size={15} className="text-brand" />
+                      {t("merge.encoderMode")}
+                    </span>
+                    <span
+                      data-testid="video-encoder-status"
+                      className={`rounded-full border px-2.5 py-1 font-mono text-[11px] font-semibold ${
+                        encoderInfo?.available
+                          ? "border-success/20 bg-success/10 text-success"
+                          : "border-border-subtle bg-surface-elevated text-text-tertiary"
+                      }`}
+                    >
+                      {encoderStatus}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("merge.encoderModeDesc")}</p>
+                </div>
+                {loadingEncoderInfo && <Loader2 size={14} className="mt-1 animate-spin text-text-tertiary" />}
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg border border-border-subtle bg-surface-elevated p-1">
+                {(["auto", "cpu", "hardware"] as VideoEncoderMode[]).map((mode) => {
+                  const disabled = processing || (mode === "hardware" && !encoderInfo?.available);
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      data-testid={`video-encoder-${mode}`}
+                      aria-pressed={encoderMode === mode}
+                      disabled={disabled}
+                      onClick={() => setEncoderMode(mode)}
+                      className={`flex min-h-9 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-semibold transition ${
+                        encoderMode === mode
+                          ? "liquid-selected text-brand-text"
+                          : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+                      } disabled:cursor-not-allowed disabled:opacity-40`}
+                    >
+                      {mode === "hardware" && <Zap size={12} />}
+                      {t(`merge.encoderMode.${mode}` as any)}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-xs leading-5 text-text-secondary">
+                {t(`merge.encoderMode.${encoderMode}Desc` as any)}
+              </p>
             </div>
             <label className="col-span-2 flex cursor-pointer items-center gap-3 rounded-xl border border-border-subtle bg-surface-overlay px-3.5 py-3 text-sm text-text-secondary">
               <input type="checkbox" checked={opaqueBackground} disabled={processing || softSubtitle} onChange={(e) => setOpaqueBackground(e.target.checked)} className="h-4 w-4 accent-brand" />
