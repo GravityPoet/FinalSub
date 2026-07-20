@@ -129,6 +129,19 @@ fn default_models_root() -> PathBuf {
         .join("Tools/Local-LLM/tts-models")
 }
 
+pub fn resolved_models_root(
+    app_config_dir: &Path,
+) -> Result<crate::core::settings::ResolvedStoragePath> {
+    let registry = load_registry(app_config_dir)?;
+    let settings = crate::core::settings::load_settings(app_config_dir)?;
+    Ok(crate::core::settings::resolve_model_storage_path(
+        &registry.models_root,
+        &default_models_root().to_string_lossy(),
+        &settings.storage_root,
+        "tts-models",
+    ))
+}
+
 fn registry_path(app_config_dir: &Path) -> PathBuf {
     app_config_dir.join("tts").join("models.json")
 }
@@ -428,12 +441,11 @@ fn candidate_from_registry(registry: &TtsModelRegistry, spec: &TtsModelSpec) -> 
         .filter(|path| path.is_dir())
 }
 
-fn model_info(spec: TtsModelSpec, registry: &TtsModelRegistry) -> TtsModelInfo {
-    let models_root = PathBuf::from(&registry.models_root);
+fn model_info(spec: TtsModelSpec, registry: &TtsModelRegistry, models_root: &Path) -> TtsModelInfo {
     let registered = candidate_from_registry(registry, &spec);
     let discovered = registered
         .clone()
-        .or_else(|| discover_model_path(&spec, &models_root));
+        .or_else(|| discover_model_path(&spec, models_root));
     let configured_candidate = models_root.join(spec.id);
     let inspected = discovered.clone().or_else(|| {
         configured_candidate
@@ -458,7 +470,7 @@ fn model_info(spec: TtsModelSpec, registry: &TtsModelRegistry) -> TtsModelInfo {
     };
     let location = discovered
         .as_deref()
-        .map(|path| location_for(path, &models_root));
+        .map(|path| location_for(path, models_root));
 
     TtsModelInfo {
         id: spec.id.into(),
@@ -486,9 +498,10 @@ fn model_info(spec: TtsModelSpec, registry: &TtsModelRegistry) -> TtsModelInfo {
 
 pub fn list_models(app_config_dir: &Path) -> Result<Vec<TtsModelInfo>> {
     let registry = load_registry(app_config_dir)?;
+    let models_root = PathBuf::from(resolved_models_root(app_config_dir)?.path);
     Ok(catalog()
         .into_iter()
-        .map(|spec| model_info(spec, &registry))
+        .map(|spec| model_info(spec, &registry, &models_root))
         .collect())
 }
 
@@ -519,7 +532,8 @@ pub fn register_external_model(
         .external_paths
         .insert(spec.id.into(), canonical.to_string_lossy().to_string());
     save_registry(app_config_dir, &registry)?;
-    Ok(model_info(spec, &registry))
+    let models_root = PathBuf::from(resolved_models_root(app_config_dir)?.path);
+    Ok(model_info(spec, &registry, &models_root))
 }
 
 pub fn remove_external_registration(app_config_dir: &Path, model_id: &str) -> Result<()> {
@@ -540,8 +554,8 @@ pub fn set_models_root(app_config_dir: &Path, models_root: &str) -> Result<Vec<T
 }
 
 pub(crate) fn managed_models_root(app_config_dir: &Path) -> Result<PathBuf> {
-    let registry = load_registry(app_config_dir)?;
-    let root = validate_root(&registry.models_root)?;
+    let resolved = resolved_models_root(app_config_dir)?;
+    let root = validate_root(&resolved.path)?;
     std::fs::create_dir_all(&root)?;
     Ok(root.canonicalize()?)
 }
@@ -576,7 +590,7 @@ pub fn delete_managed_model(app_config_dir: &Path, model_id: &str) -> Result<()>
 pub(crate) fn resolve_ready_model(app_config_dir: &Path, model_id: &str) -> Result<ReadyTtsModel> {
     let registry = load_registry(app_config_dir)?;
     let spec = find_spec(model_id)?;
-    let models_root = PathBuf::from(&registry.models_root);
+    let models_root = PathBuf::from(resolved_models_root(app_config_dir)?.path);
     let path = candidate_from_registry(&registry, &spec)
         .filter(|path| missing_files(&spec, path).is_empty())
         .or_else(|| discover_model_path(&spec, &models_root))
@@ -703,5 +717,38 @@ mod tests {
         let error = delete_managed_model(config.path(), spec.id).unwrap_err();
         assert!(error.to_string().contains("没有可删除"));
         assert!(external.path().join("model.onnx").is_file());
+    }
+
+    #[test]
+    fn managed_root_follows_unified_storage_until_explicitly_overridden() {
+        let config = TempDir::new().unwrap();
+        let unified = TempDir::new().unwrap();
+        let settings = crate::core::settings::Settings {
+            storage_root: unified.path().to_string_lossy().into_owned(),
+            ..crate::core::settings::Settings::default()
+        };
+        crate::core::settings::save_settings(config.path(), &settings).unwrap();
+
+        let followed = resolved_models_root(config.path()).unwrap();
+        assert_eq!(
+            followed.source,
+            crate::core::settings::StoragePathSource::UnifiedRoot
+        );
+        assert_eq!(
+            PathBuf::from(followed.path),
+            unified.path().join("tts-models")
+        );
+
+        let override_root = TempDir::new().unwrap();
+        set_models_root(config.path(), override_root.path().to_str().unwrap()).unwrap();
+        let pinned = resolved_models_root(config.path()).unwrap();
+        assert_eq!(
+            pinned.source,
+            crate::core::settings::StoragePathSource::Override
+        );
+        assert_eq!(
+            PathBuf::from(pinned.path),
+            override_root.path().canonicalize().unwrap()
+        );
     }
 }

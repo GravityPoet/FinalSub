@@ -2584,6 +2584,7 @@ pub async fn get_video_metadata(
 #[tauri::command]
 pub async fn generate_subtitle_preview(
     app: AppHandle,
+    state: State<'_, AppState>,
     req: BurnSubtitleRequest,
 ) -> Result<String, String> {
     use tauri_plugin_opener::OpenerExt;
@@ -2591,8 +2592,8 @@ pub async fn generate_subtitle_preview(
     let video_path = validate_media_path(&req.video_path)?;
     let subtitle_path = validate_existing_file_path(&req.subtitle_path, "Subtitle file")?;
 
-    // Generate preview output path in system temp directory
-    let temp_dir = std::env::temp_dir();
+    let temp_dir = settings::resolved_temp_dir(&state.app_config_dir)
+        .map_err(|error| format!("无法准备字幕预览临时目录：{error}"))?;
     let preview_filename = format!("finalsub-preview-{}.mp4", uuid::Uuid::new_v4());
     let preview_path = temp_dir.join(preview_filename);
 
@@ -3056,6 +3057,30 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     settings::load_settings(&state.app_config_dir).map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StorageLayout {
+    pub storage_root: String,
+    pub whisper_models: settings::ResolvedStoragePath,
+    pub parakeet_models: settings::ResolvedStoragePath,
+    pub tts_models: settings::ResolvedStoragePath,
+    pub temp_files: settings::ResolvedStoragePath,
+}
+
+#[tauri::command]
+pub fn get_storage_layout(state: State<'_, AppState>) -> Result<StorageLayout, String> {
+    let current = settings::load_settings(&state.app_config_dir).map_err(|e| e.to_string())?;
+    let temp_files = settings::resolve_temp_storage_path(&current, &std::env::temp_dir());
+    let tts_models =
+        crate::core::tts::resolved_models_root(&state.app_config_dir).map_err(|e| e.to_string())?;
+    Ok(StorageLayout {
+        storage_root: current.storage_root.clone(),
+        whisper_models: settings::resolve_whisper_models_path(&current),
+        parakeet_models: settings::resolve_parakeet_models_path(&current),
+        tts_models,
+        temp_files,
+    })
+}
+
 #[tauri::command]
 pub fn get_power_save_status(
     state: State<'_, AppState>,
@@ -3256,12 +3281,18 @@ fn validate_cloud_asr_readiness(settings: &Settings) -> Result<(), String> {
 }
 pub(crate) fn whisper_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
     let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
-    validated_model_root(&settings.models_path, "Model")
+    validated_model_root(
+        &settings::resolve_whisper_models_path(&settings).path,
+        "Model",
+    )
 }
 
 pub(crate) fn parakeet_models_dir(app_config_dir: &Path) -> Result<PathBuf, String> {
     let settings = settings::load_settings(app_config_dir).map_err(|e| e.to_string())?;
-    validated_model_root(&settings.parakeet_models_path, "Parakeet model")
+    validated_model_root(
+        &settings::resolve_parakeet_models_path(&settings).path,
+        "Parakeet model",
+    )
 }
 
 fn model_storage_dir(app_config_dir: &Path, model_id: &str) -> Result<PathBuf, String> {
@@ -4839,6 +4870,42 @@ mod tests {
 
         let mut catalog = models::builtin_model_catalog();
         models::scan_model_status(&mut catalog, whisper.path(), parakeet.path());
+        let model = catalog
+            .iter()
+            .find(|model| model.id == crate::core::asr::parakeet::PARAKEET_MODEL_ID)
+            .unwrap();
+        assert!(matches!(model.status, ModelStatus::Downloaded));
+    }
+
+    #[test]
+    fn unified_storage_root_reuses_existing_parakeet_without_download() {
+        let config = tempfile::tempdir().unwrap();
+        let unified = tempfile::tempdir().unwrap();
+        let parakeet_root = unified.path().join("parakeet-models");
+        let model_dir = parakeet_root.join(crate::core::asr::parakeet::PARAKEET_MODEL_ID);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        for name in [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ] {
+            std::fs::write(model_dir.join(name), b"fixture").unwrap();
+        }
+
+        let configured = Settings {
+            storage_root: unified.path().to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
+        settings::save_settings(config.path(), &configured).unwrap();
+
+        assert_eq!(parakeet_models_dir(config.path()).unwrap(), parakeet_root);
+        let mut catalog = models::builtin_model_catalog();
+        models::scan_model_status(
+            &mut catalog,
+            &unified.path().join("whisper-models"),
+            &parakeet_root,
+        );
         let model = catalog
             .iter()
             .find(|model| model.id == crate::core::asr::parakeet::PARAKEET_MODEL_ID)

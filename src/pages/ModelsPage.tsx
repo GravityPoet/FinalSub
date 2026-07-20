@@ -4,6 +4,7 @@ import {
   scanModels,
   deleteModel,
   getSettings,
+  getStorageLayout,
   downloadModel,
   cancelModelDownload,
   importLocalModel,
@@ -12,6 +13,7 @@ import {
   openDialog,
   type AsrModelInfo,
   type ModelDownloadProgress,
+  type StorageLayout,
 } from "../lib/tauri";
 import { Download, CheckCircle, AlertCircle, Clock, Trash2, RefreshCw, XCircle, FileInput, Cloud, HardDrive } from "lucide-react";
 
@@ -111,6 +113,7 @@ export default function ModelsPage() {
   const [pendingDelete, setPendingDelete] = useState<AsrModelInfo | null>(null);
   const [modelsPath, setModelsPath] = useState("~/Tools/Local-LLM/whisper-models");
   const [parakeetModelsPath, setParakeetModelsPath] = useState("~/Tools/Local-LLM/parakeet-models");
+  const [storageLayout, setStorageLayout] = useState<StorageLayout | null>(null);
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [localRefreshSignal, setLocalRefreshSignal] = useState(0);
 
@@ -130,11 +133,12 @@ export default function ModelsPage() {
 
   const refresh = () => {
     setLoading(true);
-    Promise.all([scanModels(), getSettings()])
-      .then(([nextModels, settings]) => {
+    Promise.all([scanModels(), getSettings(), getStorageLayout()])
+      .then(([nextModels, settings, nextStorageLayout]) => {
         setModels(nextModels);
         setModelsPath(settings.models_path);
         setParakeetModelsPath(settings.parakeet_models_path);
+        setStorageLayout(nextStorageLayout);
       })
       .catch((err) => setMessage({ type: "err", text: `${t("models.scanFailed")}${err}` }))
       .finally(() => {
@@ -410,6 +414,41 @@ export default function ModelsPage() {
               <p className="mt-4 text-sm text-text-tertiary">{t("models.noInstalledLocal")}</p>
             )}
           </Card>
+
+          {storageLayout && (
+            <Card className="border-brand/15 bg-brand-subtle/40 p-5">
+              <div className="flex flex-col gap-1.5">
+                <h3 className="font-display text-h3 font-semibold text-text-primary">{t("settings.storageRootLabel")}</h3>
+                <p className="text-sm leading-6 text-text-secondary">{t("settings.storageRootDesc")}</p>
+                <div className="mt-1 truncate rounded-xl border border-brand/15 bg-surface px-3 py-2 font-mono text-sm text-text-secondary" title={storageLayout.storage_root}>
+                  {storageLayout.storage_root || t("settings.storageRootEmpty")}
+                </div>
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {([
+                  ["settings.storageWhisper", storageLayout.whisper_models],
+                  ["settings.storageParakeet", storageLayout.parakeet_models],
+                  ["settings.storageTts", storageLayout.tts_models],
+                  ["settings.storageTemp", storageLayout.temp_files],
+                ] as const).map(([labelKey, resolved]) => (
+                  <div key={labelKey} className="min-w-0 rounded-xl border border-border-subtle bg-surface-overlay px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-text-secondary">{t(labelKey)}</span>
+                      <Badge variant={resolved.source === "unified-root" ? "success" : resolved.source === "override" ? "warning" : "default"}>
+                        {resolved.source === "unified-root"
+                          ? t("settings.storageSourceUnified")
+                          : resolved.source === "override"
+                            ? t("settings.storageSourceOverride")
+                            : t("settings.storageSourceDefault")}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 truncate font-mono text-xs text-text-tertiary" title={resolved.path}>{resolved.path}</div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-5 text-text-tertiary">{t("settings.storageNoMove")}</p>
+            </Card>
+          )}
 
           <div>
             <h3 className="font-display text-h3 font-semibold text-text-secondary">{t("models.asrLocalTitle")}</h3>
