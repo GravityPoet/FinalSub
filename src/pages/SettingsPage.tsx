@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save, RotateCcw, Download, Upload, FolderOpen, AlertCircle, LockKeyhole, Palette, Sun, Moon, Laptop, RefreshCw } from "lucide-react";
+import { Settings as SettingsIcon, Save, RotateCcw, Download, Upload, FolderOpen, AlertCircle, LockKeyhole, Palette, Sun, Moon, Laptop, RefreshCw, BatteryCharging } from "lucide-react";
 import { type TranslationKey, useI18n } from "../lib/i18n";
 import { type Theme, useTheme } from "../lib/theme";
 import {
   getSettings,
+  getPowerSaveStatus,
   saveSettingsCmd,
   resetSettings,
   exportConfigToPath,
@@ -17,6 +18,7 @@ import {
   saveDialog,
   type AppUpdateEvent,
   type Settings,
+  type PowerSaveStatus,
   type UpdateInfo,
 } from "../lib/tauri";
 
@@ -124,9 +126,27 @@ export default function SettingsPage() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [updateProgress, setUpdateProgress] = useState<AppUpdateEvent | null>(null);
+  const [powerSaveStatus, setPowerSaveStatus] = useState<PowerSaveStatus | null>(null);
 
   useEffect(() => {
     getSettings().then(setSettings).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const refresh = () => {
+      getPowerSaveStatus()
+        .then((status) => {
+          if (mounted) setPowerSaveStatus(status);
+        })
+        .catch(console.error);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 1_500);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const showMsg = (type: "ok" | "err", text: string) => {
@@ -418,6 +438,45 @@ export default function SettingsPage() {
                 }
                 className="w-20 text-right h-9"
               />
+            </SettingRow>
+            <SettingRow
+              label={t("settings.preventSleepLabel")}
+              description={t("settings.preventSleepDesc")}
+            >
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <label className="relative inline-flex cursor-pointer items-center">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label={t("settings.preventSleepLabel")}
+                    checked={settings.prevent_sleep_during_tasks}
+                    onChange={(e) => update("prevent_sleep_during_tasks", e.target.checked)}
+                    className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
+                    data-testid="prevent-sleep-toggle"
+                  />
+                  <div className="pointer-events-none h-5 w-9 rounded-full bg-border-strong ring-offset-2 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all peer-checked:bg-brand peer-checked:after:translate-x-full peer-focus-visible:ring-2 peer-focus-visible:ring-brand/40" />
+                </label>
+                <span
+                  className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                    powerSaveStatus?.last_error
+                      ? "text-warning"
+                      : powerSaveStatus?.active
+                        ? "text-success"
+                        : "text-text-tertiary"
+                  }`}
+                  role="status"
+                  data-testid="prevent-sleep-status"
+                >
+                  <BatteryCharging size={13} />
+                  {powerSaveStatus?.last_error
+                    ? t("settings.preventSleepError")
+                    : powerSaveStatus?.active
+                      ? t("settings.preventSleepActive", { count: powerSaveStatus.active_count })
+                      : powerSaveStatus?.enabled
+                        ? t("settings.preventSleepReady")
+                        : t("settings.preventSleepOff")}
+                </span>
+              </div>
             </SettingRow>
             <SettingRow label={t("settings.outputLabel")} description={t("settings.outputDesc")}>
               <Select

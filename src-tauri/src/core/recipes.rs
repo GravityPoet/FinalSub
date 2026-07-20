@@ -16,6 +16,8 @@ pub struct TaskRecipeSnapshot {
     pub output_name: String,
     pub strip_chinese_punctuation: bool,
     pub review_required: bool,
+    #[serde(default)]
+    pub max_subtitle_chars: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,6 +160,8 @@ fn validate_recipe_name(name: &str) -> Result<(), String> {
 }
 
 fn validate_snapshot(snapshot: &TaskRecipeSnapshot) -> Result<(), String> {
+    crate::core::subtitle::parse_subtitle_length_mode(snapshot.max_subtitle_chars)
+        .map_err(|error| error.to_string())?;
     if !matches!(
         snapshot.task_type.as_str(),
         "generate-only" | "generate-and-translate" | "translate-only"
@@ -206,6 +210,7 @@ mod tests {
             output_name: String::new(),
             strip_chinese_punctuation: false,
             review_required: true,
+            max_subtitle_chars: 0,
         }
     }
 
@@ -258,5 +263,13 @@ mod tests {
         invalid.task_type = "delete-everything".into();
         assert!(validate_snapshot(&invalid).is_err());
         assert!(validate_recipe_name("bad\nname").is_err());
+    }
+
+    #[test]
+    fn legacy_recipe_defaults_to_smart_line_breaking() {
+        let mut value = serde_json::to_value(snapshot()).unwrap();
+        value.as_object_mut().unwrap().remove("max_subtitle_chars");
+        let restored: TaskRecipeSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.max_subtitle_chars, 0);
     }
 }

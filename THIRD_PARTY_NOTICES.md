@@ -8,6 +8,8 @@ This document details the licensing information and copyrights of third-party op
 
 FinalSub's early architectural design and baseline capabilities were built upon concepts and structures from the open-source project **SmartSub**, which is licensed under the MIT License.
 
+FinalSub uses **keepawake 0.6.0** by Segev Finer to hold native idle-sleep assertions while media work is running. keepawake is licensed under the MIT License; its license is bundled at `src-tauri/licenses/keepawake-LICENSE.txt`.
+
 - **Upstream Project**: [SmartSub](https://github.com/buxuku/SmartSub)
 - **License**: MIT License
 - **Copyright Notice**: Copyright (c) 2024 Lin Xiaodong

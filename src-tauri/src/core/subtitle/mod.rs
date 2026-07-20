@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cue {
@@ -11,6 +12,242 @@ pub struct Cue {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubtitleTrack {
     pub cues: Vec<Cue>,
+}
+
+pub const MIN_CUSTOM_SUBTITLE_WIDTH: i32 = 8;
+pub const MAX_CUSTOM_SUBTITLE_WIDTH: i32 = 120;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubtitleLengthMode {
+    Smart,
+    Unlimited,
+    Custom(usize),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct SubtitleResplitStats {
+    pub original_cues: usize,
+    pub final_cues: usize,
+    pub split_cues: usize,
+}
+
+pub fn parse_subtitle_length_mode(raw: i32) -> crate::error::Result<SubtitleLengthMode> {
+    match raw {
+        0 => Ok(SubtitleLengthMode::Smart),
+        -1 => Ok(SubtitleLengthMode::Unlimited),
+        MIN_CUSTOM_SUBTITLE_WIDTH..=MAX_CUSTOM_SUBTITLE_WIDTH => {
+            Ok(SubtitleLengthMode::Custom(raw as usize))
+        }
+        _ => Err(crate::error::FinalSubError::Validation(
+            "字幕最大显示宽度必须是智能(0)、不限(-1)或 8-120".into(),
+        )),
+    }
+}
+
+/// 引擎在 token/词级时间戳上聚合时使用的宽度判定。智能模式直接采用调用方
+/// 的原始判断；自定义模式统一采用可见宽度；不限模式只依赖标点、停顿或时长。
+pub fn should_break_for_width(text: &str, raw: i32, smart_break: bool) -> bool {
+    match parse_subtitle_length_mode(raw).unwrap_or(SubtitleLengthMode::Smart) {
+        SubtitleLengthMode::Smart => smart_break,
+        SubtitleLengthMode::Unlimited => false,
+        SubtitleLengthMode::Custom(limit) => subtitle_visual_width(text) >= limit,
+    }
+}
+
+/// 追加下一个带时间戳的 token/词之前使用。只有自定义档会提前切分，保证宽度
+/// 上限落在真实 token/词边界；智能档继续沿用各引擎原有的追加后判断。
+pub fn exceeds_custom_subtitle_width(candidate: &str, raw: i32) -> bool {
+    matches!(
+        parse_subtitle_length_mode(raw).unwrap_or(SubtitleLengthMode::Smart),
+        SubtitleLengthMode::Custom(limit) if subtitle_visual_width(candidate) > limit
+    )
+}
+
+fn is_wide_codepoint(code: u32) -> bool {
+    (0x1100..=0x115f).contains(&code)
+        || (0x2e80..=0xa4cf).contains(&code)
+        || (0xac00..=0xd7a3).contains(&code)
+        || (0xf900..=0xfaff).contains(&code)
+        || (0xfe30..=0xfe6f).contains(&code)
+        || (0xff00..=0xffe6).contains(&code)
+        || (0x1f000..=0x1faff).contains(&code)
+}
+
+fn grapheme_width(grapheme: &str) -> usize {
+    if grapheme.chars().all(|character| character.is_whitespace()) {
+        return 1;
+    }
+    if grapheme
+        .chars()
+        .any(|character| is_wide_codepoint(character as u32))
+    {
+        2
+    } else {
+        1
+    }
+}
+
+/// 以用户可见宽度计算字幕长度：CJK、全角字符和 emoji 记 2，其余 grapheme 记 1。
+pub fn subtitle_visual_width(text: &str) -> usize {
+    UnicodeSegmentation::graphemes(text, true)
+        .map(grapheme_width)
+        .sum()
+}
+
+fn is_preferred_break(grapheme: &str) -> bool {
+    grapheme.chars().all(char::is_whitespace)
+        || grapheme.chars().last().is_some_and(|character| {
+            matches!(
+                character,
+                '。' | '．'
+                    | '.'
+                    | '！'
+                    | '!'
+                    | '？'
+                    | '?'
+                    | '…'
+                    | '，'
+                    | ','
+                    | '；'
+                    | ';'
+                    | '、'
+                    | '：'
+                    | ':'
+                    | '—'
+                    | '-'
+            )
+        })
+}
+
+/// 将一条没有词级时间戳的字幕按可读宽度拆分。优先在空白/标点后断开，
+/// 只有单个词本身超限时才按 grapheme 兜底，不会切坏 emoji 组合。
+pub fn split_subtitle_text(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 || subtitle_visual_width(text) <= max_width {
+        return vec![text.trim().to_string()];
+    }
+    let graphemes: Vec<&str> = UnicodeSegmentation::graphemes(text, true).collect();
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+
+    while start < graphemes.len() {
+        while start < graphemes.len() && graphemes[start].chars().all(char::is_whitespace) {
+            start += 1;
+        }
+        if start >= graphemes.len() {
+            break;
+        }
+        let mut width = 0usize;
+        let mut end = start;
+        let mut preferred_cut = None;
+        while end < graphemes.len() {
+            let next_width = grapheme_width(graphemes[end]);
+            if end > start && width + next_width > max_width {
+                break;
+            }
+            width += next_width;
+            end += 1;
+            if is_preferred_break(graphemes[end - 1]) {
+                preferred_cut = Some(end);
+            }
+            if width >= max_width {
+                break;
+            }
+        }
+        if end == start {
+            end = start + 1;
+        }
+        let cut = if end < graphemes.len() {
+            preferred_cut
+                .filter(|candidate| *candidate > start)
+                .unwrap_or(end)
+        } else {
+            end
+        };
+        let chunk = graphemes[start..cut].concat().trim().to_string();
+        if !chunk.is_empty() {
+            chunks.push(chunk);
+        }
+        start = cut;
+    }
+
+    if chunks.is_empty() {
+        vec![text.trim().to_string()]
+    } else {
+        chunks
+    }
+}
+
+/// 对段级字幕执行任务级自定义断句。时间按显示宽度比例插值，并保证每条 cue
+/// 有正时长、时间轴单调且最后一条精确落在原 cue 的结束时间。
+pub fn resplit_track_for_width(
+    track: &mut SubtitleTrack,
+    raw_width: i32,
+) -> crate::error::Result<SubtitleResplitStats> {
+    let mode = parse_subtitle_length_mode(raw_width)?;
+    let original_cues = track.cues.len();
+    let SubtitleLengthMode::Custom(max_width) = mode else {
+        return Ok(SubtitleResplitStats {
+            original_cues,
+            final_cues: original_cues,
+            split_cues: 0,
+        });
+    };
+
+    let mut output = Vec::with_capacity(original_cues);
+    let mut split_cues = 0usize;
+    for cue in &track.cues {
+        let chunks = split_subtitle_text(&cue.text, max_width);
+        if chunks.len() <= 1 || cue.end_ms <= cue.start_ms {
+            output.push(cue.clone());
+            continue;
+        }
+        let duration = cue.end_ms - cue.start_ms;
+        if duration < chunks.len() as u64 {
+            // 极短的外部字幕无法为每段分配正时长，保留原 cue 比产生非法时间轴更安全。
+            output.push(cue.clone());
+            continue;
+        }
+        split_cues += 1;
+        let weights: Vec<u64> = chunks
+            .iter()
+            .map(|chunk| subtitle_visual_width(chunk).max(1) as u64)
+            .collect();
+        let total_weight = weights.iter().sum::<u64>().max(1);
+        let chunk_count = weights.len();
+        let mut cursor = cue.start_ms;
+        let mut accumulated = 0u64;
+        for (index, (chunk, weight)) in chunks.into_iter().zip(weights).enumerate() {
+            accumulated += weight;
+            let remaining = (chunk_count.saturating_sub(index + 1)) as u64;
+            let end = if index + 1 == chunk_count {
+                cue.end_ms
+            } else {
+                let weighted_offset =
+                    (duration as u128 * accumulated as u128 / total_weight as u128) as u64;
+                let proposed = cue.start_ms.saturating_add(weighted_offset);
+                proposed
+                    .min(cue.end_ms.saturating_sub(remaining))
+                    .max(cursor + 1)
+            };
+            output.push(Cue {
+                index: 0,
+                start_ms: cursor,
+                end_ms: end,
+                text: chunk,
+            });
+            cursor = end;
+        }
+    }
+    for (index, cue) in output.iter_mut().enumerate() {
+        cue.index = (index + 1) as u32;
+    }
+    let final_cues = output.len();
+    track.cues = output;
+    Ok(SubtitleResplitStats {
+        original_cues,
+        final_cues,
+        split_cues,
+    })
 }
 
 impl SubtitleTrack {
@@ -632,5 +869,86 @@ mod tests {
         assert_eq!(SubtitleTrack::from_format(vtt, "vtt").unwrap().len(), 1);
         let err = SubtitleTrack::from_format("x", "docx").unwrap_err();
         assert!(err.to_string().contains("不支持解析的字幕格式"));
+    }
+
+    #[test]
+    fn subtitle_length_mode_accepts_only_supported_values() {
+        assert_eq!(
+            parse_subtitle_length_mode(0).unwrap(),
+            SubtitleLengthMode::Smart
+        );
+        assert_eq!(
+            parse_subtitle_length_mode(-1).unwrap(),
+            SubtitleLengthMode::Unlimited
+        );
+        assert_eq!(
+            parse_subtitle_length_mode(8).unwrap(),
+            SubtitleLengthMode::Custom(8)
+        );
+        assert_eq!(
+            parse_subtitle_length_mode(120).unwrap(),
+            SubtitleLengthMode::Custom(120)
+        );
+        assert!(parse_subtitle_length_mode(7).is_err());
+        assert!(parse_subtitle_length_mode(121).is_err());
+    }
+
+    #[test]
+    fn visual_width_is_cjk_aware_and_grapheme_safe() {
+        assert_eq!(subtitle_visual_width("你A"), 3);
+        let family = "👨‍👩‍👧‍👦";
+        assert_eq!(
+            split_subtitle_text(&format!("{family}{family}"), 2).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn custom_resplit_prefers_words_and_preserves_timeline() {
+        let mut track = SubtitleTrack {
+            cues: vec![Cue {
+                index: 7,
+                start_ms: 1_000,
+                end_ms: 5_000,
+                text: "one two three four".into(),
+            }],
+        };
+        let stats = resplit_track_for_width(&mut track, 8).unwrap();
+        assert_eq!(stats.split_cues, 1);
+        assert!(track.cues.len() >= 2);
+        assert_eq!(track.cues.first().unwrap().start_ms, 1_000);
+        assert_eq!(track.cues.last().unwrap().end_ms, 5_000);
+        assert!(track.cues.windows(2).all(|pair| {
+            pair[0].end_ms == pair[1].start_ms && pair[0].end_ms > pair[0].start_ms
+        }));
+        assert_eq!(
+            track
+                .cues
+                .iter()
+                .map(|cue| cue.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            "one two three four"
+        );
+    }
+
+    #[test]
+    fn custom_resplit_handles_extreme_timestamps_without_overflow() {
+        let mut track = SubtitleTrack {
+            cues: vec![Cue {
+                index: 1,
+                start_ms: 0,
+                end_ms: u64::MAX,
+                text: "one two three four five six".into(),
+            }],
+        };
+        resplit_track_for_width(&mut track, 8).unwrap();
+        assert!(track.cues.len() > 1);
+        assert_eq!(track.cues.first().unwrap().start_ms, 0);
+        assert_eq!(track.cues.last().unwrap().end_ms, u64::MAX);
+        assert!(track
+            .cues
+            .windows(2)
+            .all(|pair| pair[0].end_ms == pair[1].start_ms));
     }
 }

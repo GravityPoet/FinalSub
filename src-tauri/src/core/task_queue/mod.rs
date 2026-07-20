@@ -60,6 +60,8 @@ pub struct Task {
     #[serde(default)]
     pub review_required: bool,
     #[serde(default)]
+    pub max_subtitle_chars: i32,
+    #[serde(default)]
     pub reviewed_at: Option<String>,
     pub progress: f32,
     pub status_message: String,
@@ -85,6 +87,7 @@ pub struct CreateTaskParams {
     pub output_name: Option<String>,
     pub strip_chinese_punctuation: bool,
     pub review_required: bool,
+    pub max_subtitle_chars: i32,
 }
 
 pub fn create_task(params: CreateTaskParams) -> Task {
@@ -104,6 +107,7 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         output_name: params.output_name,
         strip_chinese_punctuation: params.strip_chinese_punctuation,
         review_required: params.review_required,
+        max_subtitle_chars: params.max_subtitle_chars,
         reviewed_at: None,
         progress: 0.0,
         status_message: "待处理".into(),
@@ -179,6 +183,7 @@ mod tests {
             output_name: None,
             strip_chinese_punctuation: false,
             review_required: false,
+            max_subtitle_chars: 0,
         })
     }
 
@@ -227,10 +232,12 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("review_required");
         object.remove("reviewed_at");
+        object.remove("max_subtitle_chars");
 
         let restored: Task = serde_json::from_value(value).unwrap();
 
         assert!(!restored.review_required);
         assert!(restored.reviewed_at.is_none());
+        assert_eq!(restored.max_subtitle_chars, 0);
     }
 }

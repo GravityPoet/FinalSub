@@ -48,6 +48,8 @@ opencc-fmmseg = "0.11.0"
 semver = "1"
 # Edge Read Aloud 免费试用档。版本固定：该通道依赖逆向 WebSocket 协议，升级必须重新做真实合成验收。
 kothok-edge-tts = "=0.2.9"
+keepawake = "=0.6.0"
+unicode-segmentation = "=1.13.3"
 
 [dev-dependencies]
 tempfile = "3"

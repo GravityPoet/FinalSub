@@ -21,6 +21,7 @@ pub struct AppState {
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
     pub task_semaphore: Arc<std::sync::Mutex<Arc<tokio::sync::Semaphore>>>,
+    pub power_save: crate::core::power_save::PowerSaveManager,
     pub update_in_progress: AtomicBool,
 }
 
@@ -46,6 +47,8 @@ impl AppState {
         let task_semaphore = Arc::new(std::sync::Mutex::new(Arc::new(
             tokio::sync::Semaphore::new(initial_limit),
         )));
+        let power_save =
+            crate::core::power_save::PowerSaveManager::new(settings.prevent_sleep_during_tasks);
 
         Self {
             tasks: Arc::new(RwLock::new(loaded_tasks)),
@@ -58,6 +61,7 @@ impl AppState {
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,
             task_semaphore,
+            power_save,
             update_in_progress: AtomicBool::new(false),
         }
     }
