@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import {
   approveTask,
@@ -33,6 +34,7 @@ import {
   Copy,
   CheckCircle,
   Link2,
+  AudioLines,
 } from "lucide-react";
 
 import { Button } from "../components/ui/Button";
@@ -142,6 +144,7 @@ function errorMessage(error: unknown): string {
 
 export default function TasksPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeLogTaskId, setActiveLogTaskId] = useState<string | null>(null);
@@ -448,10 +451,15 @@ export default function TasksPage() {
           {tasks.map((task) => {
             const isSelected = selectedTaskIds.includes(task.id);
             const reviewStage = task.pipeline?.current_stage;
-            const reviewTitle = reviewStage === "dubbing-review"
+            const needsAlignmentReview = reviewStage === "dub";
+            const reviewTitle = needsAlignmentReview
+              ? t("tasks.dubbingAlignmentReviewTitle")
+              : reviewStage === "dubbing-review"
               ? t("tasks.dubbingReviewTitle")
               : (task.pipeline ? t("tasks.subtitleReviewTitle") : t("tasks.reviewTitle"));
-            const reviewDescription = reviewStage === "dubbing-review"
+            const reviewDescription = needsAlignmentReview
+              ? t("tasks.dubbingAlignmentReviewDesc")
+              : reviewStage === "dubbing-review"
               ? t("tasks.dubbingReviewDesc")
               : (task.pipeline ? t("tasks.subtitleReviewDesc") : t("tasks.reviewDesc"));
             const artifactPaths = [
@@ -609,19 +617,33 @@ export default function TasksPage() {
                             <p className="mt-1 text-xs leading-5 text-text-secondary">{reviewDescription}</p>
                           </div>
                         </div>
-                        <Button
-                          type="button"
-                          onClick={() => void handleApprove([task.id])}
-                          disabled={approvingTaskIds.includes(task.id)}
-                          variant="primary"
-                          size="sm"
-                          className="shrink-0"
-                        >
-                          <CheckCircle size={14} />
-                          {approvingTaskIds.includes(task.id)
-                            ? t("tasks.approving")
-                            : (task.pipeline ? t("tasks.approveAndContinue") : t("tasks.approveTask"))}
-                        </Button>
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                          {needsAlignmentReview && task.pipeline?.dubbing_session_id && (
+                            <Button
+                              type="button"
+                              onClick={() => navigate(`/dubbing?session=${encodeURIComponent(task.pipeline!.dubbing_session_id!)}`)}
+                              variant="secondary"
+                              size="sm"
+                            >
+                              <AudioLines size={14} />
+                              {t("tasks.openDubbingWorkbench")}
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            onClick={() => void handleApprove([task.id])}
+                            disabled={approvingTaskIds.includes(task.id)}
+                            variant="primary"
+                            size="sm"
+                          >
+                            <CheckCircle size={14} />
+                            {approvingTaskIds.includes(task.id)
+                              ? t("tasks.approving")
+                              : (needsAlignmentReview
+                                ? t("tasks.retryDubbingAlignment")
+                                : task.pipeline ? t("tasks.approveAndContinue") : t("tasks.approveTask"))}
+                          </Button>
+                        </div>
                       </div>
                     )}
                     <div className="space-y-2.5">

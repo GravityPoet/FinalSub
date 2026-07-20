@@ -412,6 +412,13 @@ export interface CloudTtsSynthesisRequest {
 }
 
 export type DubbingCueStatus = "pending" | "synthesizing" | "ready" | "overlong" | "accepted" | "failed";
+export type DubbingAlignmentAction =
+  | "natural"
+  | "precontrolled"
+  | "resynthesized"
+  | "postprocessed"
+  | "manual-accepted"
+  | "manual-review";
 export type DubbingEngineSelection =
   | { kind: "local"; model_id: string }
   | { kind: "cloud"; provider_id: string };
@@ -437,8 +444,17 @@ export interface DubbingCue {
   applied_speed: number | null;
   slot_ms: number;
   ratio: number | null;
+  estimated_ms: number | null;
+  planned_speed: number | null;
+  alignment_action: DubbingAlignmentAction | null;
+  resynthesized: boolean;
   wav_path: string | null;
   error: string | null;
+}
+
+export interface DubbingRateCalibration {
+  total_estimated_ms: number;
+  total_measured_equivalent_ms: number;
 }
 
 export interface UpdateDubbingCueRequest {
@@ -461,6 +477,8 @@ export interface DubbingSession {
   updated_at: string;
   source_changed: boolean;
   subtitle_dirty: boolean;
+  calibration: DubbingRateCalibration;
+  calibration_scope: string | null;
 }
 
 export interface DubbingSubtitleWriteResult {
@@ -1718,6 +1736,10 @@ function createMockDubbingSession(subtitlePath = "/Users/example/Subtitles/demo.
       applied_speed: null,
       slot_ms: 2600,
       ratio: null,
+      estimated_ms: null,
+      planned_speed: null,
+      alignment_action: null,
+      resynthesized: false,
       wav_path: null,
       error: null,
     })),
@@ -1727,6 +1749,11 @@ function createMockDubbingSession(subtitlePath = "/Users/example/Subtitles/demo.
     updated_at: now,
     source_changed: false,
     subtitle_dirty: false,
+    calibration: {
+      total_estimated_ms: 0,
+      total_measured_equivalent_ms: 0,
+    },
+    calibration_scope: null,
   };
 }
 
@@ -2435,6 +2462,10 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
           synthesized_ms: cueIndex === 1 ? 4420 : 2200,
           applied_speed: request?.global_speed ?? 1,
           ratio: cueIndex === 1 ? 1.7 : 0.85,
+          estimated_ms: cueIndex === 1 ? 4300 : 2800,
+          planned_speed: cueIndex === 1 ? 1.5 : 1.1,
+          alignment_action: cueIndex === 1 ? "manual-review" as const : "resynthesized" as const,
+          resynthesized: cueIndex !== 1,
           wav_path: `/Users/example/FinalSub/dubbing/cue-${cueIndex + 1}.wav`,
           error: null,
         } : cue),
@@ -2450,6 +2481,7 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
           status: "accepted" as const,
           synthesized_ms: cue.slot_ms,
           applied_speed: cue.ratio ?? 1,
+          alignment_action: "manual-accepted" as const,
         } : cue),
       };
       return mockDubbingSessionState;

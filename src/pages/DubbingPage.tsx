@@ -89,6 +89,7 @@ export default function DubbingPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedVoiceId = searchParams.get("voice") ?? "";
+  const requestedSessionId = searchParams.get("session") ?? "";
   const [models, setModels] = useState<TtsModelInfo[]>([]);
   const [providers, setProviders] = useState<TtsProviderProfile[]>([]);
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([]);
@@ -186,13 +187,14 @@ export default function DubbingPage() {
           ? loadedVoiceProfiles.find((profile) => profile.id === requestedVoiceId)
           : undefined;
         let restoredConfig = false;
-        const previous = localStorage.getItem(LAST_SESSION_KEY);
+        const previous = requestedSessionId || localStorage.getItem(LAST_SESSION_KEY);
         if (previous) {
           try {
             const restored = await getDubbingSession(previous);
             setSession(restored);
             setSubtitlePath(restored.subtitle_path);
             setVideoPath(restored.video_path ?? "");
+            localStorage.setItem(LAST_SESSION_KEY, restored.id);
             if (restored.last_config) {
               restoredConfig = true;
               const engine = restored.last_config.engine;
@@ -210,8 +212,12 @@ export default function DubbingPage() {
               setSelectedVoiceProfileId(restoredProfile?.id ?? "");
               setCloneQuality((restored.last_config.num_steps ?? 4) >= 8 ? "high" : "standard");
             }
-          } catch {
-            localStorage.removeItem(LAST_SESSION_KEY);
+          } catch (error) {
+            if (requestedSessionId) {
+              setMessage({ type: "err", text: String(error) });
+            } else {
+              localStorage.removeItem(LAST_SESSION_KEY);
+            }
           }
         }
 
@@ -259,7 +265,7 @@ export default function DubbingPage() {
       })
       .catch((error) => setMessage({ type: "err", text: String(error) }))
       .finally(() => setLoading(false));
-  }, [requestedVoiceId]);
+  }, [requestedSessionId, requestedVoiceId]);
 
   const changeEngine = (value: string) => {
     setEngineValue(value);
@@ -589,6 +595,9 @@ export default function DubbingPage() {
   const doneCount = session?.cues.filter((cue) => ["ready", "accepted"].includes(cue.status)).length ?? 0;
   const overlongCount = session?.cues.filter((cue) => cue.status === "overlong").length ?? 0;
   const failedCount = session?.cues.filter((cue) => cue.status === "failed").length ?? 0;
+  const autoAdjustedCount = session?.cues.filter((cue) =>
+    cue.resynthesized || ["precontrolled", "postprocessed"].includes(cue.alignment_action ?? "")
+  ).length ?? 0;
   const canExport = Boolean(session && session.cues.length > 0 && doneCount === session.cues.length);
 
   return (
@@ -767,9 +776,10 @@ export default function DubbingPage() {
                   <p className="flex items-start gap-2"><Gauge size={15} className="mt-0.5 shrink-0 text-brand" /> {t("dubbing.alignmentDesc")}</p>
                   <p className="mt-2 flex items-start gap-2"><AudioLines size={15} className="mt-0.5 shrink-0 text-brand" /> {t("dubbing.overlapDesc")}</p>
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-2 2xl:grid-cols-4">
                   <div className="rounded-xl bg-surface-overlay p-3"><div className="font-display text-lg font-semibold text-text-primary">{session.cues.length}</div><div className="text-xs text-text-tertiary">{t("dubbing.total")}</div></div>
                   <div className="rounded-xl bg-success/10 p-3"><div className="font-display text-lg font-semibold text-success">{doneCount}</div><div className="text-xs text-text-tertiary">{t("dubbing.readyCount")}</div></div>
+                  <div className="rounded-xl bg-brand/8 p-3"><div className="font-display text-lg font-semibold text-brand">{autoAdjustedCount}</div><div className="text-xs text-text-tertiary">{t("dubbing.autoAdjusted")}</div></div>
                   <div className="rounded-xl bg-warning/10 p-3"><div className="font-display text-lg font-semibold text-warning">{overlongCount + failedCount}</div><div className="text-xs text-text-tertiary">{t("dubbing.attention")}</div></div>
                 </div>
               </div>
@@ -1046,6 +1056,14 @@ function CueCard({
     failed: { label: t("dubbing.statusFailed"), className: "text-danger", icon: AlertTriangle },
   }[cue.status];
   const Icon = status.icon;
+  const alignment = cue.alignment_action ? {
+    natural: { label: t("dubbing.actionNatural"), className: "text-text-tertiary" },
+    precontrolled: { label: t("dubbing.actionPrecontrolled"), className: "text-brand" },
+    resynthesized: { label: t("dubbing.actionResynthesized"), className: "text-success" },
+    postprocessed: { label: t("dubbing.actionPostprocessed"), className: "text-brand" },
+    "manual-accepted": { label: t("dubbing.actionManualAccepted"), className: "text-success" },
+    "manual-review": { label: t("dubbing.actionManualReview"), className: "text-warning" },
+  }[cue.alignment_action] : null;
   const audioUrl = cue.wav_path ? fileAssetUrl(cue.wav_path) : "";
   const cueHeading = (
     <>
@@ -1075,8 +1093,20 @@ function CueCard({
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
             <span className={`inline-flex items-center gap-1 font-semibold ${status.className}`}><Icon size={13} className={cue.status === "synthesizing" ? "animate-spin" : ""} /> {status.label}</span>
             <span>{t("dubbing.slot", { duration: (cue.slot_ms / 1000).toFixed(2) })}</span>
+            {cue.estimated_ms !== null && <span>{t("dubbing.estimatedDuration", { duration: (cue.estimated_ms / 1000).toFixed(2) })}</span>}
             {cue.synthesized_ms !== null && <span>{t("dubbing.audioDuration", { duration: (cue.synthesized_ms / 1000).toFixed(2) })}</span>}
             {cue.ratio !== null && <span>{t("dubbing.ratio", { ratio: cue.ratio.toFixed(2) })}</span>}
+            {cue.planned_speed !== null && <span>{t("dubbing.plannedSpeed", { speed: cue.planned_speed.toFixed(2) })}</span>}
+            {cue.applied_speed !== null && <span>{t("dubbing.appliedSpeed", { speed: cue.applied_speed.toFixed(2) })}</span>}
+            {alignment && (
+              <span
+                data-testid={`dubbing-alignment-action-${cue.index}`}
+                className={`inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${alignment.className}`}
+              >
+                <WandSparkles size={12} /> {alignment.label}
+              </span>
+            )}
+            {cue.resynthesized && cue.alignment_action !== "resynthesized" && <span className="text-success">{t("dubbing.autoResynthesized")}</span>}
             {cue.overlap && <Badge variant="warning">{t("dubbing.overlap")}</Badge>}
             {cue.voice_id && <Badge variant="info">{t("dubbing.voiceOverride")}: {cue.voice_id}</Badge>}
           </div>

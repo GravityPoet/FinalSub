@@ -8,7 +8,9 @@ use tauri::Manager;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::sync::{watch, RwLock};
 
-use crate::commands::{parakeet_models_dir, resolve_sidecar, whisper_models_dir};
+use crate::commands::{
+    parakeet_models_dir, resolve_sidecar, synthesize_and_align_dubbing_cue, whisper_models_dir,
+};
 use crate::core::asr::cloud::{parse_protocol, CloudAsrConfig, CloudAsrEngine};
 use crate::core::asr::parakeet::ParakeetNativeEngine;
 use crate::core::asr::sherpa_native::{SherpaNativeEngine, SherpaNativeKind};
@@ -26,9 +28,8 @@ use crate::core::translation::{
     builtin_providers, translate_text, TranslateRequest, TranslationProvider,
 };
 use crate::core::tts::{
-    complete_dubbing_cue, create_dubbing_session, export_dubbing_audio, fail_dubbing_cue,
-    get_dubbing_session, prepare_dubbing_cue, CloudTtsSynthesisRequest, DubbingEngineSelection,
-    DubbingSynthesizeCueRequest, LocalTtsSynthesisRequest,
+    create_dubbing_session, export_dubbing_audio, fail_dubbing_cue, get_dubbing_session,
+    prepare_dubbing_cue, DubbingEngineSelection, DubbingSynthesizeCueRequest,
 };
 
 const MAX_OUTPUT_FILE_NAME_BYTES: usize = 240;
@@ -1922,55 +1923,18 @@ async fn run_dubbing_stage(
             prepare_dubbing_cue(app_config_dir, &request).map_err(|error| error.to_string())?;
         let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
         let bridge = pipeline_cancel_bridge(cancel_rx, cancelled.clone());
-        let synthesis = match &prepared.config.engine {
-            DubbingEngineSelection::Local { model_id } => {
-                let model = crate::core::tts::resolve_ready_model(app_config_dir, model_id)
-                    .map_err(|error| error.to_string());
-                match model {
-                    Ok(model) => {
-                        let cache = app.state::<crate::state::AppState>().tts_engines.clone();
-                        let request = LocalTtsSynthesisRequest {
-                            model_id: model_id.clone(),
-                            text: prepared.text.clone(),
-                            voice_id: (!prepared.config.voice.is_empty())
-                                .then(|| prepared.config.voice.clone()),
-                            speed: Some(prepared.config.global_speed),
-                            output_path: prepared.output_path.clone(),
-                            reference_audio_path: prepared.config.reference_audio_path.clone(),
-                            reference_text: prepared.config.reference_text.clone(),
-                            num_steps: prepared.config.num_steps,
-                        };
-                        let cache_cancel = cancelled.clone();
-                        tokio::task::spawn_blocking(move || {
-                            crate::core::tts::synthesize_local(&cache, model, request, cache_cancel)
-                        })
-                        .await
-                        .map_err(|error| format!("本地 TTS 工作线程异常：{error}"))?
-                        .map_err(|error| error.to_string())
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            DubbingEngineSelection::Cloud { provider_id } => crate::core::tts::synthesize_cloud(
-                app_config_dir,
-                &ffmpeg,
-                CloudTtsSynthesisRequest {
-                    provider_id: provider_id.clone(),
-                    text: prepared.text.clone(),
-                    voice: (!prepared.config.voice.is_empty())
-                        .then(|| prepared.config.voice.clone()),
-                    speed: Some(prepared.config.global_speed),
-                    output_path: prepared.output_path.clone(),
-                },
-                cancelled.clone(),
-            )
-            .await
-            .map_err(|error| error.to_string()),
-        };
+        let app_state = app.state::<crate::state::AppState>();
+        let synthesis = synthesize_and_align_dubbing_cue(
+            app_state.inner(),
+            &ffmpeg,
+            &prepared,
+            cancelled.clone(),
+        )
+        .await;
         bridge.abort();
 
-        let synthesis = match synthesis {
-            Ok(result) => result,
+        match synthesis {
+            Ok(_) => {}
             Err(error) => {
                 let was_cancelled = cancelled.load(Ordering::Relaxed)
                     || error.contains("取消")
@@ -1995,17 +1959,6 @@ async fn run_dubbing_stage(
                 }
                 return Err(error);
             }
-        };
-        if let Err(error) = complete_dubbing_cue(
-            app_config_dir,
-            &ffmpeg,
-            &prepared,
-            synthesis.duration_ms,
-            cancelled.clone(),
-        )
-        .await
-        {
-            return Err(error.to_string());
         }
         let completed = ((cue.index as usize + 1) as f32 / total as f32).clamp(0.0, 1.0);
         update_pipeline_stage(
@@ -2021,34 +1974,27 @@ async fn run_dubbing_stage(
     }
 
     let session = get_dubbing_session(app_config_dir, &session_id).map_err(|e| e.to_string())?;
-    for cue in session.cues.clone() {
-        if cue.status == crate::core::tts::DubbingCueStatus::Overlong {
-            let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
-            let bridge = pipeline_cancel_bridge(cancel_rx, cancelled.clone());
-            let result = crate::core::tts::accept_dubbing_overflow(
-                app_config_dir,
-                &ffmpeg,
-                &session_id,
-                cue.index,
-                cancelled.clone(),
-            )
-            .await;
-            bridge.abort();
-            if let Err(error) = result {
-                if cancelled.load(Ordering::Relaxed) || check_cancelled(cancel_rx) {
-                    return Ok(handle_pipeline_stop(
-                        app,
-                        tasks,
-                        app_config_dir,
-                        task_id,
-                        PipelineStageKind::Dub,
-                        cancel_rx,
-                    )
-                    .await);
-                }
-                return Err(error.to_string());
-            }
-        }
+    let overlong_count = session
+        .cues
+        .iter()
+        .filter(|cue| cue.status == crate::core::tts::DubbingCueStatus::Overlong)
+        .count();
+    if overlong_count > 0 {
+        let message =
+            format!("有 {overlong_count} 句需要人工处理：编辑文本、重新生成或明确接受超速");
+        update_pipeline_stage(
+            app,
+            tasks.clone(),
+            task_id,
+            PipelineStageKind::Dub,
+            PipelineStageStatus::Review,
+            1.0,
+            &message,
+        )
+        .await;
+        set_task_review_state(app, tasks, task_id, &message).await;
+        write_task_log(app, app_config_dir, task_id, &message).await;
+        return Ok(PipelineRunOutcome::Review);
     }
     let output_path = match pipeline.dubbed_audio_path.clone() {
         Some(path) if !path.trim().is_empty() => path,

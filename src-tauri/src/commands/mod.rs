@@ -23,11 +23,11 @@ use crate::core::task_queue::{
 use crate::core::translation::{self, TranslationProvider};
 use crate::core::tts::{
     CloudTtsSynthesisRequest, CloudVoiceSummary, CreateCloudVoiceProfileRequest,
-    CreateVoiceProfileRequest, DubbingEngineSelection, DubbingSession, DubbingSubtitleWriteResult,
-    DubbingSynthesizeCueRequest, LinkCloudVoiceProfileRequest, LocalTtsSynthesisRequest,
-    PrepareVoiceSampleRequest, PreparedVoiceSample, RetrainCloudVoiceProfileRequest,
-    SaveTtsProviderRequest, TtsModelInfo, TtsProviderProfile, TtsSynthesisResult,
-    UpdateDubbingCueRequest, VoiceProfile, VoiceSourceInfo, VoiceSubtitleCue,
+    CreateVoiceProfileRequest, DubbingEngineSelection, DubbingRecheckDecision, DubbingSession,
+    DubbingSubtitleWriteResult, DubbingSynthesizeCueRequest, LinkCloudVoiceProfileRequest,
+    LocalTtsSynthesisRequest, PrepareVoiceSampleRequest, PreparedDubbingCue, PreparedVoiceSample,
+    RetrainCloudVoiceProfileRequest, SaveTtsProviderRequest, TtsModelInfo, TtsProviderProfile,
+    TtsSynthesisResult, UpdateDubbingCueRequest, VoiceProfile, VoiceSourceInfo, VoiceSubtitleCue,
 };
 use crate::state::AppState;
 use tauri_plugin_fs::FsExt;
@@ -736,6 +736,110 @@ pub async fn write_back_dubbing_subtitle(
         .map_err(|error| error.to_string())
 }
 
+async fn synthesize_prepared_dubbing_once(
+    state: &AppState,
+    ffmpeg: &Path,
+    prepared: &PreparedDubbingCue,
+    speed: f32,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<TtsSynthesisResult, String> {
+    match &prepared.config.engine {
+        DubbingEngineSelection::Local { model_id } => {
+            let model = crate::core::tts::resolve_ready_model(&state.app_config_dir, model_id)
+                .map_err(|error| error.to_string())?;
+            let cache = state.tts_engines.clone();
+            let request = LocalTtsSynthesisRequest {
+                model_id: model_id.clone(),
+                text: prepared.text.clone(),
+                voice_id: (!prepared.config.voice.is_empty())
+                    .then(|| prepared.config.voice.clone()),
+                speed: Some(speed),
+                output_path: prepared.output_path.clone(),
+                reference_audio_path: prepared.config.reference_audio_path.clone(),
+                reference_text: prepared.config.reference_text.clone(),
+                num_steps: prepared.config.num_steps,
+            };
+            tokio::task::spawn_blocking(move || {
+                crate::core::tts::synthesize_local(&cache, model, request, cancelled)
+            })
+            .await
+            .map_err(|error| format!("本地 TTS 工作线程异常：{error}"))?
+            .map_err(|error| error.to_string())
+        }
+        DubbingEngineSelection::Cloud { provider_id } => crate::core::tts::synthesize_cloud(
+            &state.app_config_dir,
+            ffmpeg,
+            CloudTtsSynthesisRequest {
+                provider_id: provider_id.clone(),
+                text: prepared.text.clone(),
+                voice: (!prepared.config.voice.is_empty()).then(|| prepared.config.voice.clone()),
+                speed: Some(speed),
+                output_path: prepared.output_path.clone(),
+            },
+            cancelled,
+        )
+        .await
+        .map_err(|error| error.to_string()),
+    }
+}
+
+pub(crate) async fn synthesize_and_align_dubbing_cue(
+    state: &AppState,
+    ffmpeg: &Path,
+    prepared: &PreparedDubbingCue,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<DubbingSession, String> {
+    let first = synthesize_prepared_dubbing_once(
+        state,
+        ffmpeg,
+        prepared,
+        prepared.synthesis_speed,
+        cancelled.clone(),
+    )
+    .await?;
+    let calibration_source_ms = first.duration_ms;
+    let mut synthesized_ms = first.duration_ms;
+    let mut applied_alignment_speed = prepared.alignment_speed;
+    let mut resynthesized = false;
+
+    if let DubbingRecheckDecision::Resynthesize { alignment_speed } =
+        crate::core::tts::recheck_dubbing_cue(
+            prepared,
+            synthesized_ms,
+            applied_alignment_speed,
+            false,
+        )
+    {
+        let (speed, effective_alignment_speed) = crate::core::tts::synthesis_speed_for_alignment(
+            prepared.config.global_speed,
+            alignment_speed,
+            prepared.synthesis_speed_min,
+            prepared.synthesis_speed_max,
+        );
+        let second =
+            synthesize_prepared_dubbing_once(state, ffmpeg, prepared, speed, cancelled.clone())
+                .await?;
+        synthesized_ms = second.duration_ms;
+        applied_alignment_speed = effective_alignment_speed;
+        resynthesized = true;
+    }
+
+    crate::core::tts::complete_dubbing_cue(
+        &state.app_config_dir,
+        ffmpeg,
+        prepared,
+        crate::core::tts::DubbingCueCompletion {
+            synthesized_ms,
+            applied_alignment_speed,
+            resynthesized,
+            calibration_source_ms,
+        },
+        cancelled,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn synthesize_dubbing_cue(
     app: AppHandle,
@@ -762,70 +866,9 @@ pub async fn synthesize_dubbing_cue(
             return Err(error.to_string());
         }
     };
-    let synthesis_result: Result<TtsSynthesisResult, String> = match &prepared.config.engine {
-        DubbingEngineSelection::Local { model_id } => {
-            let model = crate::core::tts::resolve_ready_model(&state.app_config_dir, model_id)
-                .map_err(|error| error.to_string());
-            match model {
-                Ok(model) => {
-                    let cache = state.tts_engines.clone();
-                    let local_request = LocalTtsSynthesisRequest {
-                        model_id: model_id.clone(),
-                        text: prepared.text.clone(),
-                        voice_id: (!prepared.config.voice.is_empty())
-                            .then(|| prepared.config.voice.clone()),
-                        speed: Some(prepared.config.global_speed),
-                        output_path: prepared.output_path.clone(),
-                        reference_audio_path: prepared.config.reference_audio_path.clone(),
-                        reference_text: prepared.config.reference_text.clone(),
-                        num_steps: prepared.config.num_steps,
-                    };
-                    let local_cancelled = cancelled.clone();
-                    let joined = tokio::task::spawn_blocking(move || {
-                        crate::core::tts::synthesize_local(
-                            &cache,
-                            model,
-                            local_request,
-                            local_cancelled,
-                        )
-                    })
-                    .await;
-                    match joined {
-                        Ok(result) => result.map_err(|error| error.to_string()),
-                        Err(error) => Err(format!("本地 TTS 工作线程异常：{error}")),
-                    }
-                }
-                Err(error) => Err(error),
-            }
-        }
-        DubbingEngineSelection::Cloud { provider_id } => crate::core::tts::synthesize_cloud(
-            &state.app_config_dir,
-            &ffmpeg,
-            CloudTtsSynthesisRequest {
-                provider_id: provider_id.clone(),
-                text: prepared.text.clone(),
-                voice: (!prepared.config.voice.is_empty()).then(|| prepared.config.voice.clone()),
-                speed: Some(prepared.config.global_speed),
-                output_path: prepared.output_path.clone(),
-            },
-            cancelled.clone(),
-        )
-        .await
-        .map_err(|error| error.to_string()),
-    };
-
-    let result = match synthesis_result {
-        Ok(audio) => crate::core::tts::complete_dubbing_cue(
-            &state.app_config_dir,
-            &ffmpeg,
-            &prepared,
-            audio.duration_ms,
-            cancelled.clone(),
-        )
-        .await
-        .map_err(|error| error.to_string()),
-        Err(error) => Err(error),
-    };
+    let result =
+        synthesize_and_align_dubbing_cue(state.inner(), &ffmpeg, &prepared, cancelled.clone())
+            .await;
     if let Err(error) = &result {
         let was_cancelled = cancelled.load(std::sync::atomic::Ordering::Relaxed)
             || error.contains("取消")
@@ -1743,28 +1786,43 @@ fn approve_review_tasks(
                         .map(|stage| stage.kind)
                 });
             if let Some(review_stage) = review_stage {
-                if let Some(stage) = pipeline.stage_mut(review_stage) {
-                    stage.status = task_queue::PipelineStageStatus::Done;
-                    stage.progress = 1.0;
-                    stage.message = "已确认".into();
-                    stage.error = None;
-                    stage.completed_at = Some(reviewed_at.to_string());
-                }
-                resume_stage = pipeline
-                    .stages
-                    .iter()
-                    .find(|stage| stage.status == task_queue::PipelineStageStatus::Pending)
-                    .map(|stage| stage.kind);
-                if resume_stage == Some(task_queue::PipelineStageKind::Done) {
-                    if let Some(done) = pipeline.stage_mut(task_queue::PipelineStageKind::Done) {
-                        done.status = task_queue::PipelineStageStatus::Done;
-                        done.progress = 1.0;
-                        done.message = "流水线已完成".into();
-                        done.started_at = Some(reviewed_at.to_string());
-                        done.completed_at = Some(reviewed_at.to_string());
+                if review_stage == task_queue::PipelineStageKind::Dub {
+                    // 严重超长会把“配音”本身停在审核态。用户在配音工作台
+                    // 处理完对应句后，这里必须重跑当前节点完成导出，而不是
+                    // 把未生成的音轨误标为已完成并直接进入合成。
+                    if let Some(stage) = pipeline.stage_mut(review_stage) {
+                        stage.status = task_queue::PipelineStageStatus::Pending;
+                        stage.progress = 0.0;
+                        stage.message = "继续检查配音对齐".into();
+                        stage.error = None;
+                        stage.completed_at = None;
                     }
-                    resume_stage = None;
-                    pipeline_finished = true;
+                    resume_stage = Some(review_stage);
+                } else {
+                    if let Some(stage) = pipeline.stage_mut(review_stage) {
+                        stage.status = task_queue::PipelineStageStatus::Done;
+                        stage.progress = 1.0;
+                        stage.message = "已确认".into();
+                        stage.error = None;
+                        stage.completed_at = Some(reviewed_at.to_string());
+                    }
+                    resume_stage = pipeline
+                        .stages
+                        .iter()
+                        .find(|stage| stage.status == task_queue::PipelineStageStatus::Pending)
+                        .map(|stage| stage.kind);
+                    if resume_stage == Some(task_queue::PipelineStageKind::Done) {
+                        if let Some(done) = pipeline.stage_mut(task_queue::PipelineStageKind::Done)
+                        {
+                            done.status = task_queue::PipelineStageStatus::Done;
+                            done.progress = 1.0;
+                            done.message = "流水线已完成".into();
+                            done.started_at = Some(reviewed_at.to_string());
+                            done.completed_at = Some(reviewed_at.to_string());
+                        }
+                        resume_stage = None;
+                        pipeline_finished = true;
+                    }
                 }
                 pipeline.current_stage = resume_stage;
             }
@@ -4656,6 +4714,81 @@ mod tests {
                 .status,
             task_queue::PipelineStageStatus::Done
         );
+    }
+
+    #[test]
+    fn overlong_dubbing_review_retries_dub_before_downstream_export() {
+        let mut task = task_queue::create_task(CreateTaskParams {
+            task_type: TaskType::GenerateOnly,
+            media_path: "/tmp/pipeline.mp4".into(),
+            provided_subtitle_path: None,
+            media_name: "pipeline.mp4".into(),
+            engine_id: "parakeet-mlx".into(),
+            model_id: "parakeet-tdt-0.6b-v2".into(),
+            source_language: Some("auto".into()),
+            target_language: None,
+            translation_content_mode: TranslationContentMode::TargetOnly,
+            output_format: Some("srt".into()),
+            output_name: None,
+            strip_chinese_punctuation: false,
+            review_required: false,
+            max_subtitle_chars: 0,
+            pipeline: Some(task_queue::PipelineConfig::for_task(
+                TaskType::GenerateOnly,
+                true,
+                true,
+                false,
+                false,
+                Some(task_queue::PipelineDubbingConfig {
+                    engine: "local".into(),
+                    model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
+                    voice: "10".into(),
+                    global_speed: 1.0,
+                    reference_audio_path: None,
+                    reference_text: None,
+                    num_steps: None,
+                }),
+                Some(task_queue::PipelineComposeConfig {
+                    soft_subtitle: false,
+                    audio_mode: "replace".into(),
+                    encoder_mode: "auto".into(),
+                    style: None,
+                }),
+            )),
+        });
+        task.status = TaskStatus::Review;
+        let pipeline = task.pipeline.as_mut().unwrap();
+        pipeline
+            .stage_mut(task_queue::PipelineStageKind::Transcribe)
+            .unwrap()
+            .status = task_queue::PipelineStageStatus::Done;
+        let dub = pipeline
+            .stage_mut(task_queue::PipelineStageKind::Dub)
+            .unwrap();
+        dub.status = task_queue::PipelineStageStatus::Review;
+        dub.progress = 1.0;
+        pipeline.current_stage = Some(task_queue::PipelineStageKind::Dub);
+
+        let id = task.id.clone();
+        let original = HashMap::from([(id.clone(), task)]);
+        let (approved_map, approved) =
+            approve_review_tasks(&original, std::slice::from_ref(&id), "2026-07-21T00:00:00Z")
+                .unwrap();
+
+        assert_eq!(approved[0].status, TaskStatus::Pending);
+        let resumed = approved_map[&id].pipeline.as_ref().unwrap();
+        assert_eq!(
+            resumed.current_stage,
+            Some(task_queue::PipelineStageKind::Dub)
+        );
+        assert_eq!(
+            resumed
+                .stage(task_queue::PipelineStageKind::Dub)
+                .unwrap()
+                .status,
+            task_queue::PipelineStageStatus::Pending
+        );
+        assert!(resumed.dubbed_audio_path.is_none());
     }
 
     #[test]
