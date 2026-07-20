@@ -10,6 +10,7 @@ use crate::core::asr::parakeet::ParakeetNativeEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
 use crate::core::audio;
+use crate::core::logs::{self, LogEntry, LogQuery};
 use crate::core::models::{self, AsrModelInfo, ModelStatus};
 use crate::core::recipes::{self, SaveTaskRecipeRequest, TaskRecipe};
 use crate::core::settings::{self, Settings};
@@ -110,6 +111,7 @@ async fn cleanup_task_artifacts(app_config_dir: &Path, task_id: &str) {
     if log_path.exists() {
         let _ = tokio::fs::remove_file(log_path).await;
     }
+    let _ = logs::clear_logs(app_config_dir, Some(task_id)).await;
 }
 
 async fn delete_tasks_by_ids(
@@ -1636,6 +1638,48 @@ pub async fn get_task_logs(
     tokio::fs::read_to_string(&log_path)
         .await
         .map_err(|e| format!("Failed to read log file: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_logs(
+    state: State<'_, AppState>,
+    query: LogQuery,
+) -> std::result::Result<Vec<LogEntry>, String> {
+    logs::query_logs(&state.app_config_dir, query).await
+}
+
+#[tauri::command]
+pub fn get_log_dates(state: State<'_, AppState>) -> std::result::Result<Vec<String>, String> {
+    logs::available_dates(&state.app_config_dir)
+}
+
+#[tauri::command]
+pub async fn clear_logs(
+    state: State<'_, AppState>,
+    project_id: Option<String>,
+) -> std::result::Result<(), String> {
+    logs::clear_logs(&state.app_config_dir, project_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn add_log(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    level: String,
+    message: String,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> std::result::Result<LogEntry, String> {
+    if message.trim().is_empty() {
+        return Err("日志内容不能为空".into());
+    }
+    if let Some(task_id) = task_id.as_deref() {
+        validate_task_id(task_id)?;
+    }
+    let entry = logs::manual_entry(&level, &message, task_id, project_id)?;
+    let entry = logs::append_entry(&state.app_config_dir, entry).await?;
+    app.emit(logs::LOG_EVENT, entry.clone()).ok();
+    Ok(entry)
 }
 
 #[tauri::command]

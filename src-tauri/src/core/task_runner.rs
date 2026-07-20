@@ -2114,6 +2114,9 @@ pub async fn write_task_log(app: &AppHandle, app_config_dir: &Path, task_id: &st
     }
 
     use tauri::Emitter;
+    if let Ok(entry) = crate::core::logs::append_task_log(app_config_dir, task_id, message).await {
+        app.emit(crate::core::logs::LOG_EVENT, entry).ok();
+    }
     #[derive(serde::Serialize, Clone)]
     struct LogPayload {
         task_id: String,

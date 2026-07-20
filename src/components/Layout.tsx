@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { AudioLines, Bot, Edit3, FileVideo2, Film, Languages, ListTodo, Settings, PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
+import { AudioLines, Bot, Edit3, FileVideo2, Film, Languages, ListTodo, ScrollText, Settings, PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { ActivityCenter, CommandPalette, WorkspaceOverlays } from "./WorkspaceOverlays";
 import brandIcon from "../../src-tauri/icons/icon.png";
@@ -11,6 +11,7 @@ const navItems = [
   { to: "/models", key: "nav.models", icon: Bot },
   { to: "/translation", key: "nav.translation", icon: Languages },
   { to: "/voices", key: "nav.voices", icon: UserRound },
+  { to: "/logs", key: "nav.logs", icon: ScrollText },
   { to: "/dubbing", key: "nav.dubbing", icon: AudioLines },
   { to: "/proofread", key: "nav.proofread", icon: Edit3 },
   { to: "/subtitle-merge", key: "nav.merge", icon: Film },
