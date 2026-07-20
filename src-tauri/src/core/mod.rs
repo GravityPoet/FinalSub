@@ -9,6 +9,7 @@ pub mod power_save;
 pub mod recipes;
 pub mod secrets;
 pub mod settings;
+pub mod style_presets;
 pub mod subtitle;
 pub mod task_queue;
 pub mod task_runner;

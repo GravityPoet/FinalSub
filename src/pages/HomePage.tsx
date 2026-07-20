@@ -39,6 +39,7 @@ import {
   getVideoMetadata,
   deleteTaskRecipe,
   listTaskRecipes,
+  listSubtitleStylePresets,
   openDialog,
   openPath,
   saveTaskRecipe,
@@ -48,11 +49,18 @@ import {
   type TranslationContentMode,
   type TaskRecipe,
   type TaskRecipeSnapshot,
+  type SubtitleStyle,
+  type SubtitleStylePreset,
   type TtsModelInfo,
   type TtsProviderProfile,
   type UpdateInfo,
   type VideoMetadata,
 } from "../lib/tauri";
+import {
+  BUILT_IN_SUBTITLE_STYLE_PRESETS,
+  DEFAULT_SUBTITLE_STYLE,
+  subtitleStylesEqual,
+} from "../lib/subtitleStyles";
 
 import { Button } from "../components/ui/Button";
 import { Input, Select } from "../components/ui/Input";
@@ -211,6 +219,8 @@ export default function HomePage() {
   const [composeSoftSubtitle, setComposeSoftSubtitle] = useState(false);
   const [composeAudioMode, setComposeAudioMode] = useState<"replace" | "mix" | "add-track">("replace");
   const [composeEncoderMode, setComposeEncoderMode] = useState<"auto" | "cpu" | "hardware">("auto");
+  const [composeStyle, setComposeStyle] = useState<SubtitleStyle>({ ...DEFAULT_SUBTITLE_STYLE });
+  const [subtitleStylePresets, setSubtitleStylePresets] = useState<SubtitleStylePreset[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [recipes, setRecipes] = useState<TaskRecipe[]>([]);
   const [recipeNotice, setRecipeNotice] = useState("");
@@ -260,13 +270,17 @@ export default function HomePage() {
   const loadWorkspace = useCallback(async () => {
     setBootstrapState("loading");
     try {
-      const [loadedModels, loadedTtsModels, loadedTtsProviders, settings, loadedRecipes] = await Promise.all([
+      const [loadedModels, loadedTtsModels, loadedTtsProviders, settings, loadedRecipes, loadedStylePresets] = await Promise.all([
         listAsrModels(),
         listTtsModels(),
         listTtsProviders(),
         getSettings(),
         listTaskRecipes().catch((recipeError) => {
           console.error("Failed to load task recipes:", recipeError);
+          return [];
+        }),
+        listSubtitleStylePresets().catch((presetError) => {
+          console.error("Failed to load subtitle style presets:", presetError);
           return [];
         }),
       ]);
@@ -288,6 +302,7 @@ export default function HomePage() {
       setTtsModels(loadedTtsModels);
       setTtsProviders(loadedTtsProviders);
       setRecipes(loadedRecipes);
+      setSubtitleStylePresets(loadedStylePresets);
       setEngineId(nextEngineId);
       setModelId(nextModel?.id ?? "");
       setTargetLanguage(
@@ -394,6 +409,16 @@ export default function HomePage() {
   const readyTtsModels = ttsModels.filter((model) => model.status === "ready" && !model.clone_only);
   const selectedTtsModel = ttsModels.find((model) => model.id === dubbingTargetId);
   const selectedTtsProvider = ttsProviders.find((provider) => provider.id === dubbingTargetId);
+  const matchingBuiltInStyle = BUILT_IN_SUBTITLE_STYLE_PRESETS.find((preset) => subtitleStylesEqual(preset.style, composeStyle));
+  const matchingUserStyle = subtitleStylePresets.find((preset) => subtitleStylesEqual(preset.style, composeStyle));
+  const composeStylePresetValue = matchingBuiltInStyle?.id ?? matchingUserStyle?.id ?? "snapshot";
+
+  const handleComposeStyleChange = (presetId: string) => {
+    const builtIn = BUILT_IN_SUBTITLE_STYLE_PRESETS.find((preset) => preset.id === presetId);
+    const personal = subtitleStylePresets.find((preset) => preset.id === presetId);
+    const style = builtIn?.style ?? personal?.style;
+    if (style) setComposeStyle({ ...style });
+  };
   const dubbingReady = !enableDubbing || (
     dubbingEngine === "local"
       ? Boolean(selectedTtsModel?.status === "ready" && !selectedTtsModel.clone_only)
@@ -555,6 +580,7 @@ export default function HomePage() {
               soft_subtitle: composeSoftSubtitle,
               audio_mode: enableDubbing ? composeAudioMode : "keep" as const,
               encoder_mode: composeEncoderMode,
+              style: composeSoftSubtitle ? undefined : composeStyle,
             } : undefined,
           } : undefined,
         };
@@ -660,6 +686,7 @@ export default function HomePage() {
           compose_soft_subtitle: false,
           compose_audio_mode: "replace",
           compose_encoder_mode: "auto",
+          compose_style: { ...DEFAULT_SUBTITLE_STYLE },
         },
       },
     },
@@ -743,6 +770,7 @@ export default function HomePage() {
       compose_soft_subtitle: composeSoftSubtitle,
       compose_audio_mode: enableDubbing ? composeAudioMode : "keep",
       compose_encoder_mode: composeEncoderMode,
+      compose_style: enableCompose && !composeSoftSubtitle ? composeStyle : undefined,
     } : undefined,
   });
 
@@ -844,6 +872,7 @@ export default function HomePage() {
         setComposeAudioMode(recipePipeline.compose_audio_mode);
       }
       setComposeEncoderMode(recipePipeline.compose_encoder_mode);
+      setComposeStyle(recipePipeline.compose_style ?? { ...DEFAULT_SUBTITLE_STYLE });
     }
     const recipeSubtitleChars = snapshot.max_subtitle_chars ?? 0;
     setMaxSubtitleChars(recipeSubtitleChars);
@@ -1343,6 +1372,33 @@ export default function HomePage() {
                             <div><label htmlFor="pipeline-subtitle-mode" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeSubtitleMode")}</label><Select id="pipeline-subtitle-mode" value={composeSoftSubtitle ? "soft" : "hard"} onChange={(event) => setComposeSoftSubtitle(event.target.value === "soft")}><option value="hard">{t("home.composeHardSubtitle")}</option><option value="soft">{t("home.composeSoftSubtitle")}</option></Select></div>
                             <div><label htmlFor="pipeline-encoder-mode" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeEncoder")}</label><Select id="pipeline-encoder-mode" value={composeEncoderMode} onChange={(event) => setComposeEncoderMode(event.target.value as "auto" | "cpu" | "hardware")} disabled={composeSoftSubtitle}><option value="auto">{t("home.composeEncoderAuto")}</option><option value="cpu">CPU</option><option value="hardware">{t("home.composeEncoderHardware")}</option></Select></div>
                           </div>
+                          {!composeSoftSubtitle ? (
+                            <div>
+                              <div className="flex items-end justify-between gap-3">
+                                <label htmlFor="pipeline-subtitle-style" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeStyle")}</label>
+                                <button type="button" onClick={() => navigate("/subtitle-merge")} className="mb-1.5 text-[11px] font-semibold text-brand hover:text-brand-hover">{t("home.manageComposeStyles")}</button>
+                              </div>
+                              <Select
+                                id="pipeline-subtitle-style"
+                                data-testid="pipeline-subtitle-style"
+                                value={composeStylePresetValue}
+                                onChange={(event) => handleComposeStyleChange(event.target.value)}
+                              >
+                                {!matchingBuiltInStyle && !matchingUserStyle && <option value="snapshot">{t("home.composeEmbeddedStyle")}</option>}
+                                <optgroup label={t("home.composeBuiltInStyles")}>
+                                  {BUILT_IN_SUBTITLE_STYLE_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{t(preset.nameKey)}</option>)}
+                                </optgroup>
+                                {subtitleStylePresets.length > 0 && (
+                                  <optgroup label={t("home.composePersonalStyles")}>
+                                    {subtitleStylePresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                                  </optgroup>
+                                )}
+                              </Select>
+                              <p className="mt-1.5 text-[11px] leading-5 text-text-tertiary">{t("home.composeStyleSnapshotHint")}</p>
+                            </div>
+                          ) : (
+                            <p className="rounded-lg bg-surface-overlay px-3 py-2 text-xs leading-5 text-text-tertiary">{t("home.composeSoftStyleHint")}</p>
+                          )}
                           {enableDubbing ? (
                             <div><label htmlFor="pipeline-audio-mode" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeAudioMode")}</label><Select id="pipeline-audio-mode" value={composeAudioMode} onChange={(event) => setComposeAudioMode(event.target.value as "replace" | "mix" | "add-track")}><option value="replace">{t("home.composeReplaceAudio")}</option><option value="mix">{t("home.composeMixAudio")}</option><option value="add-track">{t("home.composeAddTrack")}</option></Select></div>
                           ) : (

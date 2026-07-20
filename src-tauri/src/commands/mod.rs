@@ -14,6 +14,7 @@ use crate::core::logs::{self, LogEntry, LogQuery};
 use crate::core::models::{self, AsrModelInfo, ModelStatus};
 use crate::core::recipes::{self, SaveTaskRecipeRequest, TaskRecipe};
 use crate::core::settings::{self, Settings};
+use crate::core::style_presets::{self, SaveSubtitleStylePresetRequest, SubtitleStylePreset};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{
     self, CreateTaskParams, PipelineConfig, Task, TaskMap, TaskStatus, TaskType,
@@ -1201,6 +1202,9 @@ fn normalize_pipeline_config(
         ) {
             return Err("成片编码模式只支持 auto、cpu 或 hardware".into());
         }
+        if let Some(style) = compose.style.as_ref() {
+            style.validate()?;
+        }
     }
     let normalized_dubbing = config.dubbing.map(|mut value| {
         value.engine = value.engine.trim().to_ascii_lowercase();
@@ -1219,6 +1223,7 @@ fn normalize_pipeline_config(
     let normalized_compose = config.compose.map(|mut value| {
         value.audio_mode = value.audio_mode.trim().to_ascii_lowercase();
         value.encoder_mode = value.encoder_mode.trim().to_ascii_lowercase();
+        value.style = value.style.map(|style| style.normalized());
         value
     });
     Ok(Some(PipelineConfig::for_task(
@@ -1483,6 +1488,37 @@ pub fn save_task_recipe(
 #[tauri::command]
 pub fn delete_task_recipe(state: State<'_, AppState>, recipe_id: String) -> Result<String, String> {
     recipes::delete_recipe(&state.app_config_dir, &recipe_id)
+}
+
+#[tauri::command]
+pub fn list_subtitle_style_presets(
+    state: State<'_, AppState>,
+) -> Result<Vec<SubtitleStylePreset>, String> {
+    style_presets::load_style_presets(&state.app_config_dir)
+}
+
+#[tauri::command]
+pub fn save_subtitle_style_preset(
+    state: State<'_, AppState>,
+    request: SaveSubtitleStylePresetRequest,
+) -> Result<SubtitleStylePreset, String> {
+    style_presets::save_style_preset(&state.app_config_dir, request)
+}
+
+#[tauri::command]
+pub fn delete_subtitle_style_preset(
+    state: State<'_, AppState>,
+    preset_id: String,
+) -> Result<String, String> {
+    style_presets::delete_style_preset(&state.app_config_dir, &preset_id)
+}
+
+#[tauri::command]
+pub fn reorder_subtitle_style_presets(
+    state: State<'_, AppState>,
+    ordered_ids: Vec<String>,
+) -> Result<Vec<SubtitleStylePreset>, String> {
+    style_presets::reorder_style_presets(&state.app_config_dir, &ordered_ids)
 }
 
 async fn approve_tasks_by_ids(
@@ -4356,6 +4392,7 @@ mod tests {
                     soft_subtitle: false,
                     audio_mode: "replace".into(),
                     encoder_mode: "auto".into(),
+                    style: None,
                 }),
             )),
         });
@@ -4411,6 +4448,7 @@ mod tests {
                 soft_subtitle: false,
                 audio_mode: "keep".into(),
                 encoder_mode: "auto".into(),
+                style: None,
             }),
         );
         assert!(normalize_pipeline_config(TaskType::TranslateOnly, Some(config)).is_err());
@@ -4443,6 +4481,7 @@ mod tests {
                 soft_subtitle: false,
                 audio_mode: "replace".into(),
                 encoder_mode: "auto".into(),
+                style: None,
             }),
         );
         assert!(
@@ -4471,6 +4510,53 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_request_preserves_and_validates_subtitle_style_snapshot() {
+        let style = crate::core::style_presets::SubtitleStyle {
+            font_size: 37,
+            font_color: "&H0000FFFF".into(),
+            margin_v: 48,
+            ..Default::default()
+        };
+        let config = task_queue::PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            false,
+            true,
+            false,
+            false,
+            None,
+            Some(task_queue::PipelineComposeConfig {
+                soft_subtitle: false,
+                audio_mode: "keep".into(),
+                encoder_mode: "auto".into(),
+                style: Some(style.clone()),
+            }),
+        );
+        let normalized = normalize_pipeline_config(TaskType::GenerateOnly, Some(config))
+            .unwrap()
+            .unwrap();
+        assert_eq!(normalized.compose.unwrap().style, Some(style.normalized()));
+
+        let invalid = task_queue::PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            false,
+            true,
+            false,
+            false,
+            None,
+            Some(task_queue::PipelineComposeConfig {
+                soft_subtitle: false,
+                audio_mode: "keep".into(),
+                encoder_mode: "auto".into(),
+                style: Some(crate::core::style_presets::SubtitleStyle {
+                    font_name: "Arial,PrimaryColour=&H00FFFFFF".into(),
+                    ..Default::default()
+                }),
+            }),
+        );
+        assert!(normalize_pipeline_config(TaskType::GenerateOnly, Some(invalid)).is_err());
+    }
+
+    #[test]
     fn pipeline_input_contract_requires_video_and_timed_subtitles_for_downstream_work() {
         let compose = task_queue::PipelineConfig::for_task(
             TaskType::GenerateOnly,
@@ -4483,6 +4569,7 @@ mod tests {
                 soft_subtitle: false,
                 audio_mode: "keep".into(),
                 encoder_mode: "auto".into(),
+                style: None,
             }),
         );
         assert!(validate_pipeline_input_contract(
