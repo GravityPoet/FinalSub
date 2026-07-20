@@ -109,6 +109,7 @@ pub fn run() {
             commands::set_tts_models_root,
             commands::synthesize_local_tts,
             commands::cancel_local_tts,
+            commands::release_local_tts_batch_workers,
             commands::list_tts_providers,
             commands::save_tts_provider,
             commands::delete_tts_provider,

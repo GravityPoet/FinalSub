@@ -16,11 +16,17 @@ pub struct TaskRecipePipelineSnapshot {
     pub dubbing_model_or_provider_id: String,
     pub dubbing_voice: String,
     pub dubbing_speed: f32,
+    #[serde(default = "default_local_tts_concurrency")]
+    pub local_concurrency: u8,
     pub compose_soft_subtitle: bool,
     pub compose_audio_mode: String,
     pub compose_encoder_mode: String,
     #[serde(default)]
     pub compose_style: Option<SubtitleStyle>,
+}
+
+fn default_local_tts_concurrency() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -246,6 +252,9 @@ fn validate_snapshot(snapshot: &TaskRecipeSnapshot) -> Result<(), String> {
             {
                 return Err("Task recipe dubbing speed is invalid".into());
             }
+            if !(1..=3).contains(&pipeline.local_concurrency) {
+                return Err("Task recipe local TTS concurrency is invalid".into());
+            }
         }
         if !matches!(
             pipeline.compose_audio_mode.as_str(),
@@ -380,6 +389,7 @@ mod tests {
             dubbing_model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
             dubbing_voice: "10".into(),
             dubbing_speed: 1.0,
+            local_concurrency: 1,
             compose_soft_subtitle: false,
             compose_audio_mode: "replace".into(),
             compose_encoder_mode: "auto".into(),

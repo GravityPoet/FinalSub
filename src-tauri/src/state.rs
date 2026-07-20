@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::core::models::AsrModelInfo;
 use crate::core::task_queue::Task;
@@ -19,6 +19,7 @@ pub struct AppState {
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     pub tts_controls: Arc<RwLock<std::collections::HashMap<String, Arc<AtomicBool>>>>,
     pub(crate) tts_worker: crate::core::tts::TtsWorkerManager,
+    pub(crate) dubbing_session_io: Arc<Mutex<()>>,
     pub voice_profiles: Arc<RwLock<std::collections::HashMap<String, VoiceProfile>>>,
     pub models: Vec<AsrModelInfo>,
     pub app_config_dir: PathBuf,
@@ -67,6 +68,7 @@ impl AppState {
             burn_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_controls: Arc::new(RwLock::new(std::collections::HashMap::new())),
             tts_worker: crate::core::tts::TtsWorkerManager::default(),
+            dubbing_session_io: Arc::new(Mutex::new(())),
             voice_profiles: Arc::new(RwLock::new(voice_profiles)),
             models: crate::core::models::builtin_model_catalog(),
             app_config_dir,

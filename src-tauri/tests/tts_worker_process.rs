@@ -114,3 +114,28 @@ async fn killed_worker_does_not_kill_parent_and_a_new_worker_starts() {
     assert_eq!(replacement.ping("replacement").await["ok"], true);
     replacement.dispose().await;
 }
+
+#[tokio::test]
+async fn three_workers_run_as_distinct_processes() {
+    let mut first = WorkerHarness::spawn();
+    let mut second = WorkerHarness::spawn();
+    let mut third = WorkerHarness::spawn();
+
+    let (first_ping, second_ping, third_ping) = tokio::join!(
+        first.ping("pool-first"),
+        second.ping("pool-second"),
+        third.ping("pool-third"),
+    );
+    let mut worker_pids = vec![
+        first_ping["worker_pid"].as_u64().expect("first worker pid"),
+        second_ping["worker_pid"]
+            .as_u64()
+            .expect("second worker pid"),
+        third_ping["worker_pid"].as_u64().expect("third worker pid"),
+    ];
+    worker_pids.sort_unstable();
+    worker_pids.dedup();
+    assert_eq!(worker_pids.len(), 3);
+
+    tokio::join!(first.dispose(), second.dispose(), third.dispose());
+}

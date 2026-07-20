@@ -220,6 +220,7 @@ export default function HomePage() {
   const [dubbingTargetId, setDubbingTargetId] = useState("");
   const [dubbingVoice, setDubbingVoice] = useState("");
   const [dubbingSpeed, setDubbingSpeed] = useState(1);
+  const [dubbingConcurrency, setDubbingConcurrency] = useState(1);
   const [composeSoftSubtitle, setComposeSoftSubtitle] = useState(false);
   const [composeAudioMode, setComposeAudioMode] = useState<"replace" | "mix" | "add-track">("replace");
   const [composeEncoderMode, setComposeEncoderMode] = useState<"auto" | "cpu" | "hardware">("auto");
@@ -661,6 +662,7 @@ export default function HomePage() {
               model_or_provider_id: dubbingTargetId,
               voice: dubbingVoice,
               global_speed: dubbingSpeed,
+              local_concurrency: dubbingConcurrency,
             } : undefined,
             compose: enableCompose ? {
               soft_subtitle: composeSoftSubtitle,
@@ -769,6 +771,7 @@ export default function HomePage() {
           dubbing_model_or_provider_id: recipeDubbingTarget,
           dubbing_voice: recipeDubbingVoice,
           dubbing_speed: 1,
+          local_concurrency: 1,
           compose_soft_subtitle: false,
           compose_audio_mode: "replace",
           compose_encoder_mode: "auto",
@@ -853,6 +856,7 @@ export default function HomePage() {
       dubbing_model_or_provider_id: dubbingTargetId,
       dubbing_voice: dubbingVoice,
       dubbing_speed: dubbingSpeed,
+      local_concurrency: dubbingConcurrency,
       compose_soft_subtitle: composeSoftSubtitle,
       compose_audio_mode: enableDubbing ? composeAudioMode : "keep",
       compose_encoder_mode: composeEncoderMode,
@@ -953,6 +957,7 @@ export default function HomePage() {
         }
       }
       setDubbingSpeed(recipePipeline.dubbing_speed);
+      setDubbingConcurrency(recipePipeline.local_concurrency ?? 1);
       setComposeSoftSubtitle(recipePipeline.compose_soft_subtitle);
       if (recipePipeline.compose_audio_mode !== "keep") {
         setComposeAudioMode(recipePipeline.compose_audio_mode);
@@ -1562,6 +1567,28 @@ export default function HomePage() {
                               </Select>
                             </div>
                           </div>
+                          {dubbingEngine === "local" && (
+                            <div className="space-y-2">
+                              <div className="flex items-end justify-between gap-3">
+                                <label className="text-xs font-semibold text-text-secondary">{t("dubbing.localConcurrency")}</label>
+                                <span className="text-[11px] text-text-tertiary">{t("dubbing.localConcurrencySummary", { count: dubbingConcurrency })}</span>
+                              </div>
+                              <div className="grid grid-cols-3 gap-1 rounded-xl border border-border-subtle bg-surface-card/70 p-1" role="group" aria-label={t("dubbing.localConcurrency")}>
+                                {[1, 2, 3].map((count) => (
+                                  <button
+                                    key={count}
+                                    type="button"
+                                    aria-pressed={dubbingConcurrency === count}
+                                    onClick={() => setDubbingConcurrency(count)}
+                                    className={`min-h-9 rounded-lg px-1.5 text-[11px] font-semibold transition ${dubbingConcurrency === count ? "liquid-selected text-brand" : "text-text-secondary hover:bg-surface-overlay"}`}
+                                  >
+                                    {t(`dubbing.localConcurrency${count}` as "dubbing.localConcurrency1")}
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="text-[11px] leading-5 text-text-tertiary">{t(`dubbing.localConcurrencyDesc${dubbingConcurrency}` as "dubbing.localConcurrencyDesc1")}</p>
+                            </div>
+                          )}
                           {!dubbingReady && (
                             <button type="button" onClick={() => navigate("/models")} className="text-xs font-semibold text-brand hover:text-brand-hover">
                               {t("home.openModelManage")} <ChevronRight size={12} className="inline" />

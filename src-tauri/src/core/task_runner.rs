@@ -1884,9 +1884,33 @@ async fn run_dubbing_stage(
     let ffmpeg = resolve_sidecar(app, "ffmpeg")?;
     let session = get_dubbing_session(app_config_dir, &session_id).map_err(|e| e.to_string())?;
     let total = session.cues.len().max(1);
+    let pending_cues = session
+        .cues
+        .into_iter()
+        .filter(|cue| {
+            !(matches!(
+                cue.status,
+                crate::core::tts::DubbingCueStatus::Ready
+                    | crate::core::tts::DubbingCueStatus::Accepted
+            ) && cue
+                .wav_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path).is_file()))
+        })
+        .collect::<Vec<_>>();
+    let concurrency = if matches!(engine, DubbingEngineSelection::Local { .. }) {
+        usize::from(dubbing.local_concurrency.clamp(1, 3))
+    } else {
+        1
+    };
+    let mut completed = total.saturating_sub(pending_cues.len());
 
-    for cue in session.cues {
+    for chunk in pending_cues.chunks(concurrency) {
         if check_cancelled(cancel_rx) {
+            app.state::<crate::state::AppState>()
+                .tts_worker
+                .trim_idle_workers()
+                .await;
             return Ok(handle_pipeline_stop(
                 app,
                 tasks,
@@ -1897,81 +1921,115 @@ async fn run_dubbing_stage(
             )
             .await);
         }
-        if matches!(
-            cue.status,
-            crate::core::tts::DubbingCueStatus::Ready
-                | crate::core::tts::DubbingCueStatus::Accepted
-        ) && cue
-            .wav_path
-            .as_deref()
-            .is_some_and(|path| Path::new(path).is_file())
-        {
-            continue;
+        let mut prepared_cues = Vec::with_capacity(chunk.len());
+        for cue in chunk {
+            let request = DubbingSynthesizeCueRequest {
+                session_id: session_id.clone(),
+                cue_index: cue.index,
+                engine: engine.clone(),
+                voice: cue
+                    .voice_id
+                    .clone()
+                    .filter(|voice| !voice.trim().is_empty())
+                    .unwrap_or_else(|| dubbing.voice.clone()),
+                global_speed: dubbing.global_speed,
+                local_concurrency: dubbing.local_concurrency,
+                reference_audio_path: dubbing.reference_audio_path.clone(),
+                reference_text: dubbing.reference_text.clone(),
+                num_steps: dubbing.num_steps,
+            };
+            let prepared = {
+                let state = app.state::<crate::state::AppState>();
+                let _session_io = state.dubbing_session_io.lock().await;
+                prepare_dubbing_cue(app_config_dir, &request).map_err(|error| error.to_string())?
+            };
+            prepared_cues.push(prepared);
         }
 
-        let request = DubbingSynthesizeCueRequest {
-            session_id: session_id.clone(),
-            cue_index: cue.index,
-            engine: engine.clone(),
-            voice: dubbing.voice.clone(),
-            global_speed: dubbing.global_speed,
-            reference_audio_path: dubbing.reference_audio_path.clone(),
-            reference_text: dubbing.reference_text.clone(),
-            num_steps: dubbing.num_steps,
-        };
-        let prepared =
-            prepare_dubbing_cue(app_config_dir, &request).map_err(|error| error.to_string())?;
-        let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
-        let bridge = pipeline_cancel_bridge(cancel_rx, cancelled.clone());
-        let app_state = app.state::<crate::state::AppState>();
-        let synthesis = synthesize_and_align_dubbing_cue(
-            app_state.inner(),
-            &ffmpeg,
-            &prepared,
-            cancelled.clone(),
-        )
-        .await;
-        bridge.abort();
+        let mut jobs = tokio::task::JoinSet::new();
+        for prepared in prepared_cues {
+            let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
+            let child_cancel = cancel_rx.clone();
+            let child_app = app.clone();
+            let child_ffmpeg = ffmpeg.clone();
+            jobs.spawn(async move {
+                let bridge = pipeline_cancel_bridge(&child_cancel, cancelled.clone());
+                let state = child_app.state::<crate::state::AppState>();
+                let synthesis = synthesize_and_align_dubbing_cue(
+                    state.inner(),
+                    &child_ffmpeg,
+                    &prepared,
+                    cancelled.clone(),
+                )
+                .await;
+                bridge.abort();
+                (prepared.cue_index, cancelled, synthesis)
+            });
+        }
 
-        match synthesis {
-            Ok(_) => {}
-            Err(error) => {
+        let mut first_error = None;
+        let mut batch_cancelled = false;
+        while let Some(joined) = jobs.join_next().await {
+            let (cue_index, cancelled, synthesis) =
+                joined.map_err(|error| format!("并发配音任务异常：{error}"))?;
+            if let Err(error) = synthesis {
                 let was_cancelled = cancelled.load(Ordering::Relaxed)
                     || error.contains("取消")
                     || error.to_ascii_lowercase().contains("cancel");
+                let state = app.state::<crate::state::AppState>();
+                let _session_io = state.dubbing_session_io.lock().await;
                 let _ = fail_dubbing_cue(
                     app_config_dir,
                     &session_id,
-                    cue.index,
+                    cue_index,
                     &error,
                     was_cancelled,
                 );
-                if was_cancelled || check_cancelled(cancel_rx) {
-                    return Ok(handle_pipeline_stop(
-                        app,
-                        tasks,
-                        app_config_dir,
-                        task_id,
-                        PipelineStageKind::Dub,
-                        cancel_rx,
-                    )
-                    .await);
+                batch_cancelled |= was_cancelled;
+                if !was_cancelled && first_error.is_none() {
+                    first_error = Some(error);
                 }
-                return Err(error);
             }
+            completed += 1;
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::Dub,
+                PipelineStageStatus::Running,
+                (completed as f32 / total as f32).clamp(0.0, 1.0),
+                &format!("正在配音... ({completed}/{total})"),
+            )
+            .await;
         }
-        let completed = ((cue.index as usize + 1) as f32 / total as f32).clamp(0.0, 1.0);
-        update_pipeline_stage(
-            app,
-            tasks.clone(),
-            task_id,
-            PipelineStageKind::Dub,
-            PipelineStageStatus::Running,
-            completed,
-            &format!("正在配音... ({}/{})", cue.index + 1, total),
-        )
-        .await;
+        if batch_cancelled || check_cancelled(cancel_rx) {
+            app.state::<crate::state::AppState>()
+                .tts_worker
+                .trim_idle_workers()
+                .await;
+            return Ok(handle_pipeline_stop(
+                app,
+                tasks,
+                app_config_dir,
+                task_id,
+                PipelineStageKind::Dub,
+                cancel_rx,
+            )
+            .await);
+        }
+        if let Some(error) = first_error {
+            app.state::<crate::state::AppState>()
+                .tts_worker
+                .trim_idle_workers()
+                .await;
+            return Err(error);
+        }
     }
+
+    app.state::<crate::state::AppState>()
+        .tts_worker
+        .trim_idle_workers()
+        .await;
 
     let session = get_dubbing_session(app_config_dir, &session_id).map_err(|e| e.to_string())?;
     let overlong_count = session

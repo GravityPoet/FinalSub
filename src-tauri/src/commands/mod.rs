@@ -594,6 +594,12 @@ pub async fn cancel_local_tts(
 }
 
 #[tauri::command]
+pub async fn release_local_tts_batch_workers(state: State<'_, AppState>) -> Result<(), String> {
+    state.tts_worker.trim_idle_workers().await;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn list_tts_providers(state: State<'_, AppState>) -> Result<Vec<TtsProviderProfile>, String> {
     crate::core::tts::list_providers(&state.app_config_dir).map_err(|error| error.to_string())
 }
@@ -830,6 +836,7 @@ pub(crate) async fn synthesize_and_align_dubbing_cue(
         resynthesized = true;
     }
 
+    let _session_io = state.dubbing_session_io.lock().await;
     crate::core::tts::complete_dubbing_cue(
         &state.app_config_dir,
         ffmpeg,
@@ -865,7 +872,10 @@ pub async fn synthesize_dubbing_cue(
     }
     let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
 
-    let prepared = match crate::core::tts::prepare_dubbing_cue(&state.app_config_dir, &request) {
+    let prepared = match {
+        let _session_io = state.dubbing_session_io.lock().await;
+        crate::core::tts::prepare_dubbing_cue(&state.app_config_dir, &request)
+    } {
         Ok(prepared) => prepared,
         Err(error) => {
             state.tts_controls.write().await.remove(&generation_id);
@@ -879,6 +889,7 @@ pub async fn synthesize_dubbing_cue(
         let was_cancelled = cancelled.load(std::sync::atomic::Ordering::Relaxed)
             || error.contains("取消")
             || error.to_ascii_lowercase().contains("cancel");
+        let _session_io = state.dubbing_session_io.lock().await;
         let _ = crate::core::tts::fail_dubbing_cue(
             &state.app_config_dir,
             &prepared.session_id,
@@ -910,6 +921,7 @@ pub async fn accept_dubbing_overflow(
         controls.insert(generation_id.clone(), cancelled.clone());
     }
     let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
+    let _session_io = state.dubbing_session_io.lock().await;
     let result = crate::core::tts::accept_dubbing_overflow(
         &state.app_config_dir,
         &ffmpeg,
@@ -1307,6 +1319,9 @@ fn normalize_pipeline_config(
         }
         if !dubbing.global_speed.is_finite() || !(0.5..=2.0).contains(&dubbing.global_speed) {
             return Err("整体语速必须在 0.5-2.0 之间".into());
+        }
+        if !(1..=3).contains(&dubbing.local_concurrency) {
+            return Err("本地 TTS 并行路数必须在 1-3 之间".into());
         }
         if dubbing
             .num_steps
@@ -4674,6 +4689,7 @@ mod tests {
                     model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
                     voice: "10".into(),
                     global_speed: 1.0,
+                    local_concurrency: 1,
                     reference_audio_path: None,
                     reference_text: None,
                     num_steps: None,
@@ -4753,6 +4769,7 @@ mod tests {
                     model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
                     voice: "10".into(),
                     global_speed: 1.0,
+                    local_concurrency: 1,
                     reference_audio_path: None,
                     reference_text: None,
                     num_steps: None,
@@ -4865,6 +4882,7 @@ mod tests {
                 model_or_provider_id: "not-a-provider-uuid".into(),
                 voice: String::new(),
                 global_speed: 1.0,
+                local_concurrency: 1,
                 reference_audio_path: None,
                 reference_text: None,
                 num_steps: None,

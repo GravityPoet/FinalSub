@@ -45,6 +45,7 @@ import {
   listTtsProviders,
   listVoiceProfiles,
   openDialog,
+  releaseLocalTtsBatchWorkers,
   revealItemInDir,
   saveDialog,
   synthesizeDubbingCue,
@@ -103,10 +104,11 @@ export default function DubbingPage() {
   const [referenceAudio, setReferenceAudio] = useState("");
   const [referenceText, setReferenceText] = useState("");
   const [cloneQuality, setCloneQuality] = useState<"standard" | "high">("standard");
+  const [localConcurrency, setLocalConcurrency] = useState(1);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [activeGenerationId, setActiveGenerationId] = useState<string | null>(null);
-  const [activeCueIndex, setActiveCueIndex] = useState<number | null>(null);
+  const [activeGenerationIds, setActiveGenerationIds] = useState<string[]>([]);
+  const [activeCueIndices, setActiveCueIndices] = useState<number[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState(0);
   const [exporting, setExporting] = useState(false);
@@ -118,6 +120,7 @@ export default function DubbingPage() {
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "err" | "warn"; text: string } | null>(null);
   const cancelRequested = useRef(false);
+  const activeGenerationIdsRef = useRef(new Set<string>());
   const videoRef = useRef<HTMLVideoElement>(null);
   const cueElements = useRef(new Map<number, HTMLDivElement>());
 
@@ -201,6 +204,7 @@ export default function DubbingPage() {
               setEngineValue(engine.kind === "local" ? `local:${engine.model_id}` : `cloud:${engine.provider_id}`);
               setVoice(restored.last_config.voice);
               setGlobalSpeed(restored.last_config.global_speed);
+              setLocalConcurrency(restored.last_config.local_concurrency ?? 1);
               setReferenceAudio(restored.last_config.reference_audio_path ?? "");
               setReferenceText(restored.last_config.reference_text ?? "");
               const restoredProfile = loadedVoiceProfiles.find((profile) => engine.kind === "local"
@@ -391,8 +395,9 @@ export default function DubbingPage() {
     const generationId = crypto.randomUUID();
     const cue = session.cues.find((item) => item.index === cueIndex);
     const effectiveVoice = cue?.voice_id?.trim() || voice;
-    setActiveGenerationId(generationId);
-    setActiveCueIndex(cueIndex);
+    activeGenerationIdsRef.current.add(generationId);
+    setActiveGenerationIds(Array.from(activeGenerationIdsRef.current));
+    setActiveCueIndices((current) => current.includes(cueIndex) ? current : [...current, cueIndex]);
     try {
       const updated = await synthesizeDubbingCue(generationId, {
         session_id: session.id,
@@ -400,6 +405,7 @@ export default function DubbingPage() {
         engine,
         voice: effectiveVoice,
         global_speed: globalSpeed,
+        local_concurrency: localConcurrency,
         reference_audio_path: referenceAudio || undefined,
         reference_text: referenceText.trim() || undefined,
         num_steps: cloneQuality === "high" ? 8 : 4,
@@ -407,8 +413,9 @@ export default function DubbingPage() {
       setSession(updated);
       return updated;
     } finally {
-      setActiveGenerationId(null);
-      setActiveCueIndex(null);
+      activeGenerationIdsRef.current.delete(generationId);
+      setActiveGenerationIds(Array.from(activeGenerationIdsRef.current));
+      setActiveCueIndices((current) => current.filter((index) => index !== cueIndex));
     }
   };
 
@@ -460,25 +467,36 @@ export default function DubbingPage() {
     let completed = 0;
     let latest = session;
     const failures: number[] = [];
-    for (const cue of targets) {
-      if (cancelRequested.current) break;
-      try {
-        latest = await runCue(cue.index);
-      } catch {
-        failures.push(cue.index + 1);
+    let cursor = 0;
+    const workerCount = engineValue.startsWith("local:")
+      ? Math.min(localConcurrency, targets.length)
+      : 1;
+    const runNext = async () => {
+      while (!cancelRequested.current) {
+        const targetIndex = cursor;
+        cursor += 1;
+        if (targetIndex >= targets.length) return;
+        const cue = targets[targetIndex];
         try {
-          latest = await getDubbingSession(session.id);
-          setSession(latest);
+          latest = await runCue(cue.index);
         } catch {
-          // Keep the most recent valid snapshot; the backend already persisted the failure.
+          failures.push(cue.index + 1);
         }
+        completed += 1;
+        setBatchProgress((completed / targets.length) * 100);
       }
-      completed += 1;
-      setBatchProgress((completed / targets.length) * 100);
+    };
+    await Promise.all(Array.from({ length: workerCount }, runNext));
+    try {
+      latest = await getDubbingSession(session.id);
+      setSession(latest);
+    } catch {
+      // Keep the latest valid response if the final refresh fails.
+    }
+    if (engineValue.startsWith("local:")) {
+      await releaseLocalTtsBatchWorkers().catch(() => undefined);
     }
     setBatchRunning(false);
-    setActiveGenerationId(null);
-    setActiveCueIndex(null);
     if (cancelRequested.current) {
       setMessage({ type: "warn", text: t("dubbing.batchCancelled") });
     } else if (failures.length > 0) {
@@ -496,14 +514,17 @@ export default function DubbingPage() {
 
   const cancelGeneration = async () => {
     cancelRequested.current = true;
-    if (activeGenerationId) await cancelLocalTts(activeGenerationId);
+    await Promise.all(
+      Array.from(activeGenerationIdsRef.current, (generationId) => cancelLocalTts(generationId)),
+    );
   };
 
   const acceptOverflow = async (cueIndex: number) => {
     if (!session) return;
     const generationId = crypto.randomUUID();
-    setActiveGenerationId(generationId);
-    setActiveCueIndex(cueIndex);
+    activeGenerationIdsRef.current.add(generationId);
+    setActiveGenerationIds(Array.from(activeGenerationIdsRef.current));
+    setActiveCueIndices((current) => current.includes(cueIndex) ? current : [...current, cueIndex]);
     setMessage(null);
     try {
       const updated = await acceptDubbingOverflow(generationId, session.id, cueIndex);
@@ -512,8 +533,9 @@ export default function DubbingPage() {
     } catch (error) {
       setMessage({ type: "err", text: String(error) });
     } finally {
-      setActiveGenerationId(null);
-      setActiveCueIndex(null);
+      activeGenerationIdsRef.current.delete(generationId);
+      setActiveGenerationIds(Array.from(activeGenerationIdsRef.current));
+      setActiveCueIndices((current) => current.filter((index) => index !== cueIndex));
     }
   };
 
@@ -529,7 +551,8 @@ export default function DubbingPage() {
     if (!selected) return;
     const generationId = crypto.randomUUID();
     setExporting(true);
-    setActiveGenerationId(generationId);
+    activeGenerationIdsRef.current.add(generationId);
+    setActiveGenerationIds(Array.from(activeGenerationIdsRef.current));
     setMessage(null);
     try {
       const updated = await exportDubbingAudio(generationId, session.id, selected);
@@ -539,7 +562,8 @@ export default function DubbingPage() {
       setMessage({ type: "err", text: String(error) });
     } finally {
       setExporting(false);
-      setActiveGenerationId(null);
+      activeGenerationIdsRef.current.delete(generationId);
+      setActiveGenerationIds(Array.from(activeGenerationIdsRef.current));
     }
   };
 
@@ -609,7 +633,7 @@ export default function DubbingPage() {
           <p className="mt-2 max-w-3xl text-sm leading-6 text-text-tertiary">{t("dubbing.subtitle")}</p>
         </div>
         {session && (
-          <Button type="button" variant="secondary" size="sm" onClick={resetSession} disabled={batchRunning || exporting || activeGenerationId !== null}>
+          <Button type="button" variant="secondary" size="sm" onClick={resetSession} disabled={batchRunning || exporting || activeGenerationIds.length > 0}>
             <RefreshCw size={14} /> {t("dubbing.newSession")}
           </Button>
         )}
@@ -667,7 +691,7 @@ export default function DubbingPage() {
                 <div className="min-w-0">
                   <p className="flex items-center gap-2 text-sm font-semibold text-text-primary"><Gauge size={16} className="text-brand" /> {t("dubbing.settingsTitle")}</p>
                   <p className="mt-1 truncate text-xs text-text-tertiary">
-                    {selectedLocalModel?.name ?? selectedProvider?.name ?? t("dubbing.chooseEngine")} · {(selectedVoiceProfile?.name ?? voice) || "—"} · {globalSpeed.toFixed(2)}×
+                    {selectedLocalModel?.name ?? selectedProvider?.name ?? t("dubbing.chooseEngine")} · {(selectedVoiceProfile?.name ?? voice) || "—"} · {globalSpeed.toFixed(2)}×{selectedLocalModel ? ` · ${t("dubbing.localConcurrencySummary", { count: localConcurrency })}` : ""}
                   </p>
                 </div>
                 <span className="flex shrink-0 items-center gap-2 text-xs font-semibold text-brand">
@@ -772,6 +796,29 @@ export default function DubbingPage() {
                   <span className="flex items-center justify-between"><span>{t("dubbing.globalSpeed")}</span><span className="font-mono text-brand">{globalSpeed.toFixed(2)}×</span></span>
                   <input type="range" min="0.5" max="2" step="0.05" value={globalSpeed} onChange={(event) => setGlobalSpeed(Number(event.target.value))} className="w-full accent-brand" />
                 </label>
+                {selectedLocalModel && (
+                  <div className="space-y-2.5 rounded-2xl border border-border-subtle bg-surface-overlay p-4">
+                    <div>
+                      <p className="text-sm font-semibold text-text-primary">{t("dubbing.localConcurrency")}</p>
+                      <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("dubbing.localConcurrencyHint")}</p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 rounded-xl border border-border-subtle bg-surface-card/70 p-1" role="group" aria-label={t("dubbing.localConcurrency")}>
+                      {[1, 2, 3].map((count) => (
+                        <button
+                          key={count}
+                          type="button"
+                          aria-pressed={localConcurrency === count}
+                          disabled={batchRunning || activeGenerationIds.length > 0}
+                          onClick={() => setLocalConcurrency(count)}
+                          className={`min-h-10 rounded-lg px-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${localConcurrency === count ? "liquid-selected text-brand" : "text-text-secondary hover:bg-surface-overlay"}`}
+                        >
+                          {t(`dubbing.localConcurrency${count}` as "dubbing.localConcurrency1")}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs leading-5 text-text-secondary">{t(`dubbing.localConcurrencyDesc${localConcurrency}` as "dubbing.localConcurrencyDesc1")}</p>
+                  </div>
+                )}
                 <div className="rounded-2xl border border-border-subtle bg-surface-overlay p-4 text-xs leading-5 text-text-tertiary">
                   <p className="flex items-start gap-2"><Gauge size={15} className="mt-0.5 shrink-0 text-brand" /> {t("dubbing.alignmentDesc")}</p>
                   <p className="mt-2 flex items-start gap-2"><AudioLines size={15} className="mt-0.5 shrink-0 text-brand" /> {t("dubbing.overlapDesc")}</p>
@@ -798,12 +845,12 @@ export default function DubbingPage() {
                 {batchRunning ? (
                   <Button type="button" variant="danger" size="sm" onClick={cancelGeneration}><Pause size={14} /> {t("dubbing.cancelBatch")}</Button>
                 ) : (
-                  <Button type="button" variant="primary" size="sm" onClick={generateBatch} disabled={!engineValue || activeGenerationId !== null}><Play size={14} /> {t("dubbing.generatePending")}</Button>
+                  <Button type="button" variant="primary" size="sm" onClick={generateBatch} disabled={!engineValue || activeGenerationIds.length > 0}><Play size={14} /> {t("dubbing.generatePending")}</Button>
                 )}
-                <Button type="button" variant="secondary" size="sm" onClick={exportAudio} disabled={!canExport || exporting || activeGenerationId !== null}>
+                <Button type="button" variant="secondary" size="sm" onClick={exportAudio} disabled={!canExport || exporting || activeGenerationIds.length > 0}>
                   {exporting ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} {t("dubbing.export")}
                 </Button>
-                <Button type="button" variant="secondary" size="sm" onClick={exportSubtitleCopy} disabled={subtitleSaving !== null || activeGenerationId !== null}>
+                <Button type="button" variant="secondary" size="sm" onClick={exportSubtitleCopy} disabled={subtitleSaving !== null || activeGenerationIds.length > 0}>
                   {subtitleSaving === "copy" ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
                   {subtitleSaving === "copy" ? t("dubbing.subtitleSaving") : t("dubbing.exportSubtitle")}
                 </Button>
@@ -812,7 +859,7 @@ export default function DubbingPage() {
                   variant="secondary"
                   size="sm"
                   onClick={() => setWriteBackOpen(true)}
-                  disabled={!session.subtitle_dirty || session.source_changed || subtitleSaving !== null || activeGenerationId !== null}
+                  disabled={!session.subtitle_dirty || session.source_changed || subtitleSaving !== null || activeGenerationIds.length > 0}
                   title={!session.subtitle_dirty ? t("dubbing.writeBackModalDesc") : undefined}
                 >
                   <FileCheck2 size={14} /> {t("dubbing.writeBackSubtitle")}
@@ -862,9 +909,9 @@ export default function DubbingPage() {
                 >
                   <CueCard
                     cue={cue}
-                    generating={activeCueIndex === cue.index}
+                    generating={activeCueIndices.includes(cue.index)}
                     playbackActive={playbackCue?.index === cue.index}
-                    disabled={batchRunning || exporting || subtitleSaving !== null || activeGenerationId !== null}
+                    disabled={batchRunning || exporting || subtitleSaving !== null || activeGenerationIds.length > 0}
                     onGenerate={() => generateSingle(cue.index)}
                     onAccept={() => acceptOverflow(cue.index)}
                     onUpdate={editCue}

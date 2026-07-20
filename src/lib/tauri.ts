@@ -427,6 +427,7 @@ export interface DubbingRunConfig {
   engine: DubbingEngineSelection;
   voice: string;
   global_speed: number;
+  local_concurrency: number;
   reference_audio_path: string | null;
   reference_text: string | null;
   num_steps: number | null;
@@ -492,6 +493,7 @@ export interface DubbingSynthesizeCueRequest {
   engine: DubbingEngineSelection;
   voice: string;
   global_speed: number;
+  local_concurrency?: number;
   reference_audio_path?: string;
   reference_text?: string;
   num_steps?: number;
@@ -534,6 +536,7 @@ export interface PipelineDubbingConfig {
   model_or_provider_id: string;
   voice: string;
   global_speed: number;
+  local_concurrency: number;
   reference_audio_path?: string;
   reference_text?: string;
   num_steps?: number;
@@ -780,6 +783,10 @@ export async function cancelLocalTts(generationId: string): Promise<boolean> {
   return invoke("cancel_local_tts", { generationId });
 }
 
+export async function releaseLocalTtsBatchWorkers(): Promise<void> {
+  return invoke("release_local_tts_batch_workers");
+}
+
 export async function listTtsProviders(): Promise<TtsProviderProfile[]> {
   return invoke("list_tts_providers");
 }
@@ -962,6 +969,7 @@ export interface TaskRecipePipelineSnapshot {
   dubbing_model_or_provider_id: string;
   dubbing_voice: string;
   dubbing_speed: number;
+  local_concurrency: number;
   compose_soft_subtitle: boolean;
   compose_audio_mode: "keep" | "replace" | "mix" | "add-track";
   compose_encoder_mode: "auto" | "cpu" | "hardware";
@@ -2106,6 +2114,7 @@ function createMockPipelineAfterApproval(): PipelineConfig {
       model_or_provider_id: "kokoro-multi-lang-v1_1",
       voice: "10",
       global_speed: 1,
+      local_concurrency: 1,
     },
     compose: {
       soft_subtitle: false,
@@ -2367,6 +2376,8 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       } satisfies TtsSynthesisResult;
     case "cancel_local_tts":
       return true;
+    case "release_local_tts_batch_workers":
+      return undefined;
     case "list_tts_providers":
       return mockTtsProvidersState;
     case "save_tts_provider": {
@@ -2451,6 +2462,7 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
           engine: request.engine,
           voice: request.voice,
           global_speed: request.global_speed,
+          local_concurrency: request.local_concurrency ?? 1,
           reference_audio_path: request.reference_audio_path ?? null,
           reference_text: request.reference_text ?? null,
           num_steps: request.num_steps ?? null,
@@ -2525,6 +2537,7 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
               model_or_provider_id: "kokoro-multi-lang-v1_1",
               voice: "10",
               global_speed: 1,
+              local_concurrency: 1,
             },
             compose: {
               soft_subtitle: false,
