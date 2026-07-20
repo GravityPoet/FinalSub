@@ -133,6 +133,18 @@ export default function DubbingPage() {
     () => voiceProfiles.find((profile) => profile.id === selectedVoiceProfileId) ?? null,
     [selectedVoiceProfileId, voiceProfiles],
   );
+  const localVoiceProfiles = useMemo(
+    () => voiceProfiles.filter((profile) => profile.engine === "zipvoice"),
+    [voiceProfiles],
+  );
+  const cloudVoiceProfiles = useMemo(
+    () => selectedProvider
+      ? voiceProfiles.filter((profile) => profile.engine !== "zipvoice"
+        && profile.provider_id === selectedProvider.id
+        && profile.cloud_status === "ready")
+      : [],
+    [selectedProvider, voiceProfiles],
+  );
   const playbackCue = useMemo(
     () => session?.cues.find((cue) => currentTimeMs >= cue.start_ms && currentTimeMs < cue.end_ms) ?? null,
     [currentTimeMs, session],
@@ -189,9 +201,12 @@ export default function DubbingPage() {
               setGlobalSpeed(restored.last_config.global_speed);
               setReferenceAudio(restored.last_config.reference_audio_path ?? "");
               setReferenceText(restored.last_config.reference_text ?? "");
-              const restoredProfile = loadedVoiceProfiles.find(
-                (profile) => profile.reference_audio_path === restored.last_config?.reference_audio_path,
-              );
+              const restoredProfile = loadedVoiceProfiles.find((profile) => engine.kind === "local"
+                ? profile.engine === "zipvoice"
+                  && profile.reference_audio_path === restored.last_config?.reference_audio_path
+                : profile.engine !== "zipvoice"
+                  && profile.provider_id === engine.provider_id
+                  && profile.cloud_voice_id === restored.last_config?.voice);
               setSelectedVoiceProfileId(restoredProfile?.id ?? "");
               setCloneQuality((restored.last_config.num_steps ?? 4) >= 8 ? "high" : "standard");
             }
@@ -200,24 +215,43 @@ export default function DubbingPage() {
           }
         }
 
-        // An explicit “Use for dubbing” action must win over a restored
-        // session and select a clone-capable local engine automatically.
+        // An explicit “Use for dubbing” action must win over a restored session.
         if (requestedProfile) {
-          const cloneModel = loadedModels.find((model) => model.status === "ready" && model.clone_only);
-          if (cloneModel) {
-            setEngineValue(`local:${cloneModel.id}`);
-            setVoice(cloneModel.default_voice_id);
+          if (requestedProfile.engine === "zipvoice") {
+            const cloneModel = loadedModels.find((model) => model.status === "ready" && model.clone_only);
+            if (cloneModel) {
+              setEngineValue(`local:${cloneModel.id}`);
+              setVoice(cloneModel.default_voice_id);
+            } else {
+              setEngineValue("");
+              setVoice("");
+              setSettingsOpen(true);
+              setMessage({ type: "warn", text: t("dubbing.cloneEngineUnavailable") });
+            }
+            setReferenceAudio(requestedProfile.reference_audio_path);
+            setReferenceText(requestedProfile.reference_text);
           } else {
-            setEngineValue("");
-            setVoice("");
-            setSettingsOpen(true);
-            setMessage({ type: "warn", text: t("dubbing.cloneEngineUnavailable") });
+            const provider = loadedProviders.find((item) => item.id === requestedProfile.provider_id);
+            if (provider && requestedProfile.cloud_voice_id && requestedProfile.cloud_status === "ready") {
+              setEngineValue(`cloud:${provider.id}`);
+              setVoice(requestedProfile.cloud_voice_id);
+            } else {
+              setEngineValue("");
+              setVoice("");
+              setSettingsOpen(true);
+              setMessage({
+                type: "warn",
+                text: provider && requestedProfile.cloud_voice_id
+                  ? t("dubbing.cloudVoiceNotReady")
+                  : t("dubbing.cloudVoiceUnavailable"),
+              });
+            }
+            setReferenceAudio("");
+            setReferenceText("");
           }
           setSelectedVoiceProfileId(requestedProfile.id);
-          setReferenceAudio(requestedProfile.reference_audio_path);
-          setReferenceText(requestedProfile.reference_text);
-        } else if (!restoredConfig && defaultModel?.clone_only && loadedVoiceProfiles.length > 0) {
-          const profile = loadedVoiceProfiles[0];
+        } else if (!restoredConfig && defaultModel?.clone_only && loadedVoiceProfiles.some((profile) => profile.engine === "zipvoice")) {
+          const profile = loadedVoiceProfiles.find((item) => item.engine === "zipvoice")!;
           setSelectedVoiceProfileId(profile.id);
           setReferenceAudio(profile.reference_audio_path);
           setReferenceText(profile.reference_text);
@@ -232,8 +266,8 @@ export default function DubbingPage() {
     if (value.startsWith("local:")) {
       const model = models.find((item) => item.id === value.slice("local:".length));
       setVoice(model?.default_voice_id ?? "");
-      if (model?.clone_only && voiceProfiles.length > 0) {
-        const profile = selectedVoiceProfile ?? voiceProfiles[0];
+      if (model?.clone_only && localVoiceProfiles.length > 0) {
+        const profile = selectedVoiceProfile?.engine === "zipvoice" ? selectedVoiceProfile : localVoiceProfiles[0];
         setSelectedVoiceProfileId(profile.id);
         setReferenceAudio(profile.reference_audio_path);
         setReferenceText(profile.reference_text);
@@ -242,8 +276,14 @@ export default function DubbingPage() {
       }
     } else {
       const provider = providers.find((item) => item.id === value.slice("cloud:".length));
-      setVoice(provider?.voice ?? "");
-      setSelectedVoiceProfileId("");
+      const savedCloudVoice = voiceProfiles.find((profile) => profile.engine !== "zipvoice"
+        && profile.provider_id === provider?.id
+        && profile.cloud_voice_id
+        && profile.cloud_status === "ready");
+      setVoice(savedCloudVoice?.cloud_voice_id ?? provider?.voice ?? "");
+      setSelectedVoiceProfileId(savedCloudVoice?.id ?? "");
+      setReferenceAudio("");
+      setReferenceText("");
     }
     setMessage(null);
   };
@@ -280,9 +320,16 @@ export default function DubbingPage() {
     setSelectedVoiceProfileId(profileId);
     const profile = voiceProfiles.find((item) => item.id === profileId);
     if (profile) {
-      setReferenceAudio(profile.reference_audio_path);
-      setReferenceText(profile.reference_text);
+      if (profile.engine === "zipvoice") {
+        setReferenceAudio(profile.reference_audio_path);
+        setReferenceText(profile.reference_text);
+      } else {
+        setVoice(profile.cloud_voice_id ?? "");
+        setReferenceAudio("");
+        setReferenceText("");
+      }
     } else {
+      if (selectedProvider) setVoice(selectedProvider.voice);
       setReferenceAudio("");
       setReferenceText("");
     }
@@ -657,10 +704,22 @@ export default function DubbingPage() {
                     </Select>
                   </label>
                 ) : selectedProvider ? (
-                  <label className="block space-y-1.5 text-sm font-medium text-text-secondary">
-                    <span>{t("dubbing.voice")}</span>
-                    <Input value={voice} onChange={(event) => setVoice(event.target.value)} placeholder={selectedProvider.voice} />
-                  </label>
+                  <div className="space-y-3">
+                    {cloudVoiceProfiles.length > 0 && (
+                      <label className="block space-y-1.5 text-xs font-semibold text-text-secondary">
+                        <span>{t("dubbing.myCloudVoice")}</span>
+                        <Select value={selectedVoiceProfile?.engine === "zipvoice" ? "" : selectedVoiceProfileId} onChange={(event) => selectVoiceProfile(event.target.value)}>
+                          <option value="">{t("dubbing.manualCloudVoice")}</option>
+                          {cloudVoiceProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.cloud_voice_id}</option>)}
+                        </Select>
+                      </label>
+                    )}
+                    <label className="block space-y-1.5 text-sm font-medium text-text-secondary">
+                      <span>{t("dubbing.voice")}</span>
+                      <Input value={voice} onChange={(event) => { setVoice(event.target.value); setSelectedVoiceProfileId(""); }} placeholder={selectedProvider.voice} />
+                    </label>
+                    {selectedVoiceProfile?.engine !== "zipvoice" && selectedVoiceProfile && <div className="flex items-start gap-2 rounded-xl border border-success/20 bg-success/10 px-3 py-2.5 text-xs leading-5 text-success"><CheckCircle2 size={15} className="mt-0.5 shrink-0" /><span><strong className="block">{t("dubbing.savedCloudVoiceActive", { name: selectedVoiceProfile.name })}</strong>{t("dubbing.savedCloudVoiceHint")}</span></div>}
+                  </div>
                 ) : null}
 
                 {selectedLocalModel?.clone_only && (
@@ -670,7 +729,7 @@ export default function DubbingPage() {
                       <span>{t("dubbing.myVoice")}</span>
                       <Select value={selectedVoiceProfileId} onChange={(event) => selectVoiceProfile(event.target.value)}>
                         <option value="">{t("dubbing.temporaryReference")}</option>
-                        {voiceProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.language === "zh" ? t("language.zh") : t("language.en")}</option>)}
+                        {localVoiceProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.language === "zh" ? t("language.zh") : t("language.en")}</option>)}
                       </Select>
                     </label>
                     {selectedVoiceProfile ? (

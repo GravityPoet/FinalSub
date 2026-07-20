@@ -2,6 +2,7 @@ use kothok_edge_tts::{EdgeTts, Engine, TtsEvent};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::{Client, Response, Url};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -91,6 +92,36 @@ pub struct CloudTtsSynthesisRequest {
     pub voice: Option<String>,
     pub speed: Option<f32>,
     pub output_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloudVoiceSummary {
+    pub provider_id: String,
+    pub voice_id: String,
+    pub name: String,
+    pub engine: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElevenlabsVoiceRecord {
+    voice_id: String,
+    name: String,
+    #[serde(default)]
+    category: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElevenlabsVoicesPage {
+    #[serde(default)]
+    voices: Vec<ElevenlabsVoiceRecord>,
+    #[serde(default)]
+    has_more: bool,
+    next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElevenlabsCreateVoiceResponse {
+    voice_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,19 +445,257 @@ pub fn delete_provider(app_config_dir: &Path, provider_id: &str) -> Result<()> {
     save_store(app_config_dir, &store)?;
     if profile.protocol != TtsProviderProtocol::EdgeTts {
         let endpoint = resolved_provider_endpoint(&profile)?;
-        secrets::delete_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+        let secret_id = provider_secret_id(&profile.id);
+        secrets::delete_provider_secret(&secret_id, &endpoint, "apiKey")
             .map_err(FinalSubError::Validation)?;
+        if profile.protocol == TtsProviderProtocol::Volcengine {
+            for field in ["cloneAppId", "cloneAccessToken"] {
+                secrets::delete_provider_secret(&secret_id, &endpoint, field)
+                    .map_err(FinalSubError::Validation)?;
+            }
+        }
     }
     Ok(())
 }
 
-fn find_provider(app_config_dir: &Path, provider_id: &str) -> Result<TtsProviderProfile> {
+pub(crate) fn find_provider(
+    app_config_dir: &Path,
+    provider_id: &str,
+) -> Result<TtsProviderProfile> {
     validate_id(provider_id)?;
     load_store(app_config_dir)?
         .profiles
         .into_iter()
         .find(|profile| profile.id == provider_id)
         .ok_or_else(|| FinalSubError::Validation("TTS 服务实例不存在".into()))
+}
+
+fn elevenlabs_voice_endpoint(
+    app_config_dir: &Path,
+    provider_id: &str,
+) -> Result<(TtsProviderProfile, String, String)> {
+    let profile = find_provider(app_config_dir, provider_id)?;
+    if profile.protocol != TtsProviderProtocol::Elevenlabs {
+        return Err(FinalSubError::Validation(
+            "该在线 TTS 实例不是 ElevenLabs，不能用于即时声音克隆".into(),
+        ));
+    }
+    let endpoint = resolved_provider_endpoint(&profile)?;
+    let parsed = Url::parse(&endpoint)
+        .map_err(|_| FinalSubError::Validation("ElevenLabs Endpoint 无效".into()))?;
+    if parsed.scheme() != "https"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !endpoint.ends_with("/v1")
+    {
+        return Err(FinalSubError::Validation(
+            "ElevenLabs 声音克隆要求使用 HTTPS 且 Endpoint 以 /v1 结尾".into(),
+        ));
+    }
+    let api_key =
+        secrets::get_provider_secret(&provider_secret_id(&profile.id), &endpoint, "apiKey")
+            .map_err(FinalSubError::Validation)?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                FinalSubError::Validation("该 ElevenLabs 实例尚未保存 API Key".into())
+            })?;
+    Ok((profile, endpoint, api_key))
+}
+
+fn cloud_voice_error(provider: &str, status: u16, detail: &str) -> FinalSubError {
+    let hint = match status {
+        401 | 403 => "请检查 API Key、Voices 权限与当前套餐",
+        413 => "参考音频过大，请缩短素材后重试",
+        422 => "参考音频未通过平台校验，请改用更清晰的单人录音",
+        429 => "请求额度或音色槽位受限，请稍后重试或检查套餐",
+        _ => "请检查服务状态与音色配置",
+    };
+    FinalSubError::Validation(format!(
+        "{provider} 返回 HTTP {status}{}。{hint}",
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!("：{detail}")
+        }
+    ))
+}
+
+async fn cloud_voice_response(
+    response: Response,
+    provider: &str,
+    success_limit: usize,
+) -> Result<Vec<u8>> {
+    let status = response.status();
+    let limit = if status.is_success() {
+        success_limit
+    } else {
+        MAX_ERROR_BYTES
+    };
+    let bytes = response_bytes_limited(response, limit, Arc::new(AtomicBool::new(false))).await?;
+    if !status.is_success() {
+        return Err(cloud_voice_error(
+            provider,
+            status.as_u16(),
+            &sanitize_provider_detail(&bytes),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn sanitize_remote_voice_name(raw: &str, fallback: &str) -> String {
+    let value = raw
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(80)
+        .collect::<String>();
+    let value = value.trim();
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub async fn create_elevenlabs_voice(
+    app_config_dir: &Path,
+    provider_id: &str,
+    name: &str,
+    reference_audio_path: &Path,
+    remove_background_noise: bool,
+) -> Result<String> {
+    let (profile, endpoint, api_key) = elevenlabs_voice_endpoint(app_config_dir, provider_id)?;
+    let metadata = std::fs::metadata(reference_audio_path)?;
+    if !reference_audio_path.is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_AUDIO_BYTES as u64
+    {
+        return Err(FinalSubError::Validation(
+            "ElevenLabs 参考音频为空或超过 64 MB".into(),
+        ));
+    }
+    let audio = std::fs::read(reference_audio_path)?;
+    let audio_part = reqwest::multipart::Part::bytes(audio)
+        .file_name("reference.wav")
+        .mime_str("audio/wav")
+        .map_err(|error| {
+            FinalSubError::Validation(format!("无法创建 ElevenLabs 音频表单：{error}"))
+        })?;
+    let form = reqwest::multipart::Form::new()
+        .text("name", name.to_string())
+        .text(
+            "remove_background_noise",
+            remove_background_noise.to_string(),
+        )
+        .part("files", audio_part);
+    let client = http_client(profile.timeout_seconds.max(120))?;
+    let response = client
+        .post(format!("{endpoint}/voices/add"))
+        .header("xi-api-key", api_key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| {
+            FinalSubError::Validation(format!("ElevenLabs 声音克隆请求失败：{error}"))
+        })?;
+    let bytes = cloud_voice_response(response, "ElevenLabs 声音克隆", 256 * 1024).await?;
+    let payload: ElevenlabsCreateVoiceResponse = serde_json::from_slice(&bytes)
+        .map_err(|_| FinalSubError::Validation("ElevenLabs 声音克隆响应缺少 voice_id".into()))?;
+    validate_voice(&payload.voice_id)
+}
+
+pub async fn list_cloud_voices(
+    app_config_dir: &Path,
+    provider_id: &str,
+) -> Result<Vec<CloudVoiceSummary>> {
+    let (profile, endpoint, api_key) = elevenlabs_voice_endpoint(app_config_dir, provider_id)?;
+    let base = endpoint
+        .strip_suffix("/v1")
+        .ok_or_else(|| FinalSubError::Validation("ElevenLabs Endpoint 必须以 /v1 结尾".into()))?;
+    let client = http_client(profile.timeout_seconds.min(60))?;
+    let mut next_page_token: Option<String> = None;
+    let mut voices = Vec::new();
+    let mut seen = HashSet::new();
+
+    for page_index in 0..10 {
+        let mut url = Url::parse(&format!("{base}/v2/voices"))
+            .map_err(|_| FinalSubError::Validation("无法构造 ElevenLabs 音色列表地址".into()))?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("category", "cloned");
+            query.append_pair("page_size", "100");
+            query.append_pair("include_total_count", "false");
+            if let Some(token) = next_page_token.as_deref() {
+                query.append_pair("next_page_token", token);
+            }
+        }
+        let response = client
+            .get(url)
+            .header("xi-api-key", &api_key)
+            .send()
+            .await
+            .map_err(|error| {
+                FinalSubError::Validation(format!("读取 ElevenLabs 云端音色失败：{error}"))
+            })?;
+        let bytes = cloud_voice_response(response, "ElevenLabs 音色列表", 2 * 1024 * 1024).await?;
+        let page: ElevenlabsVoicesPage = serde_json::from_slice(&bytes).map_err(|error| {
+            FinalSubError::Validation(format!("ElevenLabs 音色列表响应无效：{error}"))
+        })?;
+        for voice in page.voices {
+            let voice_id = match validate_voice(&voice.voice_id) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if (!voice.category.is_empty() && voice.category != "cloned")
+                || !seen.insert(voice_id.clone())
+            {
+                continue;
+            }
+            voices.push(CloudVoiceSummary {
+                provider_id: provider_id.to_string(),
+                name: sanitize_remote_voice_name(&voice.name, &voice_id),
+                voice_id,
+                engine: "elevenlabs".into(),
+            });
+        }
+        if !page.has_more {
+            return Ok(voices);
+        }
+        next_page_token = page
+            .next_page_token
+            .filter(|token| !token.trim().is_empty());
+        if next_page_token.is_none() {
+            return Err(FinalSubError::Validation(
+                "ElevenLabs 音色列表声明还有下一页，但没有返回分页令牌".into(),
+            ));
+        }
+        if page_index == 9 {
+            return Err(FinalSubError::Validation(
+                "ElevenLabs 云端音色超过 1000 个，请先在平台缩小数量后重试".into(),
+            ));
+        }
+    }
+    Ok(voices)
+}
+
+pub async fn delete_elevenlabs_voice(
+    app_config_dir: &Path,
+    provider_id: &str,
+    voice_id: &str,
+) -> Result<()> {
+    let (profile, endpoint, api_key) = elevenlabs_voice_endpoint(app_config_dir, provider_id)?;
+    let voice_id = validate_voice(voice_id)?;
+    let encoded = utf8_percent_encode(&voice_id, NON_ALPHANUMERIC);
+    let client = http_client(profile.timeout_seconds.min(60))?;
+    let response = client
+        .delete(format!("{endpoint}/voices/{encoded}"))
+        .header("xi-api-key", api_key)
+        .send()
+        .await
+        .map_err(|error| {
+            FinalSubError::Validation(format!("删除 ElevenLabs 云端音色失败：{error}"))
+        })?;
+    let _ = cloud_voice_response(response, "ElevenLabs 删除音色", 256 * 1024).await?;
+    Ok(())
 }
 
 fn validate_synthesis_request(request: &CloudTtsSynthesisRequest) -> Result<(String, f32)> {

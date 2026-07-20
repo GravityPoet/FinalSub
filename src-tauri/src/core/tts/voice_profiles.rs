@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::core::asr::vad::{detect_speech, SAMPLE_RATE as VAD_SAMPLE_RATE};
 use crate::core::audio;
+use crate::core::secrets;
 use crate::error::{FinalSubError, Result};
 
 const MAX_PROFILES: usize = 100;
@@ -17,10 +18,13 @@ const MAX_PACKAGE_BYTES: u64 = 96 * 1024 * 1024;
 const MAX_RECORDING_BYTES: usize = 16 * 1024 * 1024;
 const MAX_NAME_CHARS: usize = 60;
 const MAX_REFERENCE_TEXT_BYTES: usize = 4_000;
-const MIN_SELECTION_MS: u64 = 3_000;
-const IDEAL_SELECTION_MIN_MS: u64 = 5_000;
-const DEFAULT_SELECTION_MS: u64 = 8_000;
-const MAX_SELECTION_MS: u64 = 10_000;
+const ZIPVOICE_MIN_SELECTION_MS: u64 = 3_000;
+const ZIPVOICE_IDEAL_SELECTION_MIN_MS: u64 = 5_000;
+const ZIPVOICE_DEFAULT_SELECTION_MS: u64 = 8_000;
+const ZIPVOICE_MAX_SELECTION_MS: u64 = 10_000;
+const ELEVENLABS_MIN_SELECTION_MS: u64 = 5_000;
+const ELEVENLABS_IDEAL_SELECTION_MIN_MS: u64 = 30_000;
+const ELEVENLABS_MAX_SELECTION_MS: u64 = 180_000;
 const PROFILE_FILE: &str = "profile.json";
 const PREPARED_FILE: &str = "prepared.json";
 const REFERENCE_FILE: &str = "ref.wav";
@@ -37,6 +41,23 @@ const MEDIA_EXTENSIONS: &[&str] = &[
 pub enum VoiceProfileLanguage {
     Zh,
     En,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceCloneEngine {
+    #[default]
+    Zipvoice,
+    Elevenlabs,
+    Volcengine,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CloudVoiceStatus {
+    Training,
+    Ready,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,6 +120,14 @@ pub struct VoiceProfile {
     pub reference_text: String,
     pub source_name: Option<String>,
     pub quality: VoiceQualityReport,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub cloud_voice_id: Option<String>,
+    #[serde(default)]
+    pub cloud_status: Option<CloudVoiceStatus>,
+    #[serde(default)]
+    pub volc_training_times_left: Option<u32>,
     pub created_at: i64,
 }
 
@@ -110,6 +139,13 @@ pub struct VoiceSourceInfo {
     pub default_selection_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VoiceSubtitleCue {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PreparedVoiceSample {
     pub token: String,
@@ -119,6 +155,7 @@ pub struct PreparedVoiceSample {
     pub duration_ms: u64,
     pub quality: VoiceQualityReport,
     pub can_create: bool,
+    pub engine: VoiceCloneEngine,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +163,10 @@ pub struct PrepareVoiceSampleRequest {
     pub source_path: String,
     pub start_ms: u64,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub engine: VoiceCloneEngine,
+    #[serde(default)]
+    pub local_denoise: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -137,6 +178,40 @@ pub struct CreateVoiceProfileRequest {
     pub consent: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateCloudVoiceProfileRequest {
+    pub token: String,
+    pub name: String,
+    pub language: VoiceProfileLanguage,
+    pub provider_id: String,
+    pub consent: bool,
+    pub upload_consent: bool,
+    #[serde(default)]
+    pub voice_id: String,
+    #[serde(default)]
+    pub remove_background_noise: bool,
+    #[serde(default)]
+    pub enable_mss: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RetrainCloudVoiceProfileRequest {
+    pub id: String,
+    #[serde(default)]
+    pub remove_background_noise: bool,
+    #[serde(default)]
+    pub enable_mss: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LinkCloudVoiceProfileRequest {
+    pub name: String,
+    pub language: VoiceProfileLanguage,
+    pub provider_id: String,
+    pub voice_id: String,
+    pub consent: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PreparedVoiceRecord {
     token: String,
@@ -145,6 +220,8 @@ struct PreparedVoiceRecord {
     duration_ms: u64,
     quality: VoiceQualityReport,
     created_at: i64,
+    #[serde(default)]
+    engine: VoiceCloneEngine,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,9 +243,11 @@ struct SvoiceQualityReport<'a> {
 #[serde(rename_all = "camelCase")]
 struct SvoiceExportVoice<'a> {
     name: &'a str,
-    engine: &'static str,
+    engine: &'a str,
     language: VoiceProfileLanguage,
     ref_text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker_id: Option<&'a str>,
     quality: SvoiceQualityReport<'a>,
     created_at: i64,
 }
@@ -179,7 +258,8 @@ struct SvoiceExportPackage<'a> {
     format: &'static str,
     version: u32,
     voice: SvoiceExportVoice<'a>,
-    ref_wav_base64: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ref_wav_base64: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,6 +269,25 @@ struct SvoiceImportVoice {
     engine: String,
     language: VoiceProfileLanguage,
     ref_text: Option<String>,
+    #[serde(default)]
+    speaker_id: Option<String>,
+    #[serde(default)]
+    quality: Option<SvoiceImportQualityReport>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SvoiceImportQualityReport {
+    duration_ms: u64,
+    speech_ms: u64,
+    speech_ratio: f64,
+    longest_silence_ms: u64,
+    rms_db: f64,
+    peak_db: f64,
+    clipping_ratio: f64,
+    snr_db: f64,
+    verdict: VoiceQualityVerdict,
+    issues: Vec<VoiceQualityIssue>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,6 +317,48 @@ fn trash_root(app_config_dir: &Path) -> PathBuf {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VoiceSelectionLimits {
+    min_ms: u64,
+    ideal_min_ms: u64,
+    max_ms: u64,
+}
+
+fn selection_limits(engine: VoiceCloneEngine) -> VoiceSelectionLimits {
+    match engine {
+        VoiceCloneEngine::Zipvoice => VoiceSelectionLimits {
+            min_ms: ZIPVOICE_MIN_SELECTION_MS,
+            ideal_min_ms: ZIPVOICE_IDEAL_SELECTION_MIN_MS,
+            max_ms: ZIPVOICE_MAX_SELECTION_MS,
+        },
+        VoiceCloneEngine::Elevenlabs => VoiceSelectionLimits {
+            min_ms: ELEVENLABS_MIN_SELECTION_MS,
+            ideal_min_ms: ELEVENLABS_IDEAL_SELECTION_MIN_MS,
+            max_ms: ELEVENLABS_MAX_SELECTION_MS,
+        },
+        VoiceCloneEngine::Volcengine => VoiceSelectionLimits {
+            min_ms: 5_000,
+            ideal_min_ms: 14_000,
+            max_ms: 30_000,
+        },
+    }
+}
+
+fn cloud_quality_placeholder() -> VoiceQualityReport {
+    VoiceQualityReport {
+        duration_ms: 0,
+        speech_ms: 0,
+        speech_ratio: 0.0,
+        longest_silence_ms: 0,
+        rms_db: 0.0,
+        peak_db: 0.0,
+        clipping_ratio: 0.0,
+        snr_db: 0.0,
+        verdict: VoiceQualityVerdict::Fair,
+        issues: Vec::new(),
+    }
 }
 
 fn validate_uuid(raw: &str, label: &str) -> Result<Uuid> {
@@ -359,11 +500,49 @@ pub fn load_profiles(app_config_dir: &Path) -> Result<HashMap<String, VoiceProfi
                 Ok(value) => value,
                 Err(_) => continue,
             };
-        let reference = entry.path().join(REFERENCE_FILE);
-        if profile.id != id || profile.engine != "zipvoice" || !reference.is_file() {
+        if profile.id != id {
             continue;
         }
-        profile.reference_audio_path = path_string(&reference);
+        match profile.engine.as_str() {
+            "zipvoice" => {
+                let reference = entry.path().join(REFERENCE_FILE);
+                if !reference.is_file() {
+                    continue;
+                }
+                profile.reference_audio_path = path_string(&reference);
+                profile.provider_id = None;
+                profile.cloud_voice_id = None;
+                profile.cloud_status = None;
+            }
+            "elevenlabs" | "volcengine" => {
+                if profile
+                    .provider_id
+                    .as_deref()
+                    .is_none_or(|value| Uuid::parse_str(value).is_err())
+                    || profile.cloud_voice_id.as_deref().is_none_or(|value| {
+                        value.trim().is_empty()
+                            || value.len() > 200
+                            || value.chars().any(char::is_control)
+                            || (profile.engine == "volcengine" && !value.starts_with("S_"))
+                    })
+                {
+                    continue;
+                }
+                let reference = entry.path().join(REFERENCE_FILE);
+                profile.reference_audio_path = if reference.is_file()
+                    && std::fs::metadata(&reference)
+                        .map(|metadata| metadata.len() <= MAX_REFERENCE_BYTES)
+                        .unwrap_or(false)
+                {
+                    path_string(&reference)
+                } else {
+                    String::new()
+                };
+                profile.reference_text.clear();
+                profile.cloud_status.get_or_insert(CloudVoiceStatus::Ready);
+            }
+            _ => continue,
+        }
         profiles.insert(id, profile);
         if profiles.len() >= MAX_PROFILES {
             break;
@@ -401,8 +580,52 @@ pub async fn inspect_voice_source(
         path: path_string(&source),
         file_name,
         duration_ms,
-        default_selection_ms: duration_ms.min(DEFAULT_SELECTION_MS),
+        default_selection_ms: duration_ms.min(ZIPVOICE_DEFAULT_SELECTION_MS),
     })
+}
+
+pub fn list_voice_subtitle_cues(source_path: &str) -> Result<Vec<VoiceSubtitleCue>> {
+    let path = PathBuf::from(source_path.trim());
+    if !path.is_absolute() || !path.is_file() {
+        return Err(FinalSubError::Validation(
+            "字幕文件必须是存在的绝对路径".into(),
+        ));
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "srt" | "vtt" | "ass" | "ssa" | "lrc") {
+        return Err(FinalSubError::Validation(
+            "只支持 SRT、VTT、ASS、SSA 或 LRC 字幕文件".into(),
+        ));
+    }
+    let metadata = std::fs::metadata(&path)?;
+    if metadata.len() > 20 * 1024 * 1024 {
+        return Err(FinalSubError::Validation("字幕文件不能超过 20 MB".into()));
+    }
+    let canonical = std::fs::canonicalize(path)?;
+    let content = std::fs::read_to_string(&canonical)
+        .map_err(|error| FinalSubError::Validation(format!("读取字幕文件失败：{error}")))?;
+    let track = crate::core::subtitle::SubtitleTrack::from_format(&content, &extension)?;
+    let cues = track
+        .cues
+        .into_iter()
+        .filter(|cue| cue.end_ms > cue.start_ms && !cue.text.trim().is_empty())
+        .take(2_000)
+        .map(|cue| VoiceSubtitleCue {
+            start_ms: cue.start_ms,
+            end_ms: cue.end_ms,
+            text: cue.text.trim().replace('\n', " "),
+        })
+        .collect::<Vec<_>>();
+    if cues.is_empty() {
+        return Err(FinalSubError::Validation(
+            "字幕文件中没有可用的带时间轴文本".into(),
+        ));
+    }
+    Ok(cues)
 }
 
 async fn run_ffmpeg(ffmpeg_path: &Path, args: &[String], label: &str) -> Result<()> {
@@ -439,7 +662,11 @@ fn db_from_energy(energy: f64, count: usize) -> f64 {
     }
 }
 
-fn analyze_reference(path: &Path, vad_model_path: &Path) -> Result<VoiceQualityReport> {
+fn analyze_reference(
+    path: &Path,
+    vad_model_path: &Path,
+    limits: VoiceSelectionLimits,
+) -> Result<VoiceQualityReport> {
     let wave = Wave::read(&path_string(path))
         .ok_or_else(|| FinalSubError::Validation("无法读取准备好的参考音频".into()))?;
     if wave.sample_rate() != VAD_SAMPLE_RATE || wave.samples().is_empty() {
@@ -533,13 +760,13 @@ fn analyze_reference(path: &Path, vad_model_path: &Path) -> Result<VoiceQualityR
             VoiceQualityIssueSeverity::Error,
             None,
         );
-    } else if speech_ms < MIN_SELECTION_MS {
+    } else if speech_ms < limits.min_ms {
         issue(
             VoiceQualityIssueCode::TooShort,
             VoiceQualityIssueSeverity::Error,
             Some(speech_ms as f64),
         );
-    } else if speech_ms < IDEAL_SELECTION_MIN_MS {
+    } else if speech_ms < limits.ideal_min_ms {
         issue(
             VoiceQualityIssueCode::ShortForEngine,
             VoiceQualityIssueSeverity::Warning,
@@ -614,11 +841,12 @@ pub async fn prepare_voice_sample(
     vad_model_path: &Path,
     request: PrepareVoiceSampleRequest,
 ) -> Result<PreparedVoiceSample> {
-    if !(MIN_SELECTION_MS..=MAX_SELECTION_MS).contains(&request.duration_ms) {
+    let limits = selection_limits(request.engine);
+    if !(limits.min_ms..=limits.max_ms).contains(&request.duration_ms) {
         return Err(FinalSubError::Validation(format!(
             "声音克隆片段必须在 {}-{} 秒之间",
-            MIN_SELECTION_MS / 1_000,
-            MAX_SELECTION_MS / 1_000
+            limits.min_ms / 1_000,
+            limits.max_ms / 1_000
         )));
     }
     let source = validate_source_path(&request.source_path)?;
@@ -647,6 +875,12 @@ pub async fn prepare_voice_sample(
     let result = async {
         let mut analysis_args = common.clone();
         analysis_args.extend([
+            "-af".into(),
+            if request.local_denoise {
+                "afftdn=nr=12:nf=-40".into()
+            } else {
+                "anull".into()
+            },
             "-ar".into(),
             VAD_SAMPLE_RATE.to_string(),
             "-c:a".into(),
@@ -657,17 +891,20 @@ pub async fn prepare_voice_sample(
         run_ffmpeg(ffmpeg_path, &analysis_args, "无法分析音色素材").await?;
         let quality_path = analysis_path.clone();
         let vad_path = vad_model_path.to_path_buf();
-        let quality =
-            tokio::task::spawn_blocking(move || analyze_reference(&quality_path, &vad_path))
-                .await
-                .map_err(|error| {
-                    FinalSubError::Validation(format!("音色质检线程失败：{error}"))
-                })??;
+        let quality = tokio::task::spawn_blocking(move || {
+            analyze_reference(&quality_path, &vad_path, limits)
+        })
+        .await
+        .map_err(|error| FinalSubError::Validation(format!("音色质检线程失败：{error}")))??;
 
         let mut reference_args = common;
         reference_args.extend([
             "-af".into(),
-            "loudnorm=I=-20:LRA=7:TP=-3".into(),
+            if request.local_denoise {
+                "afftdn=nr=12:nf=-40,loudnorm=I=-20:LRA=7:TP=-3".into()
+            } else {
+                "loudnorm=I=-20:LRA=7:TP=-3".into()
+            },
             "-ar".into(),
             "24000".into(),
             "-c:a".into(),
@@ -700,6 +937,7 @@ pub async fn prepare_voice_sample(
             duration_ms: actual_duration_ms,
             quality: quality.clone(),
             created_at: chrono::Utc::now().timestamp_millis(),
+            engine: request.engine,
         };
         save_json_atomic(&directory.join(PREPARED_FILE), &record)?;
         let _ = std::fs::remove_file(&analysis_path);
@@ -715,6 +953,7 @@ pub async fn prepare_voice_sample(
             duration_ms: actual_duration_ms,
             quality,
             can_create,
+            engine: request.engine,
         })
     }
     .await;
@@ -750,6 +989,11 @@ pub fn create_voice_profile(
     let name = validate_name(&request.name)?;
     let reference_text = validate_reference_text(&request.reference_text)?;
     let prepared = load_prepared(app_config_dir, &request.token)?;
+    if prepared.engine != VoiceCloneEngine::Zipvoice {
+        return Err(FinalSubError::Validation(
+            "该参考音频不是为本地 ZipVoice 准备的，请重新分析".into(),
+        ));
+    }
     if prepared
         .quality
         .issues
@@ -777,6 +1021,10 @@ pub fn create_voice_profile(
         reference_text,
         source_name: Some(prepared.source_name),
         quality: prepared.quality,
+        provider_id: None,
+        cloud_voice_id: None,
+        cloud_status: None,
+        volc_training_times_left: None,
         created_at: chrono::Utc::now().timestamp_millis(),
     };
     save_profile_in_dir(&source_directory, &profile)?;
@@ -788,6 +1036,437 @@ pub fn create_voice_profile(
     }
     profiles.insert(id, profile.clone());
     Ok(profile)
+}
+
+fn validate_cloud_voice_id(engine: &str, raw: &str) -> Result<String> {
+    let voice_id = raw.trim();
+    if voice_id.is_empty()
+        || voice_id.len() > 200
+        || voice_id.chars().any(char::is_control)
+        || (engine == "volcengine" && !voice_id.starts_with("S_"))
+    {
+        return Err(FinalSubError::Validation(if engine == "volcengine" {
+            "豆包声音复刻音色 ID 必须以 S_ 开头".into()
+        } else {
+            "云端音色 ID 无效".into()
+        }));
+    }
+    Ok(voice_id.to_string())
+}
+
+fn ensure_cloud_voice_not_linked(
+    profiles: &HashMap<String, VoiceProfile>,
+    provider_id: &str,
+    voice_id: &str,
+) -> Result<()> {
+    if profiles.values().any(|profile| {
+        profile.provider_id.as_deref() == Some(provider_id)
+            && profile.cloud_voice_id.as_deref() == Some(voice_id)
+    }) {
+        return Err(FinalSubError::Validation(
+            "这个云端音色已经在“我的音色”中，无需重复找回".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn cloud_engine_for_provider(
+    provider: &super::providers::TtsProviderProfile,
+) -> Result<VoiceCloneEngine> {
+    match provider.protocol {
+        super::providers::TtsProviderProtocol::Elevenlabs => Ok(VoiceCloneEngine::Elevenlabs),
+        super::providers::TtsProviderProtocol::Volcengine => Ok(VoiceCloneEngine::Volcengine),
+        _ => Err(FinalSubError::Validation(
+            "只有 ElevenLabs 或豆包 TTS 实例可以创建云端克隆音色".into(),
+        )),
+    }
+}
+
+fn volc_clone_credentials(
+    app_config_dir: &Path,
+    provider_id: &str,
+) -> Result<(String, String, u32)> {
+    let provider = super::providers::find_provider(app_config_dir, provider_id)?;
+    if provider.protocol != super::providers::TtsProviderProtocol::Volcengine {
+        return Err(FinalSubError::Validation(
+            "训练凭据只适用于豆包 TTS 实例".into(),
+        ));
+    }
+    let endpoint = super::providers::resolved_provider_endpoint(&provider)?;
+    let secret_id = super::providers::provider_secret_id(&provider.id);
+    let read_secret = |field: &str| {
+        secrets::get_provider_secret(&secret_id, &endpoint, field)
+            .map_err(FinalSubError::Validation)?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                FinalSubError::Validation(
+                    "豆包声音复刻需要 APP ID 与 Access Token，请先在在线 TTS 实例中保存训练凭据"
+                        .into(),
+                )
+            })
+    };
+    Ok((
+        read_secret("cloneAppId")?,
+        read_secret("cloneAccessToken")?,
+        provider.timeout_seconds,
+    ))
+}
+
+fn cloud_status_from_clone_state(state: super::volcengine_clone::CloneState) -> CloudVoiceStatus {
+    match state {
+        super::volcengine_clone::CloneState::Training => CloudVoiceStatus::Training,
+        super::volcengine_clone::CloneState::Ready => CloudVoiceStatus::Ready,
+        super::volcengine_clone::CloneState::Failed => CloudVoiceStatus::Failed,
+    }
+}
+
+fn persist_cloud_profile(
+    app_config_dir: &Path,
+    profiles: &mut HashMap<String, VoiceProfile>,
+    mut profile: VoiceProfile,
+    reference_source: Option<&Path>,
+) -> Result<VoiceProfile> {
+    if profiles.len() >= MAX_PROFILES {
+        return Err(FinalSubError::Validation(format!(
+            "我的音色最多保存 {MAX_PROFILES} 个"
+        )));
+    }
+    let target = profile_dir(app_config_dir, &profile.id)?;
+    if target.exists() {
+        return Err(FinalSubError::Validation("音色目录冲突，请重试".into()));
+    }
+    let staging = staging_root(app_config_dir).join(format!("cloud-{}", profile.id));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+    std::fs::create_dir_all(&staging)?;
+    let result = (|| -> Result<()> {
+        if let Some(source) = reference_source {
+            let metadata = std::fs::metadata(source)?;
+            if !source.is_file() || metadata.len() == 0 || metadata.len() > MAX_REFERENCE_BYTES {
+                return Err(FinalSubError::Validation(
+                    "云端音色参考音频为空或超过 64 MB".into(),
+                ));
+            }
+            std::fs::copy(source, staging.join(REFERENCE_FILE))?;
+            profile.reference_audio_path = path_string(&target.join(REFERENCE_FILE));
+        } else {
+            profile.reference_audio_path.clear();
+        }
+        save_profile_in_dir(&staging, &profile)?;
+        std::fs::rename(&staging, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    result?;
+    profiles.insert(profile.id.clone(), profile.clone());
+    Ok(profile)
+}
+
+pub async fn create_cloud_voice_profile(
+    app_config_dir: &Path,
+    profiles: &mut HashMap<String, VoiceProfile>,
+    request: CreateCloudVoiceProfileRequest,
+) -> Result<VoiceProfile> {
+    if !request.consent {
+        return Err(FinalSubError::Validation(
+            "请确认你拥有该声音的使用与克隆授权".into(),
+        ));
+    }
+    if !request.upload_consent {
+        return Err(FinalSubError::Validation(
+            "请明确授权把参考音频上传到当前云端服务".into(),
+        ));
+    }
+    if profiles.len() >= MAX_PROFILES {
+        return Err(FinalSubError::Validation(format!(
+            "我的音色最多保存 {MAX_PROFILES} 个"
+        )));
+    }
+    let name = validate_name(&request.name)?;
+    validate_uuid(&request.provider_id, "TTS 服务实例 ID")?;
+    let provider = super::providers::find_provider(app_config_dir, &request.provider_id)?;
+    let engine = cloud_engine_for_provider(&provider)?;
+    let prepared = load_prepared(app_config_dir, &request.token)?;
+    if prepared.engine != engine {
+        return Err(FinalSubError::Validation(
+            "该参考音频不是为当前云端引擎准备的，请重新分析".into(),
+        ));
+    }
+    if prepared
+        .quality
+        .issues
+        .iter()
+        .any(|item| item.severity == VoiceQualityIssueSeverity::Error)
+    {
+        return Err(FinalSubError::Validation(
+            "参考片段没有足够的有效语音，请重新选择片段".into(),
+        ));
+    }
+    let source_directory = prepared_dir(app_config_dir, &request.token)?;
+    let reference_path = source_directory.join(REFERENCE_FILE);
+    let (cloud_voice_id, cloud_status, cloud_training_times_left) = match engine {
+        VoiceCloneEngine::Elevenlabs => {
+            let cloud_voice_id = super::providers::create_elevenlabs_voice(
+                app_config_dir,
+                &request.provider_id,
+                &name,
+                &reference_path,
+                request.remove_background_noise,
+            )
+            .await?;
+            if let Err(error) =
+                ensure_cloud_voice_not_linked(profiles, &request.provider_id, &cloud_voice_id)
+            {
+                let _ = super::providers::delete_elevenlabs_voice(
+                    app_config_dir,
+                    &request.provider_id,
+                    &cloud_voice_id,
+                )
+                .await;
+                return Err(error);
+            }
+            (cloud_voice_id, CloudVoiceStatus::Ready, None)
+        }
+        VoiceCloneEngine::Volcengine => {
+            let cloud_voice_id = validate_cloud_voice_id("volcengine", &request.voice_id)?;
+            ensure_cloud_voice_not_linked(profiles, &request.provider_id, &cloud_voice_id)?;
+            let (app_id, access_token, timeout_seconds) =
+                volc_clone_credentials(app_config_dir, &request.provider_id)?;
+            super::volcengine_clone::train(
+                &app_id,
+                &access_token,
+                super::volcengine_clone::CloneTrainRequest {
+                    speaker_id: &cloud_voice_id,
+                    audio_path: &reference_path,
+                    language: match request.language {
+                        VoiceProfileLanguage::Zh => "zh",
+                        VoiceProfileLanguage::En => "en",
+                    },
+                    remove_background_noise: request.remove_background_noise,
+                    enable_mss: request.enable_mss,
+                    timeout_seconds,
+                },
+            )
+            .await?;
+            let status = super::volcengine_clone::query_status(
+                &app_id,
+                &access_token,
+                &cloud_voice_id,
+                timeout_seconds,
+            )
+            .await
+            .map(|value| {
+                (
+                    cloud_status_from_clone_state(value.state),
+                    value.training_times_left,
+                )
+            })
+            .unwrap_or((CloudVoiceStatus::Training, None));
+            (cloud_voice_id, status.0, status.1)
+        }
+        VoiceCloneEngine::Zipvoice => {
+            return Err(FinalSubError::Validation(
+                "本地 ZipVoice 不能通过云端克隆接口创建音色".into(),
+            ));
+        }
+    };
+    let profile = VoiceProfile {
+        id: Uuid::new_v4().to_string(),
+        name,
+        engine: match engine {
+            VoiceCloneEngine::Elevenlabs => "elevenlabs",
+            VoiceCloneEngine::Volcengine => "volcengine",
+            VoiceCloneEngine::Zipvoice => "zipvoice",
+        }
+        .into(),
+        language: request.language,
+        reference_audio_path: String::new(),
+        reference_text: String::new(),
+        source_name: Some(prepared.source_name),
+        quality: prepared.quality,
+        provider_id: Some(request.provider_id),
+        cloud_voice_id: Some(cloud_voice_id.clone()),
+        cloud_status: Some(cloud_status),
+        volc_training_times_left: cloud_training_times_left,
+        created_at: chrono::Utc::now().timestamp_millis(),
+    };
+    let saved = persist_cloud_profile(
+        app_config_dir,
+        profiles,
+        profile,
+        Some(&reference_path),
+    )
+    .map_err(|error| {
+        FinalSubError::Validation(format!(
+            "云端音色 {cloud_voice_id} 已创建，但本机索引保存失败：{error}。请使用“找回云端音色”重新关联"
+        ))
+    })?;
+    let _ = std::fs::remove_dir_all(source_directory);
+    Ok(saved)
+}
+
+pub fn link_cloud_voice_profile(
+    app_config_dir: &Path,
+    profiles: &mut HashMap<String, VoiceProfile>,
+    request: LinkCloudVoiceProfileRequest,
+) -> Result<VoiceProfile> {
+    if !request.consent {
+        return Err(FinalSubError::Validation(
+            "请确认你拥有该声音的使用授权".into(),
+        ));
+    }
+    let name = validate_name(&request.name)?;
+    let provider = super::providers::find_provider(app_config_dir, &request.provider_id)?;
+    let engine = match provider.protocol {
+        super::providers::TtsProviderProtocol::Elevenlabs => "elevenlabs",
+        super::providers::TtsProviderProtocol::Volcengine => "volcengine",
+        _ => {
+            return Err(FinalSubError::Validation(
+                "只有 ElevenLabs 或豆包 TTS 实例可以关联克隆音色".into(),
+            ))
+        }
+    };
+    let cloud_voice_id = validate_cloud_voice_id(engine, &request.voice_id)?;
+    ensure_cloud_voice_not_linked(profiles, &request.provider_id, &cloud_voice_id)?;
+    persist_cloud_profile(
+        app_config_dir,
+        profiles,
+        VoiceProfile {
+            id: Uuid::new_v4().to_string(),
+            name,
+            engine: engine.into(),
+            language: request.language,
+            reference_audio_path: String::new(),
+            reference_text: String::new(),
+            source_name: None,
+            quality: cloud_quality_placeholder(),
+            provider_id: Some(request.provider_id),
+            cloud_voice_id: Some(cloud_voice_id),
+            cloud_status: Some(CloudVoiceStatus::Ready),
+            volc_training_times_left: None,
+            created_at: chrono::Utc::now().timestamp_millis(),
+        },
+        None,
+    )
+}
+
+pub async fn refresh_cloud_voice_status(
+    app_config_dir: &Path,
+    profiles: &mut HashMap<String, VoiceProfile>,
+    id: &str,
+) -> Result<VoiceProfile> {
+    let profile_id = validate_uuid(id, "音色 ID")?.to_string();
+    let mut profile = profiles
+        .get(&profile_id)
+        .cloned()
+        .ok_or_else(|| FinalSubError::Validation("音色不存在".into()))?;
+    if profile.engine != "volcengine" {
+        return Ok(profile);
+    }
+    let provider_id = profile
+        .provider_id
+        .as_deref()
+        .ok_or_else(|| FinalSubError::Validation("豆包音色缺少服务实例关联".into()))?;
+    let voice_id = profile
+        .cloud_voice_id
+        .as_deref()
+        .ok_or_else(|| FinalSubError::Validation("豆包音色缺少云端 ID".into()))?;
+    let (app_id, access_token, timeout_seconds) =
+        volc_clone_credentials(app_config_dir, provider_id)?;
+    let status =
+        super::volcengine_clone::query_status(&app_id, &access_token, voice_id, timeout_seconds)
+            .await?;
+    profile.cloud_status = Some(cloud_status_from_clone_state(status.state));
+    profile.volc_training_times_left = status.training_times_left;
+    let directory = profile_dir(app_config_dir, &profile.id)?;
+    save_profile_in_dir(&directory, &profile)?;
+    profiles.insert(profile.id.clone(), profile.clone());
+    Ok(profile)
+}
+
+pub async fn retrain_cloud_voice_profile(
+    app_config_dir: &Path,
+    profiles: &mut HashMap<String, VoiceProfile>,
+    request: RetrainCloudVoiceProfileRequest,
+) -> Result<VoiceProfile> {
+    let profile_id = validate_uuid(&request.id, "音色 ID")?.to_string();
+    let mut profile = profiles
+        .get(&profile_id)
+        .cloned()
+        .ok_or_else(|| FinalSubError::Validation("音色不存在".into()))?;
+    if profile.engine != "volcengine" {
+        return Err(FinalSubError::Validation(
+            "只有豆包云端音色支持在本机复用参考音频重训".into(),
+        ));
+    }
+    let provider_id = profile
+        .provider_id
+        .as_deref()
+        .ok_or_else(|| FinalSubError::Validation("豆包音色缺少服务实例关联".into()))?;
+    let voice_id = profile
+        .cloud_voice_id
+        .as_deref()
+        .ok_or_else(|| FinalSubError::Validation("豆包音色缺少云端 ID".into()))?;
+    let reference_path = PathBuf::from(profile.reference_audio_path.trim());
+    if !reference_path.is_absolute() || !reference_path.is_file() {
+        return Err(FinalSubError::Validation(
+            "该豆包音色没有保留参考音频，无法一键重训；请重新创建或找回后再试".into(),
+        ));
+    }
+    let (app_id, access_token, timeout_seconds) =
+        volc_clone_credentials(app_config_dir, provider_id)?;
+    super::volcengine_clone::train(
+        &app_id,
+        &access_token,
+        super::volcengine_clone::CloneTrainRequest {
+            speaker_id: voice_id,
+            audio_path: &reference_path,
+            language: match profile.language {
+                VoiceProfileLanguage::Zh => "zh",
+                VoiceProfileLanguage::En => "en",
+            },
+            remove_background_noise: request.remove_background_noise,
+            enable_mss: request.enable_mss,
+            timeout_seconds,
+        },
+    )
+    .await?;
+    let status =
+        super::volcengine_clone::query_status(&app_id, &access_token, voice_id, timeout_seconds)
+            .await
+            .unwrap_or(super::volcengine_clone::CloneStatus {
+                state: super::volcengine_clone::CloneState::Training,
+                raw_status: None,
+                training_times_left: None,
+            });
+    profile.cloud_status = Some(cloud_status_from_clone_state(status.state));
+    profile.volc_training_times_left = status.training_times_left;
+    save_profile_in_dir(&profile_dir(app_config_dir, &profile.id)?, &profile)?;
+    profiles.insert(profile.id.clone(), profile.clone());
+    Ok(profile)
+}
+
+pub async fn delete_cloud_voice_remote(
+    app_config_dir: &Path,
+    profile: &VoiceProfile,
+) -> Result<()> {
+    if profile.engine != "elevenlabs" {
+        return Err(FinalSubError::Validation(
+            "当前只支持从 ElevenLabs 永久删除云端音色；豆包音色请在火山控制台管理".into(),
+        ));
+    }
+    let provider_id = profile
+        .provider_id
+        .as_deref()
+        .ok_or_else(|| FinalSubError::Validation("音色缺少服务实例关联".into()))?;
+    let cloud_voice_id = profile
+        .cloud_voice_id
+        .as_deref()
+        .ok_or_else(|| FinalSubError::Validation("音色缺少云端 ID".into()))?;
+    super::providers::delete_elevenlabs_voice(app_config_dir, provider_id, cloud_voice_id).await
 }
 
 pub fn rename_voice_profile(
@@ -883,6 +1562,12 @@ pub fn discard_voice_recording(app_config_dir: &Path, raw_path: &str) -> Result<
 }
 
 pub fn export_voice_profile(profile: &VoiceProfile, output_path: &str) -> Result<String> {
+    if !matches!(
+        profile.engine.as_str(),
+        "zipvoice" | "elevenlabs" | "volcengine"
+    ) {
+        return Err(FinalSubError::Validation("未知音色引擎，无法导出".into()));
+    }
     let output = PathBuf::from(output_path.trim());
     if !output.is_absolute()
         || !output
@@ -895,21 +1580,31 @@ pub fn export_voice_profile(profile: &VoiceProfile, output_path: &str) -> Result
         ));
     }
     let reference_path = PathBuf::from(&profile.reference_audio_path);
-    if !reference_path.is_file() || std::fs::metadata(&reference_path)?.len() > MAX_REFERENCE_BYTES
-    {
-        return Err(FinalSubError::Validation(
-            "音色参考音频缺失或超过 64 MB".into(),
-        ));
-    }
+    let ref_wav_base64 = if profile.reference_audio_path.trim().is_empty() {
+        if profile.engine == "zipvoice" {
+            return Err(FinalSubError::Validation("本地音色参考音频缺失".into()));
+        }
+        None
+    } else {
+        if !reference_path.is_file()
+            || std::fs::metadata(&reference_path)?.len() > MAX_REFERENCE_BYTES
+        {
+            return Err(FinalSubError::Validation(
+                "音色参考音频缺失或超过 64 MB".into(),
+            ));
+        }
+        Some(BASE64.encode(std::fs::read(reference_path)?))
+    };
     let quality = &profile.quality;
     let package = SvoiceExportPackage {
         format: SVOICE_FORMAT,
         version: SVOICE_VERSION,
         voice: SvoiceExportVoice {
             name: &profile.name,
-            engine: "zipvoice",
+            engine: &profile.engine,
             language: profile.language,
             ref_text: &profile.reference_text,
+            speaker_id: profile.cloud_voice_id.as_deref(),
             quality: SvoiceQualityReport {
                 duration_ms: quality.duration_ms,
                 speech_ms: quality.speech_ms,
@@ -924,15 +1619,90 @@ pub fn export_voice_profile(profile: &VoiceProfile, output_path: &str) -> Result
             },
             created_at: profile.created_at,
         },
-        ref_wav_base64: BASE64.encode(std::fs::read(reference_path)?),
+        ref_wav_base64,
     };
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let temporary = output.with_extension("svoice.tmp");
-    std::fs::write(&temporary, serde_json::to_vec(&package)?)?;
+    let bytes = serde_json::to_vec(&package)?;
+    if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+        return Err(FinalSubError::Validation("音色包超过 96 MB 限制".into()));
+    }
+    std::fs::write(&temporary, bytes)?;
     std::fs::rename(&temporary, &output)?;
     Ok(path_string(&output))
+}
+
+fn imported_quality_or_placeholder(
+    quality: Option<SvoiceImportQualityReport>,
+) -> VoiceQualityReport {
+    quality
+        .map(|value| VoiceQualityReport {
+            duration_ms: value.duration_ms,
+            speech_ms: value.speech_ms,
+            speech_ratio: value.speech_ratio,
+            longest_silence_ms: value.longest_silence_ms,
+            rms_db: value.rms_db,
+            peak_db: value.peak_db,
+            clipping_ratio: value.clipping_ratio,
+            snr_db: value.snr_db,
+            verdict: value.verdict,
+            issues: value.issues,
+        })
+        .unwrap_or_else(cloud_quality_placeholder)
+}
+
+fn provider_for_imported_cloud_voice(app_config_dir: &Path, engine: &str) -> Result<String> {
+    let protocol = match engine {
+        "elevenlabs" => super::providers::TtsProviderProtocol::Elevenlabs,
+        "volcengine" => super::providers::TtsProviderProtocol::Volcengine,
+        _ => {
+            return Err(FinalSubError::Validation(
+                "音色包中的云端引擎不受支持".into(),
+            ))
+        }
+    };
+    super::providers::list_providers(app_config_dir)?
+        .into_iter()
+        .find(|provider| provider.protocol == protocol)
+        .map(|provider| provider.id)
+        .ok_or_else(|| {
+            FinalSubError::Validation(format!(
+                "本机尚未配置 {engine} 在线 TTS 实例，请先配置后再导入音色包"
+            ))
+        })
+}
+
+fn decode_imported_reference(
+    app_config_dir: &Path,
+    encoded: Option<String>,
+) -> Result<Option<PathBuf>> {
+    let Some(encoded) = encoded else {
+        return Ok(None);
+    };
+    if encoded.len().saturating_mul(3) / 4 > MAX_REFERENCE_BYTES as usize {
+        return Err(FinalSubError::Validation("音色包参考音频超过 64 MB".into()));
+    }
+    let bytes = BASE64
+        .decode(encoded)
+        .map_err(|_| FinalSubError::Validation("音色包参考音频 Base64 无效".into()))?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_REFERENCE_BYTES {
+        return Err(FinalSubError::Validation(
+            "音色包参考音频为空或超过 64 MB".into(),
+        ));
+    }
+    let root = recordings_root(app_config_dir);
+    std::fs::create_dir_all(&root)?;
+    let path = root.join(format!("{}.wav", Uuid::new_v4()));
+    std::fs::write(&path, bytes)?;
+    if Wave::read(&path_string(&path)).is_none() {
+        let _ = std::fs::remove_file(&path);
+        return Err(FinalSubError::Validation(
+            "音色包内不是有效 WAV 音频".into(),
+        ));
+    }
+    Ok(Some(path))
 }
 
 pub async fn import_voice_profile(
@@ -959,9 +1729,44 @@ pub async fn import_voice_profile(
         return Err(FinalSubError::Validation("音色包格式或版本不受支持".into()));
     }
     if package.voice.engine != "zipvoice" {
-        return Err(FinalSubError::Validation(
-            "当前只支持导入可离线复用的 ZipVoice 音色包".into(),
-        ));
+        let engine = package.voice.engine.as_str();
+        let cloud_voice_id = validate_cloud_voice_id(
+            engine,
+            package.voice.speaker_id.as_deref().unwrap_or_default(),
+        )?;
+        let provider_id = provider_for_imported_cloud_voice(app_config_dir, engine)?;
+        ensure_cloud_voice_not_linked(profiles, &provider_id, &cloud_voice_id)?;
+        let temporary_reference =
+            decode_imported_reference(app_config_dir, package.ref_wav_base64)?;
+        let source_name = input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(str::to_string);
+        let profile = VoiceProfile {
+            id: Uuid::new_v4().to_string(),
+            name: validate_name(&package.voice.name)?,
+            engine: engine.to_string(),
+            language: package.voice.language,
+            reference_audio_path: String::new(),
+            reference_text: String::new(),
+            source_name,
+            quality: imported_quality_or_placeholder(package.voice.quality),
+            provider_id: Some(provider_id),
+            cloud_voice_id: Some(cloud_voice_id),
+            cloud_status: Some(CloudVoiceStatus::Ready),
+            volc_training_times_left: None,
+            created_at: chrono::Utc::now().timestamp_millis(),
+        };
+        let result = persist_cloud_profile(
+            app_config_dir,
+            profiles,
+            profile,
+            temporary_reference.as_deref(),
+        );
+        if let Some(path) = temporary_reference {
+            let _ = std::fs::remove_file(path);
+        }
+        return result;
     }
     let name = validate_name(&package.voice.name)?;
     let reference_text =
@@ -999,7 +1804,7 @@ pub async fn import_voice_profile(
             return Err(error);
         }
     };
-    if source_duration > MAX_SELECTION_MS + 100 {
+    if source_duration > ZIPVOICE_MAX_SELECTION_MS + 100 {
         let _ = std::fs::remove_file(&temporary_source);
         return Err(FinalSubError::Validation(
             "ZipVoice 音色包的参考音频不能超过 10 秒".into(),
@@ -1012,7 +1817,10 @@ pub async fn import_voice_profile(
         PrepareVoiceSampleRequest {
             source_path: path_string(&temporary_source),
             start_ms: 0,
-            duration_ms: source_duration.clamp(MIN_SELECTION_MS, MAX_SELECTION_MS),
+            duration_ms: source_duration
+                .clamp(ZIPVOICE_MIN_SELECTION_MS, ZIPVOICE_MAX_SELECTION_MS),
+            engine: VoiceCloneEngine::Zipvoice,
+            local_denoise: false,
         },
     )
     .await;
@@ -1072,6 +1880,10 @@ mod tests {
             reference_text: "这是参考文本".into(),
             source_name: Some("voice.wav".into()),
             quality: report(),
+            provider_id: None,
+            cloud_voice_id: None,
+            cloud_status: None,
+            volc_training_times_left: None,
             created_at: 1,
         };
         save_profile_in_dir(&directory, &profile).unwrap();
@@ -1111,6 +1923,10 @@ mod tests {
             reference_text: "The exact transcript.".into(),
             source_name: None,
             quality: report(),
+            provider_id: None,
+            cloud_voice_id: None,
+            cloud_status: None,
+            volc_training_times_left: None,
             created_at: 1,
         };
         let output = root.path().join("voice.svoice");
@@ -1122,5 +1938,92 @@ mod tests {
         assert_eq!(value["voice"]["engine"], "zipvoice");
         assert_eq!(value["voice"]["refText"], "The exact transcript.");
         assert!(value["refWavBase64"].is_string());
+    }
+
+    #[test]
+    fn cloud_profile_loads_without_reference_audio() {
+        let root = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let provider_id = Uuid::new_v4().to_string();
+        let profile = VoiceProfile {
+            id: id.clone(),
+            name: "Cloud narrator".into(),
+            engine: "elevenlabs".into(),
+            language: VoiceProfileLanguage::En,
+            reference_audio_path: "/untrusted/stale/path.wav".into(),
+            reference_text: "must not persist".into(),
+            source_name: None,
+            quality: cloud_quality_placeholder(),
+            provider_id: Some(provider_id.clone()),
+            cloud_voice_id: Some("voice-123".into()),
+            cloud_status: Some(CloudVoiceStatus::Ready),
+            volc_training_times_left: None,
+            created_at: 1,
+        };
+        let directory = profile_dir(root.path(), &id).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        save_profile_in_dir(&directory, &profile).unwrap();
+        let loaded = load_profiles(root.path()).unwrap();
+        let loaded = loaded.get(&id).unwrap();
+        assert_eq!(loaded.provider_id.as_deref(), Some(provider_id.as_str()));
+        assert_eq!(loaded.cloud_voice_id.as_deref(), Some("voice-123"));
+        assert!(loaded.reference_audio_path.is_empty());
+        assert!(loaded.reference_text.is_empty());
+    }
+
+    #[test]
+    fn cloud_voice_ids_are_engine_scoped() {
+        assert_eq!(
+            validate_cloud_voice_id("elevenlabs", " voice-123 ").unwrap(),
+            "voice-123"
+        );
+        assert_eq!(
+            validate_cloud_voice_id("volcengine", "S_example").unwrap(),
+            "S_example"
+        );
+        assert!(validate_cloud_voice_id("volcengine", "voice-123").is_err());
+        assert!(validate_cloud_voice_id("elevenlabs", "bad\nvoice").is_err());
+    }
+
+    #[test]
+    fn subtitle_cues_are_loaded_for_reference_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reference.srt");
+        std::fs::write(
+            &path,
+            "1\n00:00:01,000 --> 00:00:02,500\n第一句\n\n2\n00:00:02,700 --> 00:00:04,000\n第二句\n",
+        )
+        .unwrap();
+        let cues = list_voice_subtitle_cues(&path_string(&path)).unwrap();
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0].start_ms, 1_000);
+        assert_eq!(cues[1].text, "第二句");
+    }
+
+    #[test]
+    fn cloud_svoice_export_keeps_engine_and_remote_id() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = VoiceProfile {
+            id: Uuid::new_v4().to_string(),
+            name: "Doubao narrator".into(),
+            engine: "volcengine".into(),
+            language: VoiceProfileLanguage::Zh,
+            reference_audio_path: String::new(),
+            reference_text: String::new(),
+            source_name: None,
+            quality: cloud_quality_placeholder(),
+            provider_id: Some(Uuid::new_v4().to_string()),
+            cloud_voice_id: Some("S_demo_001".into()),
+            cloud_status: Some(CloudVoiceStatus::Ready),
+            volc_training_times_left: Some(2),
+            created_at: 1,
+        };
+        let output = root.path().join("cloud.svoice");
+        export_voice_profile(&profile, &path_string(&output)).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(value["voice"]["engine"], "volcengine");
+        assert_eq!(value["voice"]["speakerId"], "S_demo_001");
+        assert!(value.get("refWavBase64").is_none());
     }
 }

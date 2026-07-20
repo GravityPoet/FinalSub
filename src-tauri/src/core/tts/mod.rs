@@ -5,6 +5,7 @@ mod models;
 mod providers;
 mod voice_profiles;
 mod volcengine;
+mod volcengine_clone;
 
 pub(crate) use download::download_model_impl;
 pub(crate) use engine::{synthesize_local, TtsEngineCache};
@@ -16,17 +17,21 @@ pub use models::{
     TtsVoice,
 };
 pub use providers::{
-    delete_provider, list_providers, save_provider, synthesize_cloud, CloudTtsSynthesisRequest,
-    SaveTtsProviderRequest, TtsProviderProfile,
+    delete_provider, list_cloud_voices, list_providers, save_provider, synthesize_cloud,
+    CloudTtsSynthesisRequest, CloudVoiceSummary, SaveTtsProviderRequest, TtsProviderProfile,
 };
 pub use voice_profiles::{
-    cleanup_transient_files as cleanup_voice_profile_transients, create_voice_profile,
-    discard_prepared_voice_sample, discard_voice_recording, export_voice_profile,
-    import_voice_profile, inspect_voice_source, load_profiles as load_voice_profiles,
-    prepare_voice_sample, remove_voice_profile, rename_voice_profile, save_voice_recording,
-    CreateVoiceProfileRequest, PrepareVoiceSampleRequest, PreparedVoiceSample, VoiceProfile,
-    VoiceProfileLanguage, VoiceQualityIssue, VoiceQualityIssueCode, VoiceQualityIssueSeverity,
-    VoiceQualityReport, VoiceQualityVerdict, VoiceSourceInfo,
+    cleanup_transient_files as cleanup_voice_profile_transients, create_cloud_voice_profile,
+    create_voice_profile, delete_cloud_voice_remote, discard_prepared_voice_sample,
+    discard_voice_recording, export_voice_profile, import_voice_profile, inspect_voice_source,
+    link_cloud_voice_profile, list_voice_subtitle_cues, load_profiles as load_voice_profiles,
+    prepare_voice_sample, refresh_cloud_voice_status, remove_voice_profile, rename_voice_profile,
+    retrain_cloud_voice_profile, save_voice_recording, CloudVoiceStatus,
+    CreateCloudVoiceProfileRequest, CreateVoiceProfileRequest, LinkCloudVoiceProfileRequest,
+    PrepareVoiceSampleRequest, PreparedVoiceSample, RetrainCloudVoiceProfileRequest,
+    VoiceCloneEngine, VoiceProfile, VoiceProfileLanguage, VoiceQualityIssue, VoiceQualityIssueCode,
+    VoiceQualityIssueSeverity, VoiceQualityReport, VoiceQualityVerdict, VoiceSourceInfo,
+    VoiceSubtitleCue,
 };
 
 pub use dubbing::{
