@@ -32,6 +32,7 @@ import {
   X,
   Copy,
   CheckCircle,
+  Link2,
 } from "lucide-react";
 
 import { Button } from "../components/ui/Button";
@@ -487,8 +488,17 @@ export default function TasksPage() {
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <TaskTypeLabel type={task.task_type} />
                       <span className="text-[10px] text-border-strong">|</span>
+                      {task.provided_subtitle_path ? (
+                        <Badge variant="success" title={task.provided_subtitle_path}>
+                          <Link2 size={11} className="mr-1" />
+                          {t("tasks.usingPairedSubtitle")}
+                        </Badge>
+                      ) : (
+                        <span className="text-sm text-text-secondary">
+                          {task.engine_id} · {task.model_id}
+                        </span>
+                      )}
                       <span className="text-sm text-text-secondary">
-                        {task.engine_id} · {task.model_id}
                         {task.source_language && ` · ${task.source_language}`}
                         {task.target_language && ` → ${task.target_language}`}
                         {" · "}{task.output_format.toUpperCase()}

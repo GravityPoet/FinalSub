@@ -16,6 +16,7 @@ pub struct SubtitleTrack {
 
 pub const MIN_CUSTOM_SUBTITLE_WIDTH: i32 = 8;
 pub const MAX_CUSTOM_SUBTITLE_WIDTH: i32 = 120;
+pub const MAX_SUBTITLE_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubtitleLengthMode {

@@ -75,6 +75,7 @@ pub fn run() {
             commands::list_asr_models,
             commands::scan_models,
             commands::discover_batch_inputs,
+            commands::discover_mixed_batch_inputs,
             commands::delete_model,
             commands::import_local_model,
             commands::import_sensevoice_model,

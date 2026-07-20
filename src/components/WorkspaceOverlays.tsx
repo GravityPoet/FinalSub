@@ -285,7 +285,7 @@ function Onboarding() {
   return (
     <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] flex justify-end sm:inset-x-6 sm:top-5">
       <Card className="pointer-events-auto liquid-shell relative w-full max-w-[34rem] overflow-hidden border border-brand/20 bg-surface-card/95 p-3.5 shadow-xl backdrop-blur-xl sm:p-4">
-        <button type="button" onClick={finish} className="absolute right-2.5 top-2.5 rounded-lg p-1.5 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary" aria-label={t("onboarding.skip")}><X size={15} /></button>
+        <button type="button" onClick={finish} className="absolute right-2.5 top-2.5 z-20 rounded-lg p-1.5 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary" aria-label={t("onboarding.skip")}><X size={15} /></button>
         <div className="relative z-10 flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand"><Icon size={18} /></div>
           <div className="min-w-0 flex-1">

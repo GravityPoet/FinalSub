@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
 use tauri::Manager;
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::sync::{watch, RwLock};
 
 use crate::commands::{parakeet_models_dir, resolve_sidecar, whisper_models_dir};
@@ -144,6 +144,43 @@ pub(crate) fn sherpa_vad_model_path(app: &AppHandle) -> Result<PathBuf, String> 
         }
         Ok(path)
     }
+}
+
+fn parse_subtitle_file(path: &Path, content: &str, label: &str) -> Result<SubtitleTrack, String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("srt")
+        .to_ascii_lowercase();
+    let track = SubtitleTrack::from_format(content, &extension)
+        .map_err(|error| format!("解析{label}失败：{error}"))?;
+    if track.is_empty() {
+        return Err(format!("{label}中没有有效字幕条目"));
+    }
+    Ok(track)
+}
+
+async fn load_subtitle_file(path: &Path, label: &str) -> Result<SubtitleTrack, String> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| format!("读取{label}失败：{error}"))?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|error| format!("读取{label}属性失败：{error}"))?;
+    if metadata.len() > crate::core::subtitle::MAX_SUBTITLE_FILE_BYTES {
+        return Err(format!("{label}超过 20 MB 限制"));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(crate::core::subtitle::MAX_SUBTITLE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("读取{label}失败：{error}"))?;
+    if bytes.len() as u64 > crate::core::subtitle::MAX_SUBTITLE_FILE_BYTES {
+        return Err(format!("{label}超过 20 MB 限制"));
+    }
+    let content = String::from_utf8(bytes).map_err(|_| format!("{label}不是有效的 UTF-8 文本"))?;
+    parse_subtitle_file(path, &content, label)
 }
 
 pub fn start_task(
@@ -354,13 +391,58 @@ async fn run_task_impl(
                 PipelineStageKind::Transcribe,
                 PipelineStageStatus::Running,
                 0.0,
-                "正在准备音频转录...",
+                if task.provided_subtitle_path.is_some() {
+                    "正在读取已配对字幕..."
+                } else {
+                    "正在准备音频转录..."
+                },
             )
             .await;
         }
     }
 
-    if task.task_type != TaskType::TranslateOnly {
+    if let Some(provided_subtitle_path) = task.provided_subtitle_path.as_deref() {
+        let provided_subtitle_path = PathBuf::from(provided_subtitle_path);
+        update_task_progress(
+            app,
+            tasks.clone(),
+            task_id,
+            0.02,
+            "正在读取已配对字幕，跳过音频提取与 ASR...",
+        )
+        .await;
+        current_track = Some(load_subtitle_file(&provided_subtitle_path, "已配对字幕").await?);
+        write_task_log(
+            app,
+            &app_config_dir,
+            task_id,
+            &format!(
+                "已加载配对字幕 {}，跳过音频提取与 ASR",
+                provided_subtitle_path.display()
+            ),
+        )
+        .await;
+        update_task_progress(
+            app,
+            tasks.clone(),
+            task_id,
+            map_asr_progress(task.task_type, 1.0),
+            "已加载配对字幕，ASR 已跳过",
+        )
+        .await;
+        if task.pipeline.is_some() {
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::Transcribe,
+                PipelineStageStatus::Skipped,
+                1.0,
+                "已使用配对字幕，跳过转录",
+            )
+            .await;
+        }
+    } else if task.task_type != TaskType::TranslateOnly {
         let audio_output_path = work_dir.join("audio.wav");
         let asr_output_path = work_dir.join("asr.srt");
 
@@ -781,17 +863,7 @@ async fn run_task_impl(
     } else {
         // TranslateOnly 模式直接读取原字幕文件，按扩展名解析 SRT/VTT/ASS/LRC。
         update_task_progress(app, tasks.clone(), task_id, 0.02, "正在读取源字幕文件...").await;
-        let sub_content = tokio::fs::read_to_string(&media_path)
-            .await
-            .map_err(|e| format!("读取源字幕文件失败：{}", e))?;
-        let ext = media_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("srt")
-            .to_lowercase();
-        let track = SubtitleTrack::from_format(&sub_content, &ext)
-            .map_err(|e| format!("解析字幕失败：{}", e))?;
-        current_track = Some(track);
+        current_track = Some(load_subtitle_file(&media_path, "源字幕文件").await?);
     }
 
     let mut track = current_track.ok_or_else(|| "未生成或解析到有效字幕轨道".to_string())?;
@@ -836,7 +908,7 @@ async fn run_task_impl(
         || task.task_type == TaskType::TranslateOnly;
     if should_translate {
         if task.pipeline.is_some() {
-            if task.task_type != TaskType::TranslateOnly {
+            if task.task_type != TaskType::TranslateOnly && task.provided_subtitle_path.is_none() {
                 update_pipeline_stage(
                     app,
                     tasks.clone(),
@@ -1385,7 +1457,7 @@ async fn run_task_impl(
     // review → done 语义，保证升级后历史任务不发生状态漂移。
     if task.pipeline.is_some() {
         let subtitle_output = final_output_path.to_string_lossy().to_string();
-        if task.task_type != TaskType::TranslateOnly {
+        if task.task_type != TaskType::TranslateOnly && task.provided_subtitle_path.is_none() {
             update_pipeline_stage(
                 app,
                 tasks.clone(),
@@ -3209,6 +3281,18 @@ pub async fn write_task_log(app: &AppHandle, app_config_dir: &Path, task_id: &st
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn provided_subtitle_parser_accepts_timed_formats_and_rejects_empty_tracks() {
+        let parsed = parse_subtitle_file(
+            Path::new("/tmp/episode.vtt"),
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n",
+            "已配对字幕",
+        )
+        .unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parse_subtitle_file(Path::new("/tmp/empty.srt"), "", "已配对字幕").is_err());
+    }
 
     #[test]
     fn configured_value_ignores_empty_strings() {

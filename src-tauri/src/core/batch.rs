@@ -1,4 +1,5 @@
 use crate::error::{FinalSubError, Result};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -7,12 +8,18 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "mov", "avi", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts", "mp3", "wav", "m4a",
     "flac", "aac", "ogg", "opus", "wma",
 ];
-const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
+const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "lrc"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchInputKind {
     Media,
     Subtitle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MixedBatchInputs {
+    pub media: Vec<String>,
+    pub subtitles: Vec<String>,
 }
 
 impl BatchInputKind {
@@ -32,6 +39,40 @@ impl BatchInputKind {
 }
 
 pub fn discover_inputs(
+    raw_paths: &[String],
+    kind: BatchInputKind,
+    recursive: bool,
+) -> Result<Vec<String>> {
+    let discovered = discover_inputs_allow_empty(raw_paths, kind, recursive)?;
+    if discovered.is_empty() {
+        let label = match kind {
+            BatchInputKind::Media => "媒体",
+            BatchInputKind::Subtitle => "字幕",
+        };
+        return Err(FinalSubError::Validation(format!(
+            "所选位置中没有受支持的{label}文件"
+        )));
+    }
+    Ok(discovered)
+}
+
+pub fn discover_mixed_inputs(raw_paths: &[String], recursive: bool) -> Result<MixedBatchInputs> {
+    let media = discover_inputs_allow_empty(raw_paths, BatchInputKind::Media, recursive)?;
+    let subtitles = discover_inputs_allow_empty(raw_paths, BatchInputKind::Subtitle, recursive)?;
+    if media.is_empty() && subtitles.is_empty() {
+        return Err(FinalSubError::Validation(
+            "所选位置中没有受支持的媒体或字幕文件".into(),
+        ));
+    }
+    if media.len().saturating_add(subtitles.len()) > MAX_BATCH_INPUTS {
+        return Err(FinalSubError::Validation(format!(
+            "单次批处理最多支持 {MAX_BATCH_INPUTS} 个文件"
+        )));
+    }
+    Ok(MixedBatchInputs { media, subtitles })
+}
+
+fn discover_inputs_allow_empty(
     raw_paths: &[String],
     kind: BatchInputKind,
     recursive: bool,
@@ -64,15 +105,6 @@ pub fn discover_inputs(
     }
 
     discovered.sort();
-    if discovered.is_empty() {
-        let label = match kind {
-            BatchInputKind::Media => "媒体",
-            BatchInputKind::Subtitle => "字幕",
-        };
-        return Err(FinalSubError::Validation(format!(
-            "所选位置中没有受支持的{label}文件"
-        )));
-    }
     Ok(discovered)
 }
 
@@ -179,6 +211,24 @@ mod tests {
         let raw = media.to_string_lossy().to_string();
         let paths = discover_inputs(&[raw.clone(), raw], BatchInputKind::Media, true).unwrap();
         assert_eq!(paths.len(), 1);
+    }
+
+    #[test]
+    fn mixed_discovery_returns_media_and_subtitles_together() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(temp.path().join("episode.mp4"), b"x").unwrap();
+        std::fs::write(nested.join("episode.zh.srt"), b"x").unwrap();
+        std::fs::write(nested.join("ignore.txt"), b"x").unwrap();
+
+        let discovered =
+            discover_mixed_inputs(&[temp.path().to_string_lossy().to_string()], true).unwrap();
+
+        assert_eq!(discovered.media.len(), 1);
+        assert_eq!(discovered.subtitles.len(), 1);
+        assert!(discovered.media[0].ends_with("episode.mp4"));
+        assert!(discovered.subtitles[0].ends_with("episode.zh.srt"));
     }
 
     #[test]
