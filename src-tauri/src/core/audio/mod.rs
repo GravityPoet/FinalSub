@@ -1,4 +1,71 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::time::Duration;
+
+use tokio::process::Command;
+
+/// 视频重编码方式。`Auto` 只在真实探测通过时使用硬件编码，否则回退到
+/// 既有的 libx264；`Hardware` 与 Auto 共享同一套安全回退逻辑。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum VideoEncoderMode {
+    Auto,
+    #[default]
+    Cpu,
+    Hardware,
+}
+
+impl VideoEncoderMode {
+    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value.unwrap_or("cpu").trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "cpu" | "software" | "libx264" => Ok(Self::Cpu),
+            "hardware" | "hw" => Ok(Self::Hardware),
+            _ => Err("Video encoder mode only supports auto, cpu, or hardware".into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HardwareRateMode {
+    Cq,
+    Bitrate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardwareEncoderInfo {
+    pub available: bool,
+    pub encoder_id: Option<String>,
+    pub encoder_label: Option<String>,
+    pub rate_mode: Option<HardwareRateMode>,
+    pub platform_supported: bool,
+}
+
+impl HardwareEncoderInfo {
+    fn unavailable(platform_supported: bool) -> Self {
+        Self {
+            available: false,
+            encoder_id: None,
+            encoder_label: None,
+            rate_mode: None,
+            platform_supported,
+        }
+    }
+}
+
+/// 已解析的视频编码参数。只有硬件探测成功时 `hardware` 才为 true；调用方
+/// 可以据此在真正执行失败后安全重跑 CPU 编码。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoEncoding {
+    pub args: Vec<String>,
+    pub needs_nv12: bool,
+    pub hardware: bool,
+    pub encoder_id: String,
+}
+
+static HARDWARE_ENCODER_CACHE: tokio::sync::OnceCell<HardwareEncoderInfo> =
+    tokio::sync::OnceCell::const_new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioExtractPlan {
@@ -55,10 +122,12 @@ impl ComposeAudioMode {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ComposeOptions {
     pub soft_subtitle: bool,
     pub audio_mode: ComposeAudioMode,
+    /// 已解析的视频编码参数；`None` 保持历史 CPU 编码行为。
+    pub video_encoding: Option<VideoEncoding>,
     pub audio_path: Option<String>,
     pub subtitle_language: Option<String>,
     pub subtitle_title: Option<String>,
@@ -72,6 +141,297 @@ pub struct FfmpegProgress {
     pub phase: String,
     pub percent: Option<f32>,
     pub message: String,
+}
+
+fn hardware_encoder_candidates() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &["h264_videotoolbox"]
+    } else if cfg!(target_os = "windows") {
+        &["h264_nvenc", "h264_qsv"]
+    } else {
+        &[]
+    }
+}
+
+fn hardware_encoder_label(encoder_id: &str) -> &'static str {
+    match encoder_id {
+        "h264_videotoolbox" => "VideoToolbox",
+        "h264_nvenc" => "NVIDIA NVENC",
+        "h264_qsv" => "Intel QSV",
+        _ => "Hardware encoder",
+    }
+}
+
+fn hardware_cq_args(encoder_id: &str, quality: u8) -> Option<Vec<String>> {
+    let quality = quality.to_string();
+    match encoder_id {
+        "h264_videotoolbox" => Some(vec![
+            "-c:v".into(),
+            encoder_id.into(),
+            "-q:v".into(),
+            quality,
+            "-realtime".into(),
+            "0".into(),
+        ]),
+        "h264_nvenc" => Some(vec![
+            "-c:v".into(),
+            encoder_id.into(),
+            "-rc".into(),
+            "vbr".into(),
+            "-cq".into(),
+            quality,
+            "-b:v".into(),
+            "0".into(),
+            "-preset".into(),
+            "p5".into(),
+        ]),
+        "h264_qsv" => Some(vec![
+            "-c:v".into(),
+            encoder_id.into(),
+            "-global_quality".into(),
+            quality,
+        ]),
+        _ => None,
+    }
+}
+
+fn videotoolbox_bitrate_args(target: u64, maxrate: u64, bufsize: u64) -> Vec<String> {
+    vec![
+        "-c:v".into(),
+        "h264_videotoolbox".into(),
+        "-b:v".into(),
+        target.to_string(),
+        "-maxrate".into(),
+        maxrate.to_string(),
+        "-bufsize".into(),
+        bufsize.to_string(),
+        "-realtime".into(),
+        "0".into(),
+    ]
+}
+
+async fn probe_encoder(ffmpeg_bin: &Path, args: &[String]) -> bool {
+    let mut command_args = vec![
+        "-hide_banner".into(),
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+        "color=black:s=640x360:d=0.1".into(),
+        "-vf".into(),
+        "format=nv12".into(),
+    ];
+    command_args.extend(args.iter().cloned());
+    command_args.extend(["-f".into(), "null".into(), "-".into()]);
+
+    let mut command = Command::new(ffmpeg_bin);
+    command.args(command_args).kill_on_drop(true);
+    let result = tokio::time::timeout(Duration::from_secs(15), command.output()).await;
+    matches!(result, Ok(Ok(output)) if output.status.success())
+}
+
+async fn detect_hardware_encoder(ffmpeg_bin: &Path) -> HardwareEncoderInfo {
+    let candidates = hardware_encoder_candidates();
+    if candidates.is_empty() {
+        return HardwareEncoderInfo::unavailable(false);
+    }
+
+    for encoder_id in candidates {
+        // 取中高质量档做真实试编码；只检查参数/驱动能否跑通，正式质量由
+        // resolve_video_encoding 根据用户的 CRF 映射。
+        let cq = if *encoder_id == "h264_videotoolbox" {
+            58
+        } else {
+            21
+        };
+        if let Some(args) = hardware_cq_args(encoder_id, cq) {
+            if probe_encoder(ffmpeg_bin, &args).await {
+                return HardwareEncoderInfo {
+                    available: true,
+                    encoder_id: Some((*encoder_id).to_string()),
+                    encoder_label: Some(hardware_encoder_label(encoder_id).to_string()),
+                    rate_mode: Some(HardwareRateMode::Cq),
+                    platform_supported: true,
+                };
+            }
+        }
+
+        // Intel Mac 的部分 VideoToolbox 驱动不接受 -q:v；码率模式仍可用。
+        if *encoder_id == "h264_videotoolbox"
+            && probe_encoder(
+                ffmpeg_bin,
+                &videotoolbox_bitrate_args(2_000_000, 3_000_000, 4_000_000),
+            )
+            .await
+        {
+            return HardwareEncoderInfo {
+                available: true,
+                encoder_id: Some((*encoder_id).to_string()),
+                encoder_label: Some(hardware_encoder_label(encoder_id).to_string()),
+                rate_mode: Some(HardwareRateMode::Bitrate),
+                platform_supported: true,
+            };
+        }
+    }
+
+    HardwareEncoderInfo::unavailable(true)
+}
+
+/// 获取本次应用会话的硬件编码能力。探测只执行一次，避免每次合成或打开
+/// 设置页都启动 FFmpeg；不把结果持久化，防止用户更换驱动后使用过期能力。
+pub async fn get_hardware_encoder_info(ffmpeg_bin: &Path) -> HardwareEncoderInfo {
+    let ffmpeg_bin = ffmpeg_bin.to_path_buf();
+    HARDWARE_ENCODER_CACHE
+        .get_or_init(|| async move { detect_hardware_encoder(&ffmpeg_bin).await })
+        .await
+        .clone()
+}
+
+fn cpu_video_encoding(style: &BurnInStyleOptions) -> VideoEncoding {
+    VideoEncoding {
+        args: vec![
+            "-c:v".into(),
+            "libx264".into(),
+            "-crf".into(),
+            style.crf.unwrap_or(20).to_string(),
+            "-preset".into(),
+            style.preset.as_deref().unwrap_or("medium").into(),
+        ],
+        needs_nv12: false,
+        hardware: false,
+        encoder_id: "libx264".into(),
+    }
+}
+
+pub fn cpu_video_encoding_for_style(style: &BurnInStyleOptions) -> VideoEncoding {
+    cpu_video_encoding(style)
+}
+
+fn parse_video_probe(stderr: &str) -> (u32, u32, f64) {
+    let mut width = 0;
+    let mut height = 0;
+    for line in stderr.lines().filter(|line| line.contains("Video:")) {
+        for token in line.split(',') {
+            let token = token.trim();
+            let Some((left, right)) = token.split_once('x') else {
+                continue;
+            };
+            let right = right.split_whitespace().next().unwrap_or_default();
+            if let (Ok(candidate_width), Ok(candidate_height)) =
+                (left.parse::<u32>(), right.parse::<u32>())
+            {
+                if candidate_width > 0 && candidate_height > 0 {
+                    width = candidate_width;
+                    height = candidate_height;
+                    break;
+                }
+            }
+        }
+        if width > 0 && height > 0 {
+            break;
+        }
+    }
+    let duration = parse_duration_ms(stderr)
+        .map(|value| value as f64 / 1000.0)
+        .unwrap_or(0.0);
+    (width, height, duration)
+}
+
+async fn probe_video_dimensions(ffmpeg_bin: &Path, video_path: &Path) -> (u32, u32, f64) {
+    let mut command = Command::new(ffmpeg_bin);
+    command
+        .args(["-hide_banner", "-i"])
+        .arg(video_path)
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output()).await;
+    match output {
+        Ok(Ok(output)) => parse_video_probe(&String::from_utf8_lossy(&output.stderr)),
+        _ => (0, 0, 0.0),
+    }
+}
+
+fn clamp_bitrate(value: f64, height: u32) -> u64 {
+    let (min, max) = if height >= 1_800 {
+        (4_000_000.0, 50_000_000.0)
+    } else if height >= 900 {
+        (1_500_000.0, 16_000_000.0)
+    } else if height > 0 {
+        (500_000.0, 8_000_000.0)
+    } else {
+        (800_000.0, 16_000_000.0)
+    };
+    value.round().clamp(min, max) as u64
+}
+
+fn videotoolbox_quality(crf: u8) -> u8 {
+    // VideoToolbox 的 q:v 量纲与 CRF 相反：数值越大画质越好。把现有
+    // 0–51 CRF 控件映射到稳定的 35–75 区间，保留用户对质量的直觉。
+    (75_i32 - i32::from(crf)).clamp(35, 75) as u8
+}
+
+fn videotoolbox_bitrate_factor(crf: u8) -> f64 {
+    if crf <= 18 {
+        1.0
+    } else if crf <= 23 {
+        1.0 - (f64::from(crf - 18) * 0.07)
+    } else {
+        (0.65 - f64::from(crf - 23) * 0.012).clamp(0.35, 0.65)
+    }
+}
+
+/// 按用户选项解析本次合成的视频编码器。硬件能力不可用时返回 CPU
+/// 方案，不让“启用硬件”把任务变成不可用状态。
+pub async fn resolve_video_encoding(
+    ffmpeg_bin: &Path,
+    mode: VideoEncoderMode,
+    style: &BurnInStyleOptions,
+    video_path: &Path,
+) -> VideoEncoding {
+    let cpu = || cpu_video_encoding(style);
+    if mode == VideoEncoderMode::Cpu {
+        return cpu();
+    }
+
+    let info = get_hardware_encoder_info(ffmpeg_bin).await;
+    let Some(encoder_id) = info.encoder_id.as_deref() else {
+        return cpu();
+    };
+    let crf = style.crf.unwrap_or(20);
+
+    if info.rate_mode == Some(HardwareRateMode::Bitrate) {
+        let (_, height, duration) = probe_video_dimensions(ffmpeg_bin, video_path).await;
+        let size = std::fs::metadata(video_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if size == 0 || duration <= 0.0 {
+            return cpu();
+        }
+        let source_bitrate = size as f64 * 8.0 / duration;
+        let target = clamp_bitrate(
+            source_bitrate * 0.85 * videotoolbox_bitrate_factor(crf),
+            height,
+        );
+        return VideoEncoding {
+            args: videotoolbox_bitrate_args(target, target * 3 / 2, target * 2),
+            needs_nv12: true,
+            hardware: true,
+            encoder_id: encoder_id.to_string(),
+        };
+    }
+
+    let quality = if encoder_id == "h264_videotoolbox" {
+        videotoolbox_quality(crf)
+    } else {
+        crf.clamp(1, 51)
+    };
+    let Some(args) = hardware_cq_args(encoder_id, quality) else {
+        return cpu();
+    };
+    VideoEncoding {
+        args,
+        needs_nv12: true,
+        hardware: true,
+        encoder_id: encoder_id.to_string(),
+    }
 }
 
 pub fn audio_extract_plan(
@@ -156,26 +516,32 @@ pub fn burn_in_args(
     output_path: &str,
     style: &BurnInStyleOptions,
 ) -> Vec<String> {
-    let subtitles_filter = subtitles_filter(subtitle_path, style);
-    let crf = style.crf.unwrap_or(20).to_string();
-    let preset = style.preset.as_deref().unwrap_or("medium");
+    burn_in_args_with_encoding(video_path, subtitle_path, output_path, style, None)
+}
 
-    vec![
+pub fn burn_in_args_with_encoding(
+    video_path: &str,
+    subtitle_path: &str,
+    output_path: &str,
+    style: &BurnInStyleOptions,
+    encoding: Option<&VideoEncoding>,
+) -> Vec<String> {
+    let subtitles_filter = subtitles_filter(subtitle_path, style);
+    let subtitles_filter = encoded_subtitle_filter(subtitles_filter, encoding);
+    let mut args = vec![
         "-i".into(),
         video_path.into(),
         "-vf".into(),
         subtitles_filter,
-        "-c:v".into(),
-        "libx264".into(),
-        "-crf".into(),
-        crf,
-        "-preset".into(),
-        preset.into(),
+    ];
+    push_h264_args(&mut args, style, encoding);
+    args.extend([
         "-c:a".into(),
         "copy".into(),
         "-y".into(),
         output_path.into(),
-    ]
+    ]);
+    args
 }
 
 pub fn compose_requires_mkv(soft_subtitle: bool, audio_mode: ComposeAudioMode) -> bool {
@@ -190,7 +556,13 @@ pub fn compose_args(
     options: &ComposeOptions,
 ) -> Result<Vec<String>, String> {
     if options.audio_mode == ComposeAudioMode::Keep && !options.soft_subtitle {
-        return Ok(burn_in_args(video_path, subtitle_path, output_path, style));
+        return Ok(burn_in_args_with_encoding(
+            video_path,
+            subtitle_path,
+            output_path,
+            style,
+            options.video_encoding.as_ref(),
+        ));
     }
 
     let output_extension = std::path::Path::new(output_path)
@@ -305,7 +677,10 @@ pub fn compose_args(
         args.extend(["-c:s".into(), subtitle_codec.into()]);
         push_subtitle_metadata(&mut args, options);
     } else {
-        let subtitle_filter = subtitles_filter(subtitle_path, style);
+        let subtitle_filter = encoded_subtitle_filter(
+            subtitles_filter(subtitle_path, style),
+            options.video_encoding.as_ref(),
+        );
         match options.audio_mode {
             ComposeAudioMode::Keep => unreachable!("handled above"),
             ComposeAudioMode::Replace => {
@@ -317,7 +692,7 @@ pub fn compose_args(
                     "-map".into(),
                     "1:a:0".into(),
                 ]);
-                push_h264_args(&mut args, style);
+                push_h264_args(&mut args, style, options.video_encoding.as_ref());
                 push_aac_args(&mut args, None);
                 push_audio_metadata(&mut args, 0, options, true);
             }
@@ -330,7 +705,7 @@ pub fn compose_args(
                     "-map".into(),
                     "[mixed]".into(),
                 ]);
-                push_h264_args(&mut args, style);
+                push_h264_args(&mut args, style, options.video_encoding.as_ref());
                 push_aac_args(&mut args, None);
                 push_audio_metadata(&mut args, 0, options, true);
             }
@@ -346,7 +721,7 @@ pub fn compose_args(
                     "-map".into(),
                     "1:a:0".into(),
                 ]);
-                push_h264_args(&mut args, style);
+                push_h264_args(&mut args, style, options.video_encoding.as_ref());
                 args.extend(["-c:a".into(), "copy".into()]);
                 push_aac_args(&mut args, Some(audio_index));
                 push_audio_metadata(&mut args, audio_index, options, false);
@@ -364,15 +739,31 @@ pub fn compose_args(
     Ok(args)
 }
 
-fn push_h264_args(args: &mut Vec<String>, style: &BurnInStyleOptions) {
-    args.extend([
-        "-c:v".into(),
-        "libx264".into(),
-        "-crf".into(),
-        style.crf.unwrap_or(20).to_string(),
-        "-preset".into(),
-        style.preset.as_deref().unwrap_or("medium").into(),
-    ]);
+fn push_h264_args(
+    args: &mut Vec<String>,
+    style: &BurnInStyleOptions,
+    encoding: Option<&VideoEncoding>,
+) {
+    if let Some(encoding) = encoding {
+        args.extend(encoding.args.iter().cloned());
+    } else {
+        args.extend([
+            "-c:v".into(),
+            "libx264".into(),
+            "-crf".into(),
+            style.crf.unwrap_or(20).to_string(),
+            "-preset".into(),
+            style.preset.as_deref().unwrap_or("medium").into(),
+        ]);
+    }
+}
+
+fn encoded_subtitle_filter(filter: String, encoding: Option<&VideoEncoding>) -> String {
+    if encoding.is_some_and(|encoding| encoding.needs_nv12) {
+        format!("{filter},format=nv12")
+    } else {
+        filter
+    }
 }
 
 fn push_aac_args(args: &mut Vec<String>, stream_index: Option<usize>) {
@@ -677,6 +1068,92 @@ mod tests {
     }
 
     #[test]
+    fn video_encoder_mode_accepts_only_supported_values() {
+        assert_eq!(
+            VideoEncoderMode::parse(Some("auto")).unwrap(),
+            VideoEncoderMode::Auto
+        );
+        assert_eq!(
+            VideoEncoderMode::parse(Some("hardware")).unwrap(),
+            VideoEncoderMode::Hardware
+        );
+        assert_eq!(
+            VideoEncoderMode::parse(Some("cpu")).unwrap(),
+            VideoEncoderMode::Cpu
+        );
+        assert_eq!(
+            VideoEncoderMode::parse(None).unwrap(),
+            VideoEncoderMode::Cpu
+        );
+        assert!(VideoEncoderMode::parse(Some("shell-command")).is_err());
+    }
+
+    #[test]
+    fn hardware_burn_adds_nv12_and_uses_resolved_encoder_args() {
+        let encoding = VideoEncoding {
+            args: hardware_cq_args("h264_videotoolbox", 55).unwrap(),
+            needs_nv12: true,
+            hardware: true,
+            encoder_id: "h264_videotoolbox".into(),
+        };
+        let args = burn_in_args_with_encoding(
+            "/tmp/v.mp4",
+            "/tmp/s.ass",
+            "/tmp/o.mp4",
+            &BurnInStyleOptions::default(),
+            Some(&encoding),
+        );
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "-vf" && pair[1].contains("subtitles=") && pair[1].ends_with("format=nv12")
+        }));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-c:v", "h264_videotoolbox"]));
+        assert!(args.windows(2).any(|pair| pair == ["-q:v", "55"]));
+        assert!(!args.iter().any(|arg| arg == "libx264"));
+    }
+
+    #[test]
+    fn hardware_compose_mix_keeps_video_filter_inside_complex_graph() {
+        let encoding = VideoEncoding {
+            args: hardware_cq_args("h264_videotoolbox", 55).unwrap(),
+            needs_nv12: true,
+            hardware: true,
+            encoder_id: "h264_videotoolbox".into(),
+        };
+        let args = compose_args(
+            "/tmp/v.mp4",
+            "/tmp/s.ass",
+            "/tmp/o.mp4",
+            &BurnInStyleOptions::default(),
+            &ComposeOptions {
+                audio_mode: ComposeAudioMode::Mix,
+                video_encoding: Some(encoding),
+                audio_path: Some("/tmp/dub.wav".into()),
+                original_audio_tracks: 1,
+                ..ComposeOptions::default()
+            },
+        )
+        .unwrap();
+        let graph = args
+            .windows(2)
+            .find(|pair| pair[0] == "-filter_complex")
+            .map(|pair| pair[1].as_str())
+            .unwrap();
+        assert!(graph.contains("subtitles="));
+        assert!(graph.contains("format=nv12[video]"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-c:v", "h264_videotoolbox"]));
+    }
+
+    #[test]
+    fn video_probe_parses_resolution_and_duration() {
+        let stderr = "Duration: 00:01:02.50, start: 0.000000\n  Stream #0:0: Video: h264, yuv420p, 1920x1080, 30 fps";
+        assert_eq!(parse_video_probe(stderr), (1920, 1080, 62.5));
+    }
+
+    #[test]
     fn compose_hard_keep_is_exactly_the_legacy_burn_command() {
         let style = BurnInStyleOptions::default();
         let legacy = burn_in_args("/tmp/v.mp4", "/tmp/s.ass", "/tmp/o.mp4", &style);
@@ -804,6 +1281,25 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn detects_bundled_videotoolbox_when_enabled() {
+        if std::env::var("FINALSUB_HW_ENCODER_E2E").as_deref() != Ok("1") {
+            return;
+        }
+        let architecture = if cfg!(target_arch = "aarch64") {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+        let ffmpeg = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(format!("ffmpeg-{architecture}-apple-darwin"));
+        let info = detect_hardware_encoder(&ffmpeg).await;
+        assert!(info.available, "bundled FFmpeg should pass a real VT probe");
+        assert_eq!(info.encoder_id.as_deref(), Some("h264_videotoolbox"));
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn compose_real_media_fixture_when_enabled() {
         if std::env::var("FINALSUB_COMPOSE_MEDIA_E2E").as_deref() != Ok("1") {
@@ -830,6 +1326,7 @@ mod tests {
         let subtitle = fixture.path().join("captions.srt");
         let soft_output = fixture.path().join("soft-dual.mkv");
         let mixed_output = fixture.path().join("hard-mixed.mp4");
+        let hardware_output = fixture.path().join("hard-videotoolbox.mp4");
 
         let run = |arguments: &[String]| {
             let output = std::process::Command::new(&ffmpeg)
@@ -890,6 +1387,7 @@ mod tests {
             &ComposeOptions {
                 soft_subtitle: true,
                 audio_mode: ComposeAudioMode::AddTrack,
+                video_encoding: None,
                 audio_path: Some(dub.to_string_lossy().into_owned()),
                 subtitle_language: Some("zho".into()),
                 subtitle_title: Some("FinalSub Subtitles".into()),
@@ -930,5 +1428,32 @@ mod tests {
         .unwrap();
         run(&mixed_args);
         assert!(mixed_output.is_file());
+
+        if std::env::var("FINALSUB_HW_ENCODER_E2E").as_deref() == Ok("1") {
+            let encoding = VideoEncoding {
+                args: hardware_cq_args("h264_videotoolbox", 55).unwrap(),
+                needs_nv12: true,
+                hardware: true,
+                encoder_id: "h264_videotoolbox".into(),
+            };
+            let hardware_args = burn_in_args_with_encoding(
+                &video.to_string_lossy(),
+                &subtitle.to_string_lossy(),
+                &hardware_output.to_string_lossy(),
+                &style,
+                Some(&encoding),
+            );
+            run(&hardware_args);
+            assert!(hardware_output.is_file());
+            let probe = std::process::Command::new(&ffmpeg)
+                .arg("-i")
+                .arg(&hardware_output)
+                .output()
+                .unwrap();
+            assert!(
+                String::from_utf8_lossy(&probe.stderr).contains("Video: h264"),
+                "hardware output must contain an H.264 video stream"
+            );
+        }
     }
 }

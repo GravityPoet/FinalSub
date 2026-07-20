@@ -123,6 +123,7 @@ pub fn run() {
             commands::convert_strings_opencc,
             commands::extract_audio_plan,
             commands::extract_audio,
+            commands::get_video_encoder_info,
             commands::burn_subtitle,
             commands::cancel_burn_subtitle,
             commands::get_video_metadata,
