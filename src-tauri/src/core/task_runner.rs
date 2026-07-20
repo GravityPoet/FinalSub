@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
 use tauri::Manager;
@@ -17,9 +18,17 @@ use crate::core::glossary::{
     build_glossary_prompt_block, match_glossary_entries, resolve_enabled_glossaries,
 };
 use crate::core::subtitle::{Cue, SubtitleTrack};
-use crate::core::task_queue::{Task, TaskStatus, TaskType, TranslationContentMode};
+use crate::core::task_queue::{
+    PipelineConfig, PipelineDubbingConfig, PipelineStageKind, PipelineStageStatus, Task,
+    TaskStatus, TaskType, TranslationContentMode,
+};
 use crate::core::translation::{
     builtin_providers, translate_text, TranslateRequest, TranslationProvider,
+};
+use crate::core::tts::{
+    complete_dubbing_cue, create_dubbing_session, export_dubbing_audio, fail_dubbing_cue,
+    get_dubbing_session, prepare_dubbing_cue, CloudTtsSynthesisRequest, DubbingEngineSelection,
+    DubbingSynthesizeCueRequest, LocalTtsSynthesisRequest,
 };
 
 const MAX_OUTPUT_FILE_NAME_BYTES: usize = 240;
@@ -67,6 +76,35 @@ enum AlignedBatchResult {
     Success(AlignedBatchReport),
     Cancelled,
     Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PipelineRunOutcome {
+    Complete,
+    Review,
+    Paused,
+}
+
+struct PipelineRunContext<'a> {
+    app: &'a AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    app_config_dir: &'a Path,
+    task_id: &'a str,
+    task: &'a Task,
+    media_path: &'a Path,
+    subtitle_path: &'a Path,
+}
+
+fn pipeline_stage_label(kind: PipelineStageKind) -> &'static str {
+    match kind {
+        PipelineStageKind::Transcribe => "转录",
+        PipelineStageKind::Translate => "翻译",
+        PipelineStageKind::SubtitleReview => "字幕校对",
+        PipelineStageKind::Dub => "配音",
+        PipelineStageKind::DubbingReview => "配音确认",
+        PipelineStageKind::Compose => "生成成片",
+        PipelineStageKind::Done => "完成",
+    }
 }
 
 pub(crate) fn sherpa_vad_model_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -150,6 +188,16 @@ pub fn start_task(
                     task.error = Some(error_msg.clone());
                     task.status_message = format!("失败：{}", error_msg);
                     task.updated_at = chrono::Utc::now().to_rfc3339();
+                    if let Some(pipeline) = task.pipeline.as_mut() {
+                        if let Some(kind) = pipeline.current_stage {
+                            if let Some(stage) = pipeline.stage_mut(kind) {
+                                stage.status = PipelineStageStatus::Error;
+                                stage.error = Some(error_msg.clone());
+                                stage.message =
+                                    format!("{}失败，可从当前阶段重试", pipeline_stage_label(kind));
+                            }
+                        }
+                    }
                     let task_clone = task.clone();
                     drop(task_map);
                     emit_task_update_internal(&app, &task_clone);
@@ -267,6 +315,50 @@ async fn run_task_impl(
     .await;
 
     let mut current_track: Option<SubtitleTrack> = None;
+
+    // 审核闸门放行后只从持久化的下游节点继续。这样不会重新读取/上传
+    // 原始音视频，也不会把已经校对过的字幕覆盖掉。
+    if let Some(pipeline) = task.pipeline.as_ref() {
+        if matches!(
+            pipeline.current_stage,
+            Some(PipelineStageKind::Dub)
+                | Some(PipelineStageKind::DubbingReview)
+                | Some(PipelineStageKind::Compose)
+        ) {
+            let subtitle_path = pipeline
+                .subtitle_output_path
+                .as_deref()
+                .or(task.output_path.as_deref())
+                .map(PathBuf::from)
+                .ok_or_else(|| "流水线缺少可继续使用的字幕产物".to_string())?;
+            let pipeline_context = PipelineRunContext {
+                app,
+                tasks: tasks.clone(),
+                app_config_dir: &app_config_dir,
+                task_id,
+                task: &task,
+                media_path: &media_path,
+                subtitle_path: &subtitle_path,
+            };
+            let outcome = continue_pipeline_downstream(&pipeline_context, cancel_rx).await?;
+            if outcome != PipelineRunOutcome::Complete {
+                return Ok(());
+            }
+            return Ok(());
+        }
+        if pipeline.current_stage == Some(PipelineStageKind::Transcribe) {
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::Transcribe,
+                PipelineStageStatus::Running,
+                0.0,
+                "正在准备音频转录...",
+            )
+            .await;
+        }
+    }
 
     if task.task_type != TaskType::TranslateOnly {
         let audio_output_path = work_dir.join("audio.wav");
@@ -743,6 +835,30 @@ async fn run_task_impl(
     let should_translate = task.task_type == TaskType::GenerateAndTranslate
         || task.task_type == TaskType::TranslateOnly;
     if should_translate {
+        if task.pipeline.is_some() {
+            if task.task_type != TaskType::TranslateOnly {
+                update_pipeline_stage(
+                    app,
+                    tasks.clone(),
+                    task_id,
+                    PipelineStageKind::Transcribe,
+                    PipelineStageStatus::Done,
+                    1.0,
+                    "转录完成",
+                )
+                .await;
+            }
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::Translate,
+                PipelineStageStatus::Running,
+                0.0,
+                "正在准备字幕翻译...",
+            )
+            .await;
+        }
         let settings =
             crate::core::settings::load_settings(&app_config_dir).map_err(|e| e.to_string())?;
         let provider = settings.translate_provider.clone();
@@ -1254,7 +1370,72 @@ async fn run_task_impl(
         return Err(format!("重命名字幕文件失败：{}", e));
     }
 
-    // 6. 任务完成更新
+    // 6. 写入统一流水线快照；没有 pipeline 的旧任务继续沿用原有
+    // review → done 语义，保证升级后历史任务不发生状态漂移。
+    if task.pipeline.is_some() {
+        let subtitle_output = final_output_path.to_string_lossy().to_string();
+        if task.task_type != TaskType::TranslateOnly {
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::Transcribe,
+                PipelineStageStatus::Done,
+                1.0,
+                "转录完成",
+            )
+            .await;
+        }
+        if should_translate {
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::Translate,
+                PipelineStageStatus::Done,
+                1.0,
+                "翻译完成",
+            )
+            .await;
+        }
+        set_pipeline_subtitle_output(app, tasks.clone(), task_id, &subtitle_output).await;
+
+        let subtitle_review = task
+            .pipeline
+            .as_ref()
+            .map(|pipeline| pipeline.subtitle_review)
+            .unwrap_or(false);
+        if subtitle_review {
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::SubtitleReview,
+                PipelineStageStatus::Review,
+                1.0,
+                "等待字幕校对",
+            )
+            .await;
+            set_task_review_state(app, tasks.clone(), task_id, "字幕已写出，等待校对后继续").await;
+            return Ok(());
+        }
+
+        let pipeline_context = PipelineRunContext {
+            app,
+            tasks: tasks.clone(),
+            app_config_dir: &app_config_dir,
+            task_id,
+            task: &task,
+            media_path: &media_path,
+            subtitle_path: &final_output_path,
+        };
+        let outcome = continue_pipeline_downstream(&pipeline_context, cancel_rx).await?;
+        if outcome != PipelineRunOutcome::Complete {
+            return Ok(());
+        }
+        return Ok(());
+    }
+
     let mut task_map = tasks.write().await;
     if let Some(t) = task_map.get_mut(task_id) {
         if t.status == TaskStatus::Cancelled {
@@ -1286,6 +1467,885 @@ fn check_cancelled(cancel_rx: &mut tokio::sync::watch::Receiver<bool>) -> bool {
     *cancel_rx.borrow()
 }
 
+async fn update_pipeline_stage(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    kind: PipelineStageKind,
+    status: PipelineStageStatus,
+    progress: f32,
+    message: &str,
+) {
+    let mut task_map = tasks.write().await;
+    let Some(task) = task_map.get_mut(task_id) else {
+        return;
+    };
+    if task.status == TaskStatus::Paused && status == PipelineStageStatus::Running {
+        return;
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(pipeline) = task.pipeline.as_mut() {
+        if let Some(stage) = pipeline.stage_mut(kind) {
+            stage.status = status;
+            stage.progress = progress.clamp(0.0, 1.0);
+            stage.message = message.to_string();
+            stage.error = None;
+            match status {
+                PipelineStageStatus::Running => {
+                    if stage.started_at.is_none() {
+                        stage.started_at = Some(now.clone());
+                    }
+                    stage.completed_at = None;
+                }
+                PipelineStageStatus::Done | PipelineStageStatus::Skipped => {
+                    if stage.started_at.is_none() {
+                        stage.started_at = Some(now.clone());
+                    }
+                    stage.progress = 1.0;
+                    stage.completed_at = Some(now.clone());
+                }
+                PipelineStageStatus::Review | PipelineStageStatus::Error => {
+                    if stage.started_at.is_none() {
+                        stage.started_at = Some(now.clone());
+                    }
+                    stage.completed_at = None;
+                }
+                PipelineStageStatus::Pending => {}
+            }
+        }
+        pipeline.current_stage = Some(kind);
+        if matches!(
+            status,
+            PipelineStageStatus::Done | PipelineStageStatus::Skipped
+        ) {
+            let next_stage = pipeline
+                .stages
+                .iter()
+                .find(|stage| {
+                    matches!(
+                        stage.status,
+                        PipelineStageStatus::Pending
+                            | PipelineStageStatus::Running
+                            | PipelineStageStatus::Review
+                            | PipelineStageStatus::Error
+                    )
+                })
+                .map(|stage| stage.kind);
+            pipeline.current_stage = next_stage;
+        }
+    }
+    if !matches!(task.status, TaskStatus::Cancelled | TaskStatus::Paused)
+        && status == PipelineStageStatus::Running
+    {
+        task.status = TaskStatus::Running;
+    }
+    task.progress = task.progress.max(
+        match kind {
+            PipelineStageKind::Transcribe => 0.78,
+            PipelineStageKind::Translate => 0.94,
+            PipelineStageKind::SubtitleReview => 0.95,
+            PipelineStageKind::Dub => 0.985,
+            PipelineStageKind::DubbingReview => 0.99,
+            PipelineStageKind::Compose => 0.998,
+            PipelineStageKind::Done => 1.0,
+        } * progress.clamp(0.0, 1.0),
+    );
+    task.status_message = message.to_string();
+    task.error = None;
+    task.updated_at = now;
+    let task_clone = task.clone();
+    drop(task_map);
+    emit_task_update_internal(app, &task_clone);
+}
+
+async fn set_pipeline_subtitle_output(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    output_path: &str,
+) {
+    let mut task_map = tasks.write().await;
+    if let Some(task) = task_map.get_mut(task_id) {
+        if let Some(pipeline) = task.pipeline.as_mut() {
+            pipeline.subtitle_output_path = Some(output_path.to_string());
+            pipeline.current_stage = pipeline
+                .stages
+                .iter()
+                .find(|stage| stage.status == PipelineStageStatus::Pending)
+                .map(|stage| stage.kind);
+        }
+        task.output_path = Some(output_path.to_string());
+        task.updated_at = chrono::Utc::now().to_rfc3339();
+        let task_clone = task.clone();
+        drop(task_map);
+        emit_task_update_internal(app, &task_clone);
+    }
+}
+
+async fn set_pipeline_session_id(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    session_id: &str,
+) {
+    let mut task_map = tasks.write().await;
+    if let Some(task) = task_map.get_mut(task_id) {
+        if let Some(pipeline) = task.pipeline.as_mut() {
+            pipeline.dubbing_session_id = Some(session_id.to_string());
+        }
+        task.updated_at = chrono::Utc::now().to_rfc3339();
+        let task_clone = task.clone();
+        drop(task_map);
+        emit_task_update_internal(app, &task_clone);
+    }
+}
+
+async fn set_pipeline_audio_path(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    audio_path: &str,
+) {
+    let mut task_map = tasks.write().await;
+    if let Some(task) = task_map.get_mut(task_id) {
+        if let Some(pipeline) = task.pipeline.as_mut() {
+            pipeline.dubbed_audio_path = Some(audio_path.to_string());
+        }
+        task.updated_at = chrono::Utc::now().to_rfc3339();
+        let task_clone = task.clone();
+        drop(task_map);
+        emit_task_update_internal(app, &task_clone);
+    }
+}
+
+async fn set_pipeline_final_path(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    final_path: &str,
+) {
+    let mut task_map = tasks.write().await;
+    if let Some(task) = task_map.get_mut(task_id) {
+        if let Some(pipeline) = task.pipeline.as_mut() {
+            pipeline.final_video_path = Some(final_path.to_string());
+        }
+        task.updated_at = chrono::Utc::now().to_rfc3339();
+        let task_clone = task.clone();
+        drop(task_map);
+        emit_task_update_internal(app, &task_clone);
+    }
+}
+
+async fn set_task_review_state(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    message: &str,
+) {
+    let mut task_map = tasks.write().await;
+    if let Some(task) = task_map.get_mut(task_id) {
+        if matches!(task.status, TaskStatus::Cancelled | TaskStatus::Paused) {
+            return;
+        }
+        task.status = TaskStatus::Review;
+        task.status_message = message.to_string();
+        task.reviewed_at = None;
+        task.updated_at = chrono::Utc::now().to_rfc3339();
+        let task_clone = task.clone();
+        drop(task_map);
+        emit_task_update_internal(app, &task_clone);
+    }
+}
+
+async fn set_task_done(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    task_id: &str,
+    message: &str,
+) {
+    let mut task_map = tasks.write().await;
+    if let Some(task) = task_map.get_mut(task_id) {
+        if matches!(task.status, TaskStatus::Cancelled | TaskStatus::Paused) {
+            return;
+        }
+        task.status = TaskStatus::Done;
+        task.progress = 1.0;
+        task.status_message = message.to_string();
+        task.updated_at = chrono::Utc::now().to_rfc3339();
+        let task_clone = task.clone();
+        drop(task_map);
+        emit_task_update_internal(app, &task_clone);
+    }
+}
+
+fn pipeline_dubbing_engine(
+    config: &PipelineDubbingConfig,
+) -> Result<DubbingEngineSelection, String> {
+    match config.engine.as_str() {
+        "local" => Ok(DubbingEngineSelection::Local {
+            model_id: config.model_or_provider_id.clone(),
+        }),
+        "cloud" => Ok(DubbingEngineSelection::Cloud {
+            provider_id: config.model_or_provider_id.clone(),
+        }),
+        other => Err(format!("不支持的配音引擎：{other}")),
+    }
+}
+
+fn pipeline_cancel_bridge(
+    cancel_rx: &watch::Receiver<bool>,
+    cancelled: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<()> {
+    let mut receiver = cancel_rx.clone();
+    tokio::spawn(async move {
+        while receiver.changed().await.is_ok() {
+            if *receiver.borrow() {
+                cancelled.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
+    })
+}
+
+async fn handle_pipeline_stop(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    app_config_dir: &Path,
+    task_id: &str,
+    stage: PipelineStageKind,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> PipelineRunOutcome {
+    let current_status = {
+        let task_map = tasks.read().await;
+        task_map
+            .get(task_id)
+            .map(|task| task.status)
+            .unwrap_or(TaskStatus::Cancelled)
+    };
+    if current_status == TaskStatus::Paused {
+        update_pipeline_stage(
+            app,
+            tasks,
+            task_id,
+            stage,
+            PipelineStageStatus::Pending,
+            0.0,
+            &format!("{}已暂停，稍后从当前进度继续", pipeline_stage_label(stage)),
+        )
+        .await;
+        write_task_log(
+            app,
+            app_config_dir,
+            task_id,
+            &format!(
+                "{}阶段已暂停，保留全部中间产物",
+                pipeline_stage_label(stage)
+            ),
+        )
+        .await;
+        PipelineRunOutcome::Paused
+    } else {
+        update_task_cancelled(app, tasks, task_id).await;
+        let _ = cancel_rx;
+        PipelineRunOutcome::Paused
+    }
+}
+
+async fn run_dubbing_stage(
+    context: &PipelineRunContext<'_>,
+    pipeline: &PipelineConfig,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<PipelineRunOutcome, String> {
+    let app = context.app;
+    let tasks = context.tasks.clone();
+    let app_config_dir = context.app_config_dir;
+    let task_id = context.task_id;
+    let task = context.task;
+    let media_path = context.media_path;
+    let subtitle_path = context.subtitle_path;
+    let dubbing = pipeline
+        .dubbing
+        .as_ref()
+        .ok_or_else(|| "流水线缺少配音配置".to_string())?;
+    update_pipeline_stage(
+        app,
+        tasks.clone(),
+        task_id,
+        PipelineStageKind::Dub,
+        PipelineStageStatus::Running,
+        0.0,
+        "准备配音会话...",
+    )
+    .await;
+
+    let session_id = pipeline
+        .dubbing_session_id
+        .as_deref()
+        .filter(|id| get_dubbing_session(app_config_dir, id).is_ok())
+        .map(ToOwned::to_owned);
+    let session_id = match session_id {
+        Some(id) => id,
+        None => {
+            let session = create_dubbing_session(
+                app_config_dir,
+                &subtitle_path.to_string_lossy(),
+                Some(&media_path.to_string_lossy()),
+            )
+            .map_err(|error| error.to_string())?;
+            set_pipeline_session_id(app, tasks.clone(), task_id, &session.id).await;
+            session.id
+        }
+    };
+    let engine = pipeline_dubbing_engine(dubbing)?;
+    let ffmpeg = resolve_sidecar(app, "ffmpeg")?;
+    let session = get_dubbing_session(app_config_dir, &session_id).map_err(|e| e.to_string())?;
+    let total = session.cues.len().max(1);
+
+    for cue in session.cues {
+        if check_cancelled(cancel_rx) {
+            return Ok(handle_pipeline_stop(
+                app,
+                tasks,
+                app_config_dir,
+                task_id,
+                PipelineStageKind::Dub,
+                cancel_rx,
+            )
+            .await);
+        }
+        if matches!(
+            cue.status,
+            crate::core::tts::DubbingCueStatus::Ready
+                | crate::core::tts::DubbingCueStatus::Accepted
+        ) && cue
+            .wav_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path).is_file())
+        {
+            continue;
+        }
+
+        let request = DubbingSynthesizeCueRequest {
+            session_id: session_id.clone(),
+            cue_index: cue.index,
+            engine: engine.clone(),
+            voice: dubbing.voice.clone(),
+            global_speed: dubbing.global_speed,
+            reference_audio_path: dubbing.reference_audio_path.clone(),
+            reference_text: dubbing.reference_text.clone(),
+            num_steps: dubbing.num_steps,
+        };
+        let prepared =
+            prepare_dubbing_cue(app_config_dir, &request).map_err(|error| error.to_string())?;
+        let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
+        let bridge = pipeline_cancel_bridge(cancel_rx, cancelled.clone());
+        let synthesis = match &prepared.config.engine {
+            DubbingEngineSelection::Local { model_id } => {
+                let model = crate::core::tts::resolve_ready_model(app_config_dir, model_id)
+                    .map_err(|error| error.to_string());
+                match model {
+                    Ok(model) => {
+                        let cache = app.state::<crate::state::AppState>().tts_engines.clone();
+                        let request = LocalTtsSynthesisRequest {
+                            model_id: model_id.clone(),
+                            text: prepared.text.clone(),
+                            voice_id: (!prepared.config.voice.is_empty())
+                                .then(|| prepared.config.voice.clone()),
+                            speed: Some(prepared.config.global_speed),
+                            output_path: prepared.output_path.clone(),
+                            reference_audio_path: prepared.config.reference_audio_path.clone(),
+                            reference_text: prepared.config.reference_text.clone(),
+                            num_steps: prepared.config.num_steps,
+                        };
+                        let cache_cancel = cancelled.clone();
+                        tokio::task::spawn_blocking(move || {
+                            crate::core::tts::synthesize_local(&cache, model, request, cache_cancel)
+                        })
+                        .await
+                        .map_err(|error| format!("本地 TTS 工作线程异常：{error}"))?
+                        .map_err(|error| error.to_string())
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            DubbingEngineSelection::Cloud { provider_id } => crate::core::tts::synthesize_cloud(
+                app_config_dir,
+                &ffmpeg,
+                CloudTtsSynthesisRequest {
+                    provider_id: provider_id.clone(),
+                    text: prepared.text.clone(),
+                    voice: (!prepared.config.voice.is_empty())
+                        .then(|| prepared.config.voice.clone()),
+                    speed: Some(prepared.config.global_speed),
+                    output_path: prepared.output_path.clone(),
+                },
+                cancelled.clone(),
+            )
+            .await
+            .map_err(|error| error.to_string()),
+        };
+        bridge.abort();
+
+        let synthesis = match synthesis {
+            Ok(result) => result,
+            Err(error) => {
+                let was_cancelled = cancelled.load(Ordering::Relaxed)
+                    || error.contains("取消")
+                    || error.to_ascii_lowercase().contains("cancel");
+                let _ = fail_dubbing_cue(
+                    app_config_dir,
+                    &session_id,
+                    cue.index,
+                    &error,
+                    was_cancelled,
+                );
+                if was_cancelled || check_cancelled(cancel_rx) {
+                    return Ok(handle_pipeline_stop(
+                        app,
+                        tasks,
+                        app_config_dir,
+                        task_id,
+                        PipelineStageKind::Dub,
+                        cancel_rx,
+                    )
+                    .await);
+                }
+                return Err(error);
+            }
+        };
+        if let Err(error) = complete_dubbing_cue(
+            app_config_dir,
+            &ffmpeg,
+            &prepared,
+            synthesis.duration_ms,
+            cancelled.clone(),
+        )
+        .await
+        {
+            return Err(error.to_string());
+        }
+        let completed = ((cue.index as usize + 1) as f32 / total as f32).clamp(0.0, 1.0);
+        update_pipeline_stage(
+            app,
+            tasks.clone(),
+            task_id,
+            PipelineStageKind::Dub,
+            PipelineStageStatus::Running,
+            completed,
+            &format!("正在配音... ({}/{})", cue.index + 1, total),
+        )
+        .await;
+    }
+
+    let session = get_dubbing_session(app_config_dir, &session_id).map_err(|e| e.to_string())?;
+    for cue in session.cues.clone() {
+        if cue.status == crate::core::tts::DubbingCueStatus::Overlong {
+            let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
+            let bridge = pipeline_cancel_bridge(cancel_rx, cancelled.clone());
+            let result = crate::core::tts::accept_dubbing_overflow(
+                app_config_dir,
+                &ffmpeg,
+                &session_id,
+                cue.index,
+                cancelled.clone(),
+            )
+            .await;
+            bridge.abort();
+            if let Err(error) = result {
+                if cancelled.load(Ordering::Relaxed) || check_cancelled(cancel_rx) {
+                    return Ok(handle_pipeline_stop(
+                        app,
+                        tasks,
+                        app_config_dir,
+                        task_id,
+                        PipelineStageKind::Dub,
+                        cancel_rx,
+                    )
+                    .await);
+                }
+                return Err(error.to_string());
+            }
+        }
+    }
+    let output_path = match pipeline.dubbed_audio_path.clone() {
+        Some(path) if !path.trim().is_empty() => path,
+        _ => {
+            let output_stem = resolve_output_stem(task, media_path)?;
+            reserve_unique_output_path(media_path, output_stem.as_deref(), ".finalsub.dub", "wav")?
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+    if !std::fs::metadata(&output_path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
+    {
+        let cancelled = Arc::new(AtomicBool::new(check_cancelled(cancel_rx)));
+        if check_cancelled(cancel_rx) {
+            return Ok(handle_pipeline_stop(
+                app,
+                tasks,
+                app_config_dir,
+                task_id,
+                PipelineStageKind::Dub,
+                cancel_rx,
+            )
+            .await);
+        }
+        let bridge = pipeline_cancel_bridge(cancel_rx, cancelled.clone());
+        let export_result = export_dubbing_audio(
+            app_config_dir,
+            &ffmpeg,
+            &session_id,
+            &output_path,
+            cancelled.clone(),
+        )
+        .await;
+        bridge.abort();
+        if let Err(error) = export_result {
+            let _ = std::fs::remove_file(&output_path);
+            if cancelled.load(Ordering::Relaxed) || check_cancelled(cancel_rx) {
+                return Ok(handle_pipeline_stop(
+                    app,
+                    tasks,
+                    app_config_dir,
+                    task_id,
+                    PipelineStageKind::Dub,
+                    cancel_rx,
+                )
+                .await);
+            }
+            return Err(error.to_string());
+        }
+    }
+    set_pipeline_audio_path(app, tasks.clone(), task_id, &output_path).await;
+    update_pipeline_stage(
+        app,
+        tasks,
+        task_id,
+        PipelineStageKind::Dub,
+        PipelineStageStatus::Done,
+        1.0,
+        "配音完成",
+    )
+    .await;
+    Ok(PipelineRunOutcome::Complete)
+}
+
+async fn probe_pipeline_audio_tracks(ffmpeg_path: &Path, video_path: &Path) -> usize {
+    let output = tokio::process::Command::new(ffmpeg_path)
+        .arg("-i")
+        .arg(video_path)
+        .output()
+        .await;
+    output
+        .ok()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .filter(|line| line.contains("Stream #") && line.contains("Audio:"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+async fn run_pipeline_ffmpeg(
+    ffmpeg_path: &Path,
+    args: &[String],
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<bool, String> {
+    let mut child = tokio::process::Command::new(ffmpeg_path)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("无法启动成片 FFmpeg：{error}"))?;
+    let mut cancel_wait = cancel_rx.clone();
+    let cancelled = async move {
+        loop {
+            if *cancel_wait.borrow() {
+                return true;
+            }
+            if cancel_wait.changed().await.is_err() {
+                return true;
+            }
+        }
+    };
+    tokio::pin!(cancelled);
+    let status = tokio::select! {
+        result = child.wait() => result.map_err(|error| format!("等待成片 FFmpeg 结束失败：{error}"))?,
+        _ = &mut cancelled => {
+            let _ = child.kill().await;
+            return Ok(false);
+        }
+    };
+    if !status.success() {
+        return Err("视频合成失败，请检查输入媒体与字幕格式".into());
+    }
+    Ok(true)
+}
+
+async fn run_compose_stage(
+    context: &PipelineRunContext<'_>,
+    dubbed_audio_path: Option<&str>,
+    pipeline: &PipelineConfig,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<PipelineRunOutcome, String> {
+    let app = context.app;
+    let tasks = context.tasks.clone();
+    let app_config_dir = context.app_config_dir;
+    let task_id = context.task_id;
+    let task = context.task;
+    let media_path = context.media_path;
+    let subtitle_path = context.subtitle_path;
+    let compose = pipeline
+        .compose
+        .as_ref()
+        .ok_or_else(|| "流水线缺少视频合成配置".to_string())?;
+    if !media_path.is_file() || !subtitle_path.is_file() {
+        return Err("视频或字幕产物已不存在，无法生成成片".into());
+    }
+    let ffmpeg = resolve_sidecar(app, "ffmpeg")?;
+    update_pipeline_stage(
+        app,
+        tasks.clone(),
+        task_id,
+        PipelineStageKind::Compose,
+        PipelineStageStatus::Running,
+        0.0,
+        "准备视频合成...",
+    )
+    .await;
+
+    let mut audio_mode = crate::core::audio::ComposeAudioMode::parse(Some(&compose.audio_mode))
+        .map_err(|error| error.to_string())?;
+    let audio_path = dubbed_audio_path.filter(|path| Path::new(path).is_file());
+    if matches!(
+        audio_mode,
+        crate::core::audio::ComposeAudioMode::Replace
+            | crate::core::audio::ComposeAudioMode::Mix
+            | crate::core::audio::ComposeAudioMode::AddTrack
+    ) && audio_path.is_none()
+    {
+        return Err("成片配置需要配音音轨，但配音产物不存在".into());
+    }
+    if audio_path.is_none() {
+        audio_mode = crate::core::audio::ComposeAudioMode::Keep;
+    }
+    let soft_subtitle = compose.soft_subtitle;
+    let encoder_mode = if soft_subtitle {
+        crate::core::audio::VideoEncoderMode::Cpu
+    } else {
+        crate::core::audio::VideoEncoderMode::parse(Some(&compose.encoder_mode))
+            .map_err(|error| error.to_string())?
+    };
+    let style = crate::core::audio::BurnInStyleOptions::default();
+    let encoding =
+        crate::core::audio::resolve_video_encoding(&ffmpeg, encoder_mode, &style, media_path).await;
+    let original_audio_tracks = if matches!(
+        audio_mode,
+        crate::core::audio::ComposeAudioMode::Mix | crate::core::audio::ComposeAudioMode::AddTrack
+    ) {
+        probe_pipeline_audio_tracks(&ffmpeg, media_path).await
+    } else {
+        0
+    };
+    let extension = if crate::core::audio::compose_requires_mkv(soft_subtitle, audio_mode) {
+        "mkv"
+    } else {
+        "mp4"
+    };
+    let output_path = match pipeline.final_video_path.clone() {
+        Some(path) if !path.trim().is_empty() => path,
+        _ => {
+            let output_stem = resolve_output_stem(task, media_path)?;
+            reserve_unique_output_path(
+                media_path,
+                output_stem.as_deref(),
+                ".finalsub.final",
+                extension,
+            )?
+            .to_string_lossy()
+            .to_string()
+        }
+    };
+    let options = crate::core::audio::ComposeOptions {
+        soft_subtitle,
+        audio_mode,
+        video_encoding: Some(encoding.clone()),
+        audio_path: audio_path.map(ToOwned::to_owned),
+        subtitle_language: task
+            .target_language
+            .clone()
+            .or_else(|| task.source_language.clone()),
+        subtitle_title: Some("FinalSub Subtitles".into()),
+        audio_language: task.target_language.clone(),
+        audio_title: Some("FinalSub Dub".into()),
+        original_audio_tracks,
+    };
+    let mut active_encoding = encoding;
+    let mut args = crate::core::audio::compose_args(
+        &media_path.to_string_lossy(),
+        &subtitle_path.to_string_lossy(),
+        &output_path,
+        &style,
+        &options,
+    )?;
+    if check_cancelled(cancel_rx) {
+        return Ok(handle_pipeline_stop(
+            app,
+            tasks,
+            app_config_dir,
+            task_id,
+            PipelineStageKind::Compose,
+            cancel_rx,
+        )
+        .await);
+    }
+    loop {
+        match run_pipeline_ffmpeg(&ffmpeg, &args, cancel_rx).await {
+            Ok(true) => break,
+            Err(_error)
+                if active_encoding.hardware
+                    && encoder_mode != crate::core::audio::VideoEncoderMode::Cpu =>
+            {
+                let _ = std::fs::remove_file(&output_path);
+                update_pipeline_stage(
+                    app,
+                    tasks.clone(),
+                    task_id,
+                    PipelineStageKind::Compose,
+                    PipelineStageStatus::Running,
+                    0.05,
+                    "硬件编码不可用，已自动切换 CPU 继续",
+                )
+                .await;
+                active_encoding = crate::core::audio::cpu_video_encoding_for_style(&style);
+                args = crate::core::audio::compose_args(
+                    &media_path.to_string_lossy(),
+                    &subtitle_path.to_string_lossy(),
+                    &output_path,
+                    &style,
+                    &crate::core::audio::ComposeOptions {
+                        video_encoding: Some(active_encoding.clone()),
+                        ..options.clone()
+                    },
+                )?;
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&output_path);
+                return Err(error);
+            }
+            Ok(false) => {
+                let _ = std::fs::remove_file(&output_path);
+                return Ok(handle_pipeline_stop(
+                    app,
+                    tasks,
+                    app_config_dir,
+                    task_id,
+                    PipelineStageKind::Compose,
+                    cancel_rx,
+                )
+                .await);
+            }
+        }
+    }
+    set_pipeline_final_path(app, tasks.clone(), task_id, &output_path).await;
+    update_pipeline_stage(
+        app,
+        tasks,
+        task_id,
+        PipelineStageKind::Compose,
+        PipelineStageStatus::Done,
+        1.0,
+        "成片已生成",
+    )
+    .await;
+    Ok(PipelineRunOutcome::Complete)
+}
+
+async fn continue_pipeline_downstream(
+    context: &PipelineRunContext<'_>,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<PipelineRunOutcome, String> {
+    let app = context.app;
+    let tasks = context.tasks.clone();
+    let task_id = context.task_id;
+    let task = context.task;
+    let pipeline = {
+        let task_map = tasks.read().await;
+        task_map
+            .get(task_id)
+            .and_then(|current| current.pipeline.clone())
+            .or_else(|| task.pipeline.clone())
+            .ok_or_else(|| "流水线配置不存在".to_string())?
+    };
+    let current_stage = pipeline.current_stage;
+    let skip_dub = matches!(
+        current_stage,
+        Some(PipelineStageKind::DubbingReview) | Some(PipelineStageKind::Compose)
+    );
+    let mut dubbed_audio = pipeline.dubbed_audio_path.clone();
+    if pipeline.enable_dubbing && !skip_dub {
+        match run_dubbing_stage(context, &pipeline, cancel_rx).await? {
+            PipelineRunOutcome::Paused => return Ok(PipelineRunOutcome::Paused),
+            PipelineRunOutcome::Review => return Ok(PipelineRunOutcome::Review),
+            PipelineRunOutcome::Complete => {}
+        }
+        dubbed_audio = {
+            let refreshed = tasks.read().await;
+            refreshed
+                .get(task_id)
+                .and_then(|current| current.pipeline.as_ref())
+                .and_then(|current| current.dubbed_audio_path.clone())
+                .or(dubbed_audio)
+        };
+
+        if pipeline.dubbing_review {
+            update_pipeline_stage(
+                app,
+                tasks.clone(),
+                task_id,
+                PipelineStageKind::DubbingReview,
+                PipelineStageStatus::Review,
+                1.0,
+                "等待配音确认",
+            )
+            .await;
+            set_task_review_state(app, tasks, task_id, "配音已生成，等待确认后继续").await;
+            return Ok(PipelineRunOutcome::Review);
+        }
+    }
+
+    if pipeline.enable_compose {
+        match run_compose_stage(context, dubbed_audio.as_deref(), &pipeline, cancel_rx).await? {
+            PipelineRunOutcome::Paused => return Ok(PipelineRunOutcome::Paused),
+            PipelineRunOutcome::Review => return Ok(PipelineRunOutcome::Review),
+            PipelineRunOutcome::Complete => {}
+        }
+    }
+
+    update_pipeline_stage(
+        app,
+        tasks.clone(),
+        task_id,
+        PipelineStageKind::Done,
+        PipelineStageStatus::Done,
+        1.0,
+        "流水线已完成",
+    )
+    .await;
+    let done_message = match (pipeline.enable_dubbing, pipeline.enable_compose) {
+        (true, true) => "已完成：字幕、配音与成片均已就绪",
+        (true, false) => "已完成：字幕与配音音轨均已就绪",
+        (false, true) => "已完成：字幕与成片均已就绪",
+        (false, false) => "已完成：字幕已就绪",
+    };
+    set_task_done(app, tasks, task_id, done_message).await;
+    Ok(PipelineRunOutcome::Complete)
+}
+
 async fn update_task_progress(
     app: &AppHandle,
     tasks: Arc<RwLock<HashMap<String, Task>>>,
@@ -1295,8 +2355,8 @@ async fn update_task_progress(
 ) {
     let mut task_map = tasks.write().await;
     if let Some(task) = task_map.get_mut(task_id) {
-        // 如果状态已取消，则不更新
-        if task.status == TaskStatus::Cancelled {
+        // 暂停或取消后的迟到进度不能把任务重新推回 Running。
+        if matches!(task.status, TaskStatus::Cancelled | TaskStatus::Paused) {
             return;
         }
         task.status = TaskStatus::Running;

@@ -436,6 +436,64 @@ export type TranslationContentMode =
   | "source-and-target"
   | "target-and-source";
 
+export type PipelineStageKind =
+  | "transcribe"
+  | "translate"
+  | "subtitle-review"
+  | "dub"
+  | "dubbing-review"
+  | "compose"
+  | "done";
+
+export type PipelineStageStatus =
+  | "pending"
+  | "running"
+  | "review"
+  | "done"
+  | "skipped"
+  | "error";
+
+export interface PipelineStage {
+  kind: PipelineStageKind;
+  status: PipelineStageStatus;
+  progress: number;
+  message: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+}
+
+export interface PipelineDubbingConfig {
+  engine: "local" | "cloud";
+  model_or_provider_id: string;
+  voice: string;
+  global_speed: number;
+  reference_audio_path?: string;
+  reference_text?: string;
+  num_steps?: number;
+}
+
+export interface PipelineComposeConfig {
+  soft_subtitle: boolean;
+  audio_mode: "keep" | "replace" | "mix" | "add-track";
+  encoder_mode: "auto" | "cpu" | "hardware";
+}
+
+export interface PipelineConfig {
+  enable_dubbing: boolean;
+  enable_compose: boolean;
+  subtitle_review: boolean;
+  dubbing_review: boolean;
+  dubbing?: PipelineDubbingConfig;
+  compose?: PipelineComposeConfig;
+  stages?: PipelineStage[];
+  current_stage?: PipelineStageKind | null;
+  subtitle_output_path?: string | null;
+  dubbing_session_id?: string | null;
+  dubbed_audio_path?: string | null;
+  final_video_path?: string | null;
+}
+
 export interface Task {
   id: string;
   task_type: string;
@@ -453,6 +511,7 @@ export interface Task {
   review_required: boolean;
   max_subtitle_chars: number;
   reviewed_at: string | null;
+  pipeline: PipelineConfig | null;
   progress: number;
   status_message: string;
   output_path: string | null;
@@ -734,6 +793,7 @@ export interface CreateTaskRequest {
   strip_chinese_punctuation?: boolean;
   review_required?: boolean;
   max_subtitle_chars?: number;
+  pipeline?: PipelineConfig;
 }
 
 export interface TaskRecipeSnapshot {
@@ -748,6 +808,21 @@ export interface TaskRecipeSnapshot {
   strip_chinese_punctuation: boolean;
   review_required: boolean;
   max_subtitle_chars: number;
+  pipeline?: TaskRecipePipelineSnapshot;
+}
+
+export interface TaskRecipePipelineSnapshot {
+  enable_dubbing: boolean;
+  enable_compose: boolean;
+  subtitle_review: boolean;
+  dubbing_review: boolean;
+  dubbing_engine: "local" | "cloud";
+  dubbing_model_or_provider_id: string;
+  dubbing_voice: string;
+  dubbing_speed: number;
+  compose_soft_subtitle: boolean;
+  compose_audio_mode: "keep" | "replace" | "mix" | "add-track";
+  compose_encoder_mode: "auto" | "cpu" | "hardware";
 }
 
 export interface TaskRecipe {
@@ -1726,12 +1801,47 @@ function createMockTask(): Task {
     review_required: false,
     max_subtitle_chars: 0,
     reviewed_at: null,
+    pipeline: null,
     progress: 1,
     status_message: "已完成",
     output_path: "/Users/example/Movies/demo.finalsub.zh.srt",
     error: null,
     created_at: now,
     updated_at: now,
+  };
+}
+
+function createMockPipelineAfterApproval(): PipelineConfig {
+  const now = new Date().toISOString();
+  return {
+    enable_dubbing: true,
+    enable_compose: true,
+    subtitle_review: true,
+    dubbing_review: false,
+    dubbing: {
+      engine: "local",
+      model_or_provider_id: "kokoro-multi-lang-v1_1",
+      voice: "10",
+      global_speed: 1,
+    },
+    compose: {
+      soft_subtitle: false,
+      audio_mode: "replace",
+      encoder_mode: "auto",
+    },
+    stages: [
+      { kind: "transcribe", status: "done", progress: 1, message: "转录完成", started_at: null, completed_at: now, error: null },
+      { kind: "translate", status: "done", progress: 1, message: "翻译完成", started_at: null, completed_at: now, error: null },
+      { kind: "subtitle-review", status: "done", progress: 1, message: "已确认", started_at: null, completed_at: now, error: null },
+      { kind: "dub", status: "pending", progress: 0, message: "等待配音", started_at: null, completed_at: null, error: null },
+      { kind: "compose", status: "pending", progress: 0, message: "", started_at: null, completed_at: null, error: null },
+      { kind: "done", status: "pending", progress: 0, message: "", started_at: null, completed_at: null, error: null },
+    ],
+    current_stage: "dub",
+    subtitle_output_path: "/Users/example/Movies/needs-review.finalsub.zh.srt",
+    dubbing_session_id: null,
+    dubbed_audio_path: null,
+    final_video_path: null,
   };
 }
 
@@ -2017,7 +2127,38 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
           status: "review",
           review_required: true,
           reviewed_at: null,
-          status_message: "等待人工审核",
+          progress: 0.95,
+          status_message: "字幕已写出，等待校对后继续",
+          pipeline: {
+            enable_dubbing: true,
+            enable_compose: true,
+            subtitle_review: true,
+            dubbing_review: false,
+            dubbing: {
+              engine: "local",
+              model_or_provider_id: "kokoro-multi-lang-v1_1",
+              voice: "10",
+              global_speed: 1,
+            },
+            compose: {
+              soft_subtitle: false,
+              audio_mode: "replace",
+              encoder_mode: "auto",
+            },
+            stages: [
+              { kind: "transcribe", status: "done", progress: 1, message: "转录完成", started_at: null, completed_at: new Date().toISOString(), error: null },
+              { kind: "translate", status: "done", progress: 1, message: "翻译完成", started_at: null, completed_at: new Date().toISOString(), error: null },
+              { kind: "subtitle-review", status: "review", progress: 1, message: "等待字幕校对", started_at: null, completed_at: null, error: null },
+              { kind: "dub", status: "pending", progress: 0, message: "", started_at: null, completed_at: null, error: null },
+              { kind: "compose", status: "pending", progress: 0, message: "", started_at: null, completed_at: null, error: null },
+              { kind: "done", status: "pending", progress: 0, message: "", started_at: null, completed_at: null, error: null },
+            ],
+            current_stage: "subtitle-review",
+            subtitle_output_path: "/Users/example/Movies/needs-review.finalsub.zh.srt",
+            dubbing_session_id: null,
+            dubbed_audio_path: null,
+            final_video_path: null,
+          },
         },
         createMockTask(),
       ];
@@ -2181,18 +2322,26 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return {
         ...createMockTask(),
         id: String(args?.taskId ?? createMockTask().id),
-        review_required: true,
+        status: "pending",
+        review_required: false,
         reviewed_at: new Date().toISOString(),
-        status_message: "审核通过",
+        progress: 0.95,
+        status_message: "审核通过，正在继续后续处理…",
+        output_path: "/Users/example/Movies/needs-review.finalsub.zh.srt",
+        pipeline: createMockPipelineAfterApproval(),
       };
     case "approve_tasks":
       return Array.isArray(args?.taskIds)
         ? args.taskIds.map((taskId) => ({
             ...createMockTask(),
             id: String(taskId),
-            review_required: true,
+            status: "pending" as const,
+            review_required: false,
             reviewed_at: new Date().toISOString(),
-            status_message: "审核通过",
+            progress: 0.95,
+            status_message: "审核通过，正在继续后续处理…",
+            output_path: "/Users/example/Movies/needs-review.finalsub.zh.srt",
+            pipeline: createMockPipelineAfterApproval(),
           }))
         : [];
     case "create_tasks":

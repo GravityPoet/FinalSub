@@ -38,6 +38,9 @@ impl AppState {
             {
                 task.status = crate::core::task_queue::TaskStatus::Paused;
                 task.status_message = "应用上次关闭时未完成，已暂停，可点击继续".into();
+                if let Some(pipeline) = task.pipeline.as_mut() {
+                    pipeline.prepare_current_stage_for_resume("应用关闭时中断，等待继续");
+                }
                 dirty = true;
             }
         }

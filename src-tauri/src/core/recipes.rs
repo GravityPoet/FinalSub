@@ -4,7 +4,22 @@ use uuid::Uuid;
 
 const MAX_RECIPES: usize = 64;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskRecipePipelineSnapshot {
+    pub enable_dubbing: bool,
+    pub enable_compose: bool,
+    pub subtitle_review: bool,
+    pub dubbing_review: bool,
+    pub dubbing_engine: String,
+    pub dubbing_model_or_provider_id: String,
+    pub dubbing_voice: String,
+    pub dubbing_speed: f32,
+    pub compose_soft_subtitle: bool,
+    pub compose_audio_mode: String,
+    pub compose_encoder_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskRecipeSnapshot {
     pub task_type: String,
     pub engine_id: String,
@@ -18,9 +33,11 @@ pub struct TaskRecipeSnapshot {
     pub review_required: bool,
     #[serde(default)]
     pub max_subtitle_chars: i32,
+    #[serde(default)]
+    pub pipeline: Option<TaskRecipePipelineSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskRecipe {
     pub id: String,
     pub name: String,
@@ -191,6 +208,74 @@ fn validate_snapshot(snapshot: &TaskRecipeSnapshot) -> Result<(), String> {
             return Err(format!("Task recipe {label} value is invalid"));
         }
     }
+    if let Some(pipeline) = snapshot.pipeline.as_ref() {
+        if !pipeline.enable_dubbing
+            && !pipeline.enable_compose
+            && !pipeline.subtitle_review
+            && !pipeline.dubbing_review
+        {
+            return Err(
+                "Task recipe pipeline must enable at least one target or review step".into(),
+            );
+        }
+        if (pipeline.enable_dubbing || pipeline.enable_compose)
+            && snapshot.task_type == "translate-only"
+        {
+            return Err("Task recipe media targets require a media task type".into());
+        }
+        if pipeline.dubbing_review && !pipeline.enable_dubbing {
+            return Err("Task recipe dubbing review requires dubbing".into());
+        }
+        if pipeline.enable_dubbing {
+            if !matches!(pipeline.dubbing_engine.as_str(), "local" | "cloud") {
+                return Err("Task recipe dubbing engine is invalid".into());
+            }
+            if pipeline.dubbing_model_or_provider_id.trim().is_empty() {
+                return Err("Task recipe dubbing target is missing".into());
+            }
+            if pipeline.dubbing_engine == "cloud"
+                && Uuid::parse_str(pipeline.dubbing_model_or_provider_id.trim()).is_err()
+            {
+                return Err("Task recipe cloud TTS target is invalid".into());
+            }
+            if !pipeline.dubbing_speed.is_finite() || !(0.5..=2.0).contains(&pipeline.dubbing_speed)
+            {
+                return Err("Task recipe dubbing speed is invalid".into());
+            }
+        }
+        if !matches!(
+            pipeline.compose_audio_mode.as_str(),
+            "keep" | "replace" | "mix" | "add-track"
+        ) {
+            return Err("Task recipe compose audio mode is invalid".into());
+        }
+        if !matches!(
+            pipeline.compose_encoder_mode.as_str(),
+            "auto" | "cpu" | "hardware"
+        ) {
+            return Err("Task recipe compose encoder mode is invalid".into());
+        }
+        if pipeline.enable_compose
+            && pipeline.compose_audio_mode != "keep"
+            && !pipeline.enable_dubbing
+        {
+            return Err("Task recipe compose audio mode requires dubbing".into());
+        }
+        if (pipeline.enable_dubbing || pipeline.enable_compose) && snapshot.output_format == "txt" {
+            return Err("Task recipe downstream targets require timed subtitles".into());
+        }
+        for (label, value) in [
+            (
+                "dubbing target",
+                pipeline.dubbing_model_or_provider_id.as_str(),
+            ),
+            ("dubbing voice", pipeline.dubbing_voice.as_str()),
+        ] {
+            if value.chars().count() > 200 || value.chars().any(char::is_control) {
+                return Err(format!("Task recipe {label} is invalid"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -211,6 +296,7 @@ mod tests {
             strip_chinese_punctuation: false,
             review_required: true,
             max_subtitle_chars: 0,
+            pipeline: None,
         }
     }
 
@@ -269,7 +355,34 @@ mod tests {
     fn legacy_recipe_defaults_to_smart_line_breaking() {
         let mut value = serde_json::to_value(snapshot()).unwrap();
         value.as_object_mut().unwrap().remove("max_subtitle_chars");
+        value.as_object_mut().unwrap().remove("pipeline");
         let restored: TaskRecipeSnapshot = serde_json::from_value(value).unwrap();
         assert_eq!(restored.max_subtitle_chars, 0);
+        assert!(restored.pipeline.is_none());
+    }
+
+    #[test]
+    fn target_driven_recipe_roundtrips_and_rejects_impossible_dependencies() {
+        let mut target_driven = snapshot();
+        target_driven.pipeline = Some(TaskRecipePipelineSnapshot {
+            enable_dubbing: true,
+            enable_compose: true,
+            subtitle_review: true,
+            dubbing_review: false,
+            dubbing_engine: "local".into(),
+            dubbing_model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
+            dubbing_voice: "10".into(),
+            dubbing_speed: 1.0,
+            compose_soft_subtitle: false,
+            compose_audio_mode: "replace".into(),
+            compose_encoder_mode: "auto".into(),
+        });
+        assert!(validate_snapshot(&target_driven).is_ok());
+        let restored: TaskRecipeSnapshot =
+            serde_json::from_value(serde_json::to_value(&target_driven).unwrap()).unwrap();
+        assert_eq!(restored, target_driven);
+
+        target_driven.pipeline.as_mut().unwrap().enable_dubbing = false;
+        assert!(validate_snapshot(&target_driven).is_err());
     }
 }
