@@ -1,3 +1,5 @@
+👉 **[简体中文版本 (Chinese Version)](./README_zh.md)**
+
 <p align="center">
   <img src="./src-tauri/icons/app-icon-source.png" alt="FinalSub Logo" width="120" height="120">
 </p>
