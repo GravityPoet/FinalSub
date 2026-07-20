@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+use crate::core::style_presets::SubtitleStyle;
+
 const MAX_RECIPES: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -17,6 +19,8 @@ pub struct TaskRecipePipelineSnapshot {
     pub compose_soft_subtitle: bool,
     pub compose_audio_mode: String,
     pub compose_encoder_mode: String,
+    #[serde(default)]
+    pub compose_style: Option<SubtitleStyle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -255,6 +259,9 @@ fn validate_snapshot(snapshot: &TaskRecipeSnapshot) -> Result<(), String> {
         ) {
             return Err("Task recipe compose encoder mode is invalid".into());
         }
+        if let Some(style) = pipeline.compose_style.as_ref() {
+            style.validate()?;
+        }
         if pipeline.enable_compose
             && pipeline.compose_audio_mode != "keep"
             && !pipeline.enable_dubbing
@@ -376,6 +383,7 @@ mod tests {
             compose_soft_subtitle: false,
             compose_audio_mode: "replace".into(),
             compose_encoder_mode: "auto".into(),
+            compose_style: Some(SubtitleStyle::default()),
         });
         assert!(validate_snapshot(&target_driven).is_ok());
         let restored: TaskRecipeSnapshot =

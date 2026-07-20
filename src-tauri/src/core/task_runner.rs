@@ -2151,7 +2151,9 @@ async fn run_compose_stage(
         crate::core::audio::VideoEncoderMode::parse(Some(&compose.encoder_mode))
             .map_err(|error| error.to_string())?
     };
-    let style = crate::core::audio::BurnInStyleOptions::default();
+    let style_snapshot = compose.style.clone().unwrap_or_default();
+    style_snapshot.validate()?;
+    let style = style_snapshot.to_burn_in_options();
     let encoding =
         crate::core::audio::resolve_video_encoding(&ffmpeg, encoder_mode, &style, media_path).await;
     let original_audio_tracks = if matches!(

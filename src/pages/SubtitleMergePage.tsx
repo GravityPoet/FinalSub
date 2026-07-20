@@ -19,65 +19,32 @@ import {
   type VideoEncoderInfo,
   type VideoEncoderMode,
   type VideoMetadata,
+  type SubtitleStyle,
 } from "../lib/tauri";
+import { assColorToCss, DEFAULT_SUBTITLE_STYLE } from "../lib/subtitleStyles";
 
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Input, Select } from "../components/ui/Input";
 import { Progress } from "../components/ui/Progress";
-
-function assColorToCss(assColor: string): string {
-  if (!assColor) return "rgb(255, 255, 255)";
-  const cleanColor = assColor.trim().toUpperCase();
-  const match = cleanColor.match(/^&H([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/);
-  if (match) {
-    const aa = match[1];
-    const bb = match[2];
-    const gg = match[3];
-    const rr = match[4];
-    const alpha = (1 - parseInt(aa, 16) / 255).toFixed(2);
-    const r = parseInt(rr, 16);
-    const g = parseInt(gg, 16);
-    const b = parseInt(bb, 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-  const matchNoAlpha = cleanColor.match(/^&H([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/);
-  if (matchNoAlpha) {
-    const bb = matchNoAlpha[1];
-    const gg = matchNoAlpha[2];
-    const rr = matchNoAlpha[3];
-    const r = parseInt(rr, 16);
-    const g = parseInt(gg, 16);
-    const b = parseInt(bb, 16);
-    return `rgb(${r}, ${g}, ${b})`;
-  }
-  return "rgb(255, 255, 255)";
-}
-
-const presets = [
-  { key: "merge.style.classic", font_size: 24, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 30 },
-  { key: "merge.style.movie", font_size: 28, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 40 },
-  { key: "YouTube", font_size: 20, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 20 },
-  { key: "merge.style.minimal", font_size: 22, font_color: "&H00FFFFFF", outline_color: "&H00808080", margin_v: 25 },
-  { key: "merge.style.bold", font_size: 32, font_color: "&H00FFFFFF", outline_color: "&H00000000", margin_v: 35 },
-];
+import { SubtitleStylePresetManager } from "../components/SubtitleStylePresetManager";
 
 export default function SubtitleMergePage() {
   const { t } = useI18n();
   const [videoPath, setVideoPath] = useState("");
   const [subtitlePath, setSubtitlePath] = useState("");
   const [outputPath, setOutputPath] = useState("");
-  const [preset, setPreset] = useState(0);
-  const [fontName, setFontName] = useState("PingFang SC");
-  const [fontSize, setFontSize] = useState(24);
-  const [fontColor, setFontColor] = useState("&H00FFFFFF");
-  const [outlineColor, setOutlineColor] = useState("&H00000000");
-  const [outlineWidth, setOutlineWidth] = useState(2);
-  const [shadow, setShadow] = useState(0);
-  const [backgroundColor, setBackgroundColor] = useState("&H80000000");
-  const [opaqueBackground, setOpaqueBackground] = useState(false);
-  const [alignment, setAlignment] = useState(2);
-  const [marginV, setMarginV] = useState(30);
+  const [activePresetId, setActivePresetId] = useState<string | null>("builtin:classic");
+  const [fontName, setFontName] = useState(DEFAULT_SUBTITLE_STYLE.font_name);
+  const [fontSize, setFontSize] = useState(DEFAULT_SUBTITLE_STYLE.font_size);
+  const [fontColor, setFontColor] = useState(DEFAULT_SUBTITLE_STYLE.font_color);
+  const [outlineColor, setOutlineColor] = useState(DEFAULT_SUBTITLE_STYLE.outline_color);
+  const [outlineWidth, setOutlineWidth] = useState(DEFAULT_SUBTITLE_STYLE.outline_width);
+  const [shadow, setShadow] = useState(DEFAULT_SUBTITLE_STYLE.shadow);
+  const [backgroundColor, setBackgroundColor] = useState(DEFAULT_SUBTITLE_STYLE.background_color);
+  const [opaqueBackground, setOpaqueBackground] = useState(DEFAULT_SUBTITLE_STYLE.opaque_background);
+  const [alignment, setAlignment] = useState(DEFAULT_SUBTITLE_STYLE.alignment);
+  const [marginV, setMarginV] = useState(DEFAULT_SUBTITLE_STYLE.margin_v);
   const [crf, setCrf] = useState(20);
   const [encodingPreset, setEncodingPreset] = useState("medium");
   const [encoderMode, setEncoderMode] = useState<VideoEncoderMode>("auto");
@@ -241,13 +208,31 @@ export default function SubtitleMergePage() {
     if (selected) setOutputPath(selected);
   };
 
-  const applyPreset = (idx: number) => {
-    setPreset(idx);
-    const p = presets[idx];
-    setFontSize(p.font_size);
-    setFontColor(p.font_color);
-    setOutlineColor(p.outline_color);
-    setMarginV(p.margin_v);
+  const currentStyle: SubtitleStyle = {
+    font_name: fontName,
+    font_size: fontSize,
+    font_color: fontColor,
+    outline_color: outlineColor,
+    outline_width: outlineWidth,
+    shadow,
+    background_color: backgroundColor,
+    opaque_background: opaqueBackground,
+    alignment,
+    margin_v: marginV,
+  };
+
+  const applyStyle = (style: SubtitleStyle, presetId: string) => {
+    setActivePresetId(presetId);
+    setFontName(style.font_name);
+    setFontSize(style.font_size);
+    setFontColor(style.font_color);
+    setOutlineColor(style.outline_color);
+    setOutlineWidth(style.outline_width);
+    setShadow(style.shadow);
+    setBackgroundColor(style.background_color);
+    setOpaqueBackground(style.opaque_background);
+    setAlignment(style.alignment);
+    setMarginV(style.margin_v);
   };
 
   const handleBurn = async () => {
@@ -603,23 +588,13 @@ export default function SubtitleMergePage() {
           <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("merge.subtitleStyle")}</h3>
 
           <div className="mb-5">
-            <label className="mb-2 block text-sm font-medium text-text-secondary">{t("merge.preset")}</label>
-            <div className="flex flex-wrap gap-2.5">
-              {presets.map((p, i) => (
-                <button
-                  key={p.key}
-                  onClick={() => applyPreset(i)}
-                  disabled={processing || softSubtitle}
-                  className={`rounded-xl border px-3.5 py-2 text-sm transition duration-150 ${
-                    preset === i
-                      ? "liquid-selected font-semibold text-brand-text"
-                      : "border-border-default text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  {p.key.startsWith("merge.") ? t(p.key as any) : p.key}
-                </button>
-              ))}
-            </div>
+            <SubtitleStylePresetManager
+              currentStyle={currentStyle}
+              activePresetId={activePresetId}
+              disabled={processing || softSubtitle}
+              onApply={applyStyle}
+              onActivePresetRemoved={() => setActivePresetId(null)}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

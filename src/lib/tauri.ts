@@ -473,10 +473,38 @@ export interface PipelineDubbingConfig {
   num_steps?: number;
 }
 
+export interface SubtitleStyle {
+  font_name: string;
+  font_size: number;
+  font_color: string;
+  outline_color: string;
+  outline_width: number;
+  shadow: number;
+  background_color: string;
+  opaque_background: boolean;
+  alignment: number;
+  margin_v: number;
+}
+
+export interface SubtitleStylePreset {
+  id: string;
+  name: string;
+  style: SubtitleStyle;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaveSubtitleStylePresetRequest {
+  id?: string;
+  name: string;
+  style: SubtitleStyle;
+}
+
 export interface PipelineComposeConfig {
   soft_subtitle: boolean;
   audio_mode: "keep" | "replace" | "mix" | "add-track";
   encoder_mode: "auto" | "cpu" | "hardware";
+  style?: SubtitleStyle;
 }
 
 export interface PipelineConfig {
@@ -823,6 +851,7 @@ export interface TaskRecipePipelineSnapshot {
   compose_soft_subtitle: boolean;
   compose_audio_mode: "keep" | "replace" | "mix" | "add-track";
   compose_encoder_mode: "auto" | "cpu" | "hardware";
+  compose_style?: SubtitleStyle;
 }
 
 export interface TaskRecipe {
@@ -865,6 +894,26 @@ export async function saveTaskRecipe(request: SaveTaskRecipeRequest): Promise<Ta
 
 export async function deleteTaskRecipe(recipeId: string): Promise<string> {
   return invoke("delete_task_recipe", { recipeId });
+}
+
+export async function listSubtitleStylePresets(): Promise<SubtitleStylePreset[]> {
+  return invoke("list_subtitle_style_presets");
+}
+
+export async function saveSubtitleStylePreset(
+  request: SaveSubtitleStylePresetRequest,
+): Promise<SubtitleStylePreset> {
+  return invoke("save_subtitle_style_preset", { request });
+}
+
+export async function deleteSubtitleStylePreset(presetId: string): Promise<string> {
+  return invoke("delete_subtitle_style_preset", { presetId });
+}
+
+export async function reorderSubtitleStylePresets(
+  orderedIds: string[],
+): Promise<SubtitleStylePreset[]> {
+  return invoke("reorder_subtitle_style_presets", { orderedIds });
 }
 
 export async function approveTask(taskId: string): Promise<Task> {
@@ -1397,6 +1446,8 @@ function createMockSettings(): Settings {
 let mockSettingsState: Settings | null = null;
 const mockProviderSecrets = new Set<string>();
 let mockTaskRecipes: TaskRecipe[] = [];
+let mockSubtitleStylePresets: SubtitleStylePreset[] = [];
+let mockSubtitleStylePresetSequence = 500;
 let mockTtsModelsState: TtsModelInfo[] | null = null;
 let mockTtsProvidersState: TtsProviderProfile[] = [
   {
@@ -2188,6 +2239,49 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
     case "delete_task_recipe":
       mockTaskRecipes = mockTaskRecipes.filter((recipe) => recipe.id !== args?.recipeId);
       return String(args?.recipeId ?? "");
+    case "list_subtitle_style_presets":
+      return mockSubtitleStylePresets;
+    case "save_subtitle_style_preset": {
+      const request = args?.request as SaveSubtitleStylePresetRequest | undefined;
+      if (!request) throw new Error("Subtitle style preset request is missing");
+      const name = request.name.trim();
+      const duplicate = mockSubtitleStylePresets.some((preset) => (
+        preset.id !== request.id && preset.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase()
+      ));
+      if (duplicate) throw new Error("Subtitle style preset names must be unique");
+      const now = new Date().toISOString();
+      const existing = request.id
+        ? mockSubtitleStylePresets.find((preset) => preset.id === request.id)
+        : undefined;
+      if (request.id && !existing) throw new Error("Subtitle style preset not found");
+      const preset: SubtitleStylePreset = {
+        id: existing?.id ?? `00000000-0000-4000-8000-${String(++mockSubtitleStylePresetSequence).padStart(12, "0")}`,
+        name,
+        style: request.style,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      };
+      mockSubtitleStylePresets = existing
+        ? mockSubtitleStylePresets.map((item) => item.id === preset.id ? preset : item)
+        : [...mockSubtitleStylePresets, preset];
+      return preset;
+    }
+    case "delete_subtitle_style_preset":
+      mockSubtitleStylePresets = mockSubtitleStylePresets.filter((preset) => preset.id !== args?.presetId);
+      return String(args?.presetId ?? "");
+    case "reorder_subtitle_style_presets": {
+      const orderedIds = (args?.orderedIds ?? []) as string[];
+      const byId = new Map(mockSubtitleStylePresets.map((preset) => [preset.id, preset]));
+      if (orderedIds.length !== byId.size || new Set(orderedIds).size !== byId.size) {
+        throw new Error("Subtitle style preset order is invalid");
+      }
+      mockSubtitleStylePresets = orderedIds.map((id) => {
+        const preset = byId.get(id);
+        if (!preset) throw new Error("Subtitle style preset order is invalid");
+        return preset;
+      });
+      return mockSubtitleStylePresets;
+    }
     case "get_task_logs":
       return "[dev browser mock] Task log stream is available inside the Tauri app.";
     case "get_logs": {

@@ -4,6 +4,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::core::style_presets::SubtitleStyle;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TaskStatus {
@@ -120,6 +122,9 @@ pub struct PipelineComposeConfig {
     pub audio_mode: String,
     #[serde(default = "default_compose_encoder_mode")]
     pub encoder_mode: String,
+    /// 完整样式快照。旧任务没有该字段时继续使用历史默认样式。
+    #[serde(default)]
+    pub style: Option<SubtitleStyle>,
 }
 
 fn default_compose_audio_mode() -> String {
@@ -480,6 +485,7 @@ mod tests {
                 soft_subtitle: false,
                 audio_mode: "replace".into(),
                 encoder_mode: "auto".into(),
+                style: Some(SubtitleStyle::default()),
             }),
         );
         assert_eq!(
@@ -503,6 +509,10 @@ mod tests {
             serde_json::from_value(serde_json::to_value(&pipeline).unwrap()).unwrap();
         assert_eq!(restored.current_stage, Some(PipelineStageKind::Transcribe));
         assert_eq!(restored.stages.len(), 7);
+        assert_eq!(
+            restored.compose.unwrap().style,
+            Some(SubtitleStyle::default())
+        );
     }
 
     #[test]
