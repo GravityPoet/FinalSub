@@ -34,11 +34,13 @@ pub use voice_profiles::{
     VoiceSubtitleCue,
 };
 
+pub(crate) use dubbing::synthesis_speed_for_alignment;
 pub use dubbing::{
     accept_dubbing_overflow, complete_dubbing_cue, create_dubbing_session, export_dubbing_audio,
     export_dubbing_subtitle, fail_dubbing_cue, get_dubbing_session, prepare_dubbing_cue,
-    update_dubbing_cue, write_back_dubbing_subtitle, DubbingCue, DubbingCueStatus,
-    DubbingEngineSelection, DubbingRunConfig, DubbingSession, DubbingSubtitleWriteResult,
+    recheck_dubbing_cue, update_dubbing_cue, write_back_dubbing_subtitle, DubbingAlignmentAction,
+    DubbingCue, DubbingCueCompletion, DubbingCueStatus, DubbingEngineSelection,
+    DubbingRecheckDecision, DubbingRunConfig, DubbingSession, DubbingSubtitleWriteResult,
     DubbingSynthesizeCueRequest, PreparedDubbingCue, UpdateDubbingCueRequest,
 };
 pub(crate) use models::resolve_ready_model;
