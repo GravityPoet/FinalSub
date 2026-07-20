@@ -76,7 +76,7 @@ export default function Layout() {
         <div className={`absolute right-4 top-[1.1rem] z-[55] sm:static sm:block sm:border-b sm:border-border-subtle ${collapsed ? "sm:px-0 sm:py-2.5" : "sm:p-3"}`}>
           <ActivityCenter compact={collapsed} />
         </div>
-        <nav className={`hidden gap-1 overflow-x-hidden overflow-y-auto p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sm:px-0 sm:py-3" : "sm:p-3"}`}>
+        <nav className={`hidden gap-1 overflow-x-hidden overflow-y-auto p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sidebar-nav-collapsed sm:px-0 sm:py-3" : "sm:p-3"}`}>
           {navItems.map(({ to, key, icon: Icon }) => {
             const isActive = location.pathname === to;
             return (
