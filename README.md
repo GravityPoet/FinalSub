@@ -1,4 +1,8 @@
-👉 **[简体中文版本 (Chinese Version)](./README_zh.md)**
+<p align="center">
+  <a href="./README_zh.md">
+    <img src="https://img.shields.io/badge/%F0%9F%87%A8%F0%9F%87%B3%20%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87%E7%89%88%E6%9C%AC-Chinese%20Version-red?style=for-the-badge" alt="简体中文">
+  </a>
+</p>
 
 <p align="center">
   <img src="./src-tauri/icons/app-icon-source.png" alt="FinalSub Logo" width="120" height="120">
