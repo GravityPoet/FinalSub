@@ -283,26 +283,27 @@ function Onboarding() {
     setVisible(false);
   };
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4 backdrop-blur-xl">
-      <Card className="liquid-shell relative w-full max-w-2xl overflow-hidden border border-border-strong p-7 shadow-2xl sm:p-9">
-        <span className="pipeline-glow" aria-hidden="true" />
-        <button type="button" onClick={finish} className="absolute right-4 top-4 rounded-lg p-1.5 text-text-tertiary hover:bg-surface-overlay hover:text-text-primary" aria-label={t("onboarding.skip")}><X size={17} /></button>
-        <div className="relative z-10">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand/14 text-brand shadow-[0_0_32px_color-mix(in_srgb,var(--color-brand)_22%,transparent)]"><Icon size={23} /></div>
-          <p className="mt-6 text-xs font-bold uppercase tracking-[0.16em] text-brand">{t("onboarding.eyebrow", { current: step + 1, total: onboardingSteps.length })}</p>
-          <h2 className="mt-3 max-w-xl font-display text-[clamp(1.8rem,5vw,3rem)] font-bold leading-tight tracking-[-0.04em] text-text-primary">{t(current.title)}</h2>
-          <p className="mt-4 max-w-xl text-base leading-7 text-text-secondary">{t(current.desc)}</p>
-          <div className="mt-8 flex items-center justify-between gap-4">
-            <div className="flex gap-1.5">
-              {onboardingSteps.map((_, index) => <span key={index} className={`h-1.5 rounded-full transition-all ${index === step ? "w-8 bg-brand" : "w-3 bg-border-strong"}`} />)}
-            </div>
-            <div className="flex gap-2">
-              {step > 0 && <Button type="button" onClick={() => setStep((value) => value - 1)} variant="secondary" size="sm"><ChevronLeft size={14} />{t("onboarding.back")}</Button>}
-              {step < onboardingSteps.length - 1 ? (
-                <Button type="button" onClick={() => setStep((value) => value + 1)} variant="primary" size="sm">{t("onboarding.next")}<ChevronRight size={14} /></Button>
-              ) : (
-                <Button type="button" onClick={() => { finish(); navigate("/models"); }} variant="primary" size="sm">{t("onboarding.finish")}</Button>
-              )}
+    <div className="pointer-events-none fixed inset-x-3 top-3 z-[90] flex justify-end sm:inset-x-6 sm:top-5">
+      <Card className="pointer-events-auto liquid-shell relative w-full max-w-[34rem] overflow-hidden border border-brand/20 bg-surface-card/95 p-3.5 shadow-xl backdrop-blur-xl sm:p-4">
+        <button type="button" onClick={finish} className="absolute right-2.5 top-2.5 rounded-lg p-1.5 text-text-tertiary transition hover:bg-surface-overlay hover:text-text-primary" aria-label={t("onboarding.skip")}><X size={15} /></button>
+        <div className="relative z-10 flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand"><Icon size={18} /></div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand">{t("onboarding.eyebrow", { current: step + 1, total: onboardingSteps.length })}</p>
+            <h2 className="mt-1 text-sm font-bold tracking-[-0.015em] text-text-primary">{t(current.title)}</h2>
+            <p className="mt-1.5 text-xs leading-5 text-text-secondary">{t(current.desc)}</p>
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <div className="flex gap-1.5">
+                {onboardingSteps.map((_, index) => <span key={index} className={`h-1.5 rounded-full transition-all ${index === step ? "w-8 bg-brand" : "w-3 bg-border-strong"}`} />)}
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                {step > 0 && <Button type="button" onClick={() => setStep((value) => value - 1)} variant="secondary" size="sm"><ChevronLeft size={14} />{t("onboarding.back")}</Button>}
+                {step < onboardingSteps.length - 1 ? (
+                  <Button type="button" onClick={() => setStep((value) => value + 1)} variant="primary" size="sm">{t("onboarding.next")}<ChevronRight size={14} /></Button>
+                ) : (
+                  <Button type="button" onClick={() => { finish(); navigate("/models"); }} variant="primary" size="sm">{t("onboarding.finish")}</Button>
+                )}
+              </div>
             </div>
           </div>
         </div>

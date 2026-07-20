@@ -1090,7 +1090,17 @@ export default function HomePage() {
                   {inputTypeMismatchHint && (
                     <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-xs leading-5 text-warning" role="status">
                       <AlertCircle className="mt-0.5 shrink-0" size={14} />
-                      <span>{inputTypeMismatchHint}</span>
+                      <div className="min-w-0 flex-1">
+                        <p>{inputTypeMismatchHint}</p>
+                        <button
+                          type="button"
+                          onClick={() => handleTaskTypeChange(selectedInputKind === "media" ? "generate-and-translate" : "translate-only")}
+                          className="mt-1.5 inline-flex items-center gap-1 font-semibold text-warning underline decoration-warning/45 underline-offset-2 transition hover:text-warning/80"
+                        >
+                          {selectedInputKind === "media" ? t("home.switchToMediaWorkflow") : t("home.switchToSubtitleWorkflow")}
+                          <ChevronRight size={13} />
+                        </button>
+                      </div>
                     </div>
                   )}
 
