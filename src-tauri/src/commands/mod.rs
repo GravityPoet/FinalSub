@@ -922,6 +922,15 @@ pub fn discover_batch_inputs(
 }
 
 #[tauri::command]
+pub fn discover_mixed_batch_inputs(
+    paths: Vec<String>,
+    recursive: Option<bool>,
+) -> Result<crate::core::batch::MixedBatchInputs, String> {
+    crate::core::batch::discover_mixed_inputs(&paths, recursive.unwrap_or(true))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn delete_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
     let models_dir = model_storage_dir(&state.app_config_dir, &model_id)?;
     models::delete_managed_model(&models_dir, &model_id).map_err(|e| e.to_string())
@@ -1191,6 +1200,8 @@ pub async fn cancel_model_download(
 pub struct CreateTaskRequest {
     pub task_type: String,
     pub media_path: String,
+    #[serde(default)]
+    pub provided_subtitle_path: Option<String>,
     pub engine_id: String,
     pub model_id: String,
     pub source_language: Option<String>,
@@ -1380,14 +1391,34 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
 
     // 如果是 translate-only，校验字幕格式
     if task_type == TaskType::TranslateOnly {
-        validate_translate_only_subtitle_extension(&media_path)?;
+        validate_subtitle_input_file(&media_path)?;
+    }
+
+    let provided_subtitle_path = req
+        .provided_subtitle_path
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(|path| validate_existing_file_path(&path, "Provided subtitle file"))
+        .transpose()?;
+    if task_type == TaskType::TranslateOnly && provided_subtitle_path.is_some() {
+        return Err("仅翻译任务的输入本身就是字幕，不能再附加配对字幕".into());
+    }
+    if let Some(path) = provided_subtitle_path.as_deref() {
+        validate_subtitle_input_file(path)?;
     }
 
     let output_format = validate_subtitle_output_format(req.output_format)?;
     let max_subtitle_chars = validate_max_subtitle_chars(req.max_subtitle_chars)?;
     let output_name = validate_output_name_template(req.output_name)?;
     let translation_content_mode = validate_translation_content_mode(req.translation_content_mode)?;
-    let source_language = validate_source_language_for_engine(&engine_id, req.source_language)?;
+    let source_language = validate_source_language_for_engine(
+        if provided_subtitle_path.is_some() {
+            "provided-subtitle"
+        } else {
+            &engine_id
+        },
+        req.source_language,
+    )?;
     let target_language = match task_type {
         TaskType::GenerateAndTranslate | TaskType::TranslateOnly => Some(validate_non_empty(
             "target_language",
@@ -1414,6 +1445,8 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
     Ok(task_queue::create_task(CreateTaskParams {
         task_type,
         media_path: media_path.to_string_lossy().to_string(),
+        provided_subtitle_path: provided_subtitle_path
+            .map(|path| path.to_string_lossy().to_string()),
         media_name,
         engine_id,
         model_id,
@@ -1449,10 +1482,10 @@ async fn create_tasks_inner(
         .map(prepare_task_request)
         .collect::<Result<Vec<_>, _>>()?;
 
-    if let Some(cloud_task) = new_tasks
-        .iter()
-        .find(|task| task.engine_id == crate::core::asr::cloud::CLOUD_ASR_ENGINE_ID)
-    {
+    if let Some(cloud_task) = new_tasks.iter().find(|task| {
+        task.engine_id == crate::core::asr::cloud::CLOUD_ASR_ENGINE_ID
+            && task.provided_subtitle_path.is_none()
+    }) {
         if cloud_task.model_id != crate::core::asr::cloud::CLOUD_ASR_MODEL_ID {
             return Err(format!(
                 "Unsupported Cloud ASR model reference: {}",
@@ -1534,6 +1567,7 @@ pub async fn create_preview_task(
     let task = task_queue::create_task(CreateTaskParams {
         task_type: TaskType::GenerateOnly,
         media_path: media_path.to_string_lossy().to_string(),
+        provided_subtitle_path: None,
         media_name,
         engine_id: "preview-pipeline".into(),
         model_id: "ffmpeg-sidecar-probe".into(),
@@ -3454,6 +3488,20 @@ fn validate_translate_only_subtitle_extension(path: &Path) -> Result<(), String>
     ))
 }
 
+fn validate_subtitle_input_file(path: &Path) -> Result<(), String> {
+    validate_translate_only_subtitle_extension(path)?;
+    let bytes = std::fs::metadata(path)
+        .map_err(|error| format!("Cannot inspect subtitle file {}: {error}", path.display()))?
+        .len();
+    if bytes > crate::core::subtitle::MAX_SUBTITLE_FILE_BYTES {
+        return Err(format!(
+            "Subtitle file exceeds the 20 MB limit: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn validate_source_language_for_engine(
     engine_id: &str,
     raw: Option<String>,
@@ -4271,6 +4319,57 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_task_input_rejects_files_over_twenty_megabytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let subtitle = temp.path().join("oversized.srt");
+        let file = std::fs::File::create(&subtitle).unwrap();
+        file.set_len(crate::core::subtitle::MAX_SUBTITLE_FILE_BYTES + 1)
+            .unwrap();
+
+        assert!(validate_subtitle_input_file(&subtitle)
+            .unwrap_err()
+            .contains("20 MB"));
+    }
+
+    #[test]
+    fn task_request_persists_a_valid_paired_subtitle_and_rejects_ambiguous_input() {
+        let temp = tempfile::tempdir().unwrap();
+        let media = temp.path().join("episode.mp4");
+        let subtitle = temp.path().join("episode.zh.srt");
+        std::fs::write(&media, b"media").unwrap();
+        std::fs::write(&subtitle, b"1\n00:00:01,000 --> 00:00:02,000\nHello\n\n").unwrap();
+
+        let request =
+            |task_type: &str, media_path: &Path, paired: Option<&Path>| CreateTaskRequest {
+                task_type: task_type.into(),
+                media_path: media_path.to_string_lossy().to_string(),
+                provided_subtitle_path: paired.map(|path| path.to_string_lossy().to_string()),
+                engine_id: "parakeet-mlx".into(),
+                model_id: "parakeet-tdt-0.6b-v2".into(),
+                source_language: Some("zh".into()),
+                target_language: Some("zh".into()),
+                translation_content_mode: None,
+                output_format: Some("srt".into()),
+                output_name: None,
+                strip_chinese_punctuation: None,
+                review_required: None,
+                max_subtitle_chars: None,
+                pipeline: None,
+            };
+
+        let task = prepare_task_request(request("generate-only", &media, Some(&subtitle)))
+            .expect("paired subtitle should be accepted");
+        assert_eq!(
+            task.provided_subtitle_path.as_deref(),
+            Some(subtitle.to_string_lossy().as_ref())
+        );
+
+        let error = prepare_task_request(request("translate-only", &subtitle, Some(&subtitle)))
+            .unwrap_err();
+        assert!(error.contains("不能再附加配对字幕"));
+    }
+
+    #[test]
     fn validate_parakeet_source_language_rejects_non_english_before_task_creation() {
         assert_eq!(
             validate_source_language_for_engine("parakeet-mlx", Some(" en ".into())).unwrap(),
@@ -4433,6 +4532,7 @@ mod tests {
             let mut task = task_queue::create_task(CreateTaskParams {
                 task_type: TaskType::GenerateOnly,
                 media_path: format!("/tmp/{name}.wav"),
+                provided_subtitle_path: None,
                 media_name: format!("{name}.wav"),
                 engine_id: "whisper-cpp".into(),
                 model_id: "small".into(),
@@ -4484,6 +4584,7 @@ mod tests {
         let mut task = task_queue::create_task(CreateTaskParams {
             task_type: TaskType::GenerateAndTranslate,
             media_path: "/tmp/pipeline.mp4".into(),
+            provided_subtitle_path: None,
             media_name: "pipeline.mp4".into(),
             engine_id: "parakeet-mlx".into(),
             model_id: "parakeet-tdt-0.6b-v2".into(),
@@ -4748,6 +4849,7 @@ mod tests {
         let mut task = task_queue::create_task(CreateTaskParams {
             task_type: TaskType::GenerateOnly,
             media_path: "/tmp/video.mp4".into(),
+            provided_subtitle_path: None,
             media_name: "video.mp4".into(),
             engine_id: "whisper-cpp".into(),
             model_id: "small".into(),
@@ -4804,6 +4906,7 @@ mod tests {
         let mut task = task_queue::create_task(CreateTaskParams {
             task_type: TaskType::GenerateAndTranslate,
             media_path: "/tmp/video.mp4".into(),
+            provided_subtitle_path: None,
             media_name: "video.mp4".into(),
             engine_id: "parakeet-mlx".into(),
             model_id: "parakeet-tdt-0.6b-v2".into(),

@@ -575,6 +575,7 @@ export interface Task {
   task_type: string;
   status: string;
   media_path: string;
+  provided_subtitle_path: string | null;
   media_name: string;
   engine_id: string;
   model_id: string;
@@ -847,6 +848,18 @@ export async function discoverBatchInputs(
   return invoke("discover_batch_inputs", { paths, taskType, recursive });
 }
 
+export interface MixedBatchInputs {
+  media: string[];
+  subtitles: string[];
+}
+
+export async function discoverMixedBatchInputs(
+  paths: string[],
+  recursive = true,
+): Promise<MixedBatchInputs> {
+  return invoke("discover_mixed_batch_inputs", { paths, recursive });
+}
+
 export async function deleteModel(modelId: string): Promise<void> {
   return invoke("delete_model", { modelId });
 }
@@ -893,6 +906,7 @@ export async function getModelStatus(modelId: string): Promise<AsrModelInfo | nu
 export interface CreateTaskRequest {
   task_type: string;
   media_path: string;
+  provided_subtitle_path?: string;
   engine_id: string;
   model_id: string;
   source_language?: string;
@@ -2030,6 +2044,7 @@ function createMockTask(): Task {
     task_type: "generate-and-translate",
     status: "done",
     media_path: "/Users/example/Movies/demo.mp4",
+    provided_subtitle_path: null,
     media_name: "demo.mp4",
     engine_id: "parakeet-mlx",
     model_id: "parakeet-tdt-0.6b-v2",
@@ -2449,6 +2464,14 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return createMockModels().find((model) => model.id === args?.modelId) ?? null;
     case "discover_batch_inputs":
       return Array.isArray(args?.paths) ? args.paths : [];
+    case "discover_mixed_batch_inputs": {
+      const paths = Array.isArray(args?.paths) ? args.paths.map(String) : [];
+      const subtitleExtensions = new Set(["srt", "vtt", "ass", "lrc"]);
+      return {
+        media: paths.filter((path) => !subtitleExtensions.has(path.split(".").pop()?.toLowerCase() ?? "")),
+        subtitles: paths.filter((path) => subtitleExtensions.has(path.split(".").pop()?.toLowerCase() ?? "")),
+      } satisfies MixedBatchInputs;
+    }
     case "list_tasks":
       return [
         {
@@ -2727,6 +2750,12 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
             media_path: typeof request === "object" && request && "media_path" in request
               ? String(request.media_path)
               : createMockTask().media_path,
+            provided_subtitle_path: typeof request === "object"
+              && request
+              && "provided_subtitle_path" in request
+              && typeof request.provided_subtitle_path === "string"
+              ? request.provided_subtitle_path
+              : null,
           }))
         : [];
     case "delete_task":

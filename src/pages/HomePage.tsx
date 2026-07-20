@@ -13,6 +13,7 @@ import {
   FolderTree,
   Film,
   Languages,
+  Link2,
   Mic,
   Pencil,
   Play,
@@ -26,7 +27,7 @@ import { useI18n } from "../lib/i18n";
 import {
   createTasks,
   createPreviewTask,
-  discoverBatchInputs,
+  discoverMixedBatchInputs,
   downloadAndInstallUpdate,
   getAppInfo,
   getFfmpegVersion,
@@ -56,6 +57,7 @@ import {
   type UpdateInfo,
   type VideoMetadata,
 } from "../lib/tauri";
+import { pairMediaWithSubtitles } from "../lib/filePairing";
 import {
   BUILT_IN_SUBTITLE_STYLE_PRESETS,
   DEFAULT_SUBTITLE_STYLE,
@@ -182,6 +184,8 @@ export default function HomePage() {
   const [ttsModels, setTtsModels] = useState<TtsModelInfo[]>([]);
   const [ttsProviders, setTtsProviders] = useState<TtsProviderProfile[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [pairedSubtitlePaths, setPairedSubtitlePaths] = useState<string[]>([]);
+  const [manualSubtitlePairs, setManualSubtitlePairs] = useState<Record<string, string>>({});
   // The imported source is an asset, while taskType is only a processing
   // recipe. Keep the asset kind separately so changing the recipe cannot
   // accidentally replace/clear the uploaded path.
@@ -234,30 +238,46 @@ export default function HomePage() {
   const { t } = useI18n();
   const selectedPath = selectedPaths[0] ?? "";
 
-  const commitSelectedPaths = useCallback((paths: string[]) => {
+  const commitSelectedPaths = useCallback((paths: string[], subtitles: string[] = []) => {
     if (paths.length === 0) return;
     const nextKind = sourceInputKindForPath(paths[0]);
     setSelectedPaths(paths);
     setSelectedInputKind(nextKind);
+    setPairedSubtitlePaths(nextKind === "media" ? subtitles : []);
+    setManualSubtitlePairs({});
   }, []);
 
   const clearSelectedPaths = useCallback(() => {
     selectionRequestRef.current += 1;
     setSelectedPaths([]);
     setSelectedInputKind(null);
+    setPairedSubtitlePaths([]);
+    setManualSubtitlePairs({});
   }, []);
 
   const discoverAndCommit = useCallback(async (paths: string[], kind: SourceInputKind) => {
     const requestId = ++selectionRequestRef.current;
-    const discovered = await discoverBatchInputs(
-      paths,
-      kind === "subtitle" ? "translate-only" : "generate-only",
-      true,
-    );
+    const discovered = await discoverMixedBatchInputs(paths, true);
     // A stale drag/paste/dialog response must never overwrite a newer source.
     if (requestId !== selectionRequestRef.current) return;
-    commitSelectedPaths(discovered);
-  }, [commitSelectedPaths]);
+    if (kind === "media" && discovered.media.length > 0) {
+      commitSelectedPaths(discovered.media, discovered.subtitles);
+      return;
+    }
+    if (
+      kind === "media"
+      && discovered.subtitles.length > 0
+      && selectedInputKind === "media"
+      && selectedPaths.length > 0
+    ) {
+      setPairedSubtitlePaths((current) => [...new Set([...current, ...discovered.subtitles])]);
+      return;
+    }
+    const fallback = kind === "subtitle"
+      ? (discovered.subtitles.length > 0 ? discovered.subtitles : discovered.media)
+      : (discovered.media.length > 0 ? discovered.media : discovered.subtitles);
+    commitSelectedPaths(fallback);
+  }, [commitSelectedPaths, selectedInputKind, selectedPaths.length]);
 
   const handleTaskTypeChange = useCallback((nextTaskType: string) => {
     // Deliberately do not touch selectedPaths here. The same uploaded asset
@@ -424,6 +444,18 @@ export default function HomePage() {
       ? Boolean(selectedTtsModel?.status === "ready" && !selectedTtsModel.clone_only)
       : Boolean(selectedTtsProvider?.text_upload_consent)
   );
+  const subtitlePairing = pairMediaWithSubtitles(
+    selectedInputKind === "media" ? selectedPaths : [],
+    pairedSubtitlePaths,
+    manualSubtitlePairs,
+  );
+  const pairedSubtitleCount = subtitlePairing.pairedByMedia.size;
+  const asrFallbackCount = subtitlePairing.unpairedMedia.length;
+  const allSelectedMediaPaired = selectedInputKind === "media"
+    && selectedPaths.length > 0
+    && asrFallbackCount === 0;
+  const visiblePairingMedia = selectedPaths.slice(0, 100);
+  const visiblePairingSubtitles = pairedSubtitlePaths.slice(0, 200);
   const selectedSourcesAreVideo = selectedPaths.every((path) => videoExtensions.includes(fileExtensionFromPath(path)));
   const composeSourceReady = !enableCompose
     || !selectedPath
@@ -434,7 +466,8 @@ export default function HomePage() {
   ) && composeSourceReady;
   const pipelineReady = dubbingReady && downstreamInputReady && timedSubtitleReady;
 
-  const taskNeedsAsr = taskType !== "translate-only";
+  const taskNeedsAsr = taskType !== "translate-only"
+    && (!allSelectedMediaPaired || selectedPaths.length === 0);
   const availableSourceLanguages = taskNeedsAsr
     ? sourceLanguagesForEngine(engineId)
     : sourceLanguageOptions;
@@ -458,7 +491,9 @@ export default function HomePage() {
     && !inputTypeMismatch;
 
   const plannedStages = [
-    ...(taskType === "translate-only" ? [] : [t("home.stageTranscribe")]),
+    ...(taskType === "translate-only"
+      ? []
+      : [allSelectedMediaPaired ? t("home.stageUseExistingSubtitles") : t("home.stageTranscribe")]),
     ...(taskType === "generate-only" ? [] : [t("home.stageTranslate")]),
     ...(reviewRequired ? [t("home.stageSubtitleReview")] : []),
     ...(enableDubbing ? [t("home.stageDub")] : []),
@@ -530,6 +565,54 @@ export default function HomePage() {
     }
   };
 
+  const handleSelectPairedSubtitles = async () => {
+    setError("");
+    try {
+      const selected = await openDialog({
+        multiple: true,
+        filters: [{ name: t("home.subFile"), extensions: subtitleExtensions }],
+      });
+      const paths = (typeof selected === "string" ? [selected] : selected)
+        ?.filter(isSubtitleInputPath);
+      if (paths?.length) {
+        setPairedSubtitlePaths((current) => [...new Set([...current, ...paths])]);
+      }
+    } catch (dialogError) {
+      console.error("Failed to select paired subtitles:", dialogError);
+      setError(t("home.selectFileFailed"));
+    }
+  };
+
+  const handlePairChoice = (mediaPath: string, choice: string) => {
+    setManualSubtitlePairs((current) => {
+      const next = { ...current };
+      if (choice === "__auto__") {
+        delete next[mediaPath];
+        return next;
+      }
+      const subtitlePath = choice === "__asr__" ? "" : choice;
+      for (const [otherMediaPath, assignedSubtitlePath] of Object.entries(next)) {
+        if (otherMediaPath !== mediaPath && assignedSubtitlePath === subtitlePath && subtitlePath) {
+          delete next[otherMediaPath];
+        }
+      }
+      next[mediaPath] = subtitlePath;
+      return next;
+    });
+  };
+
+  const removePairedSubtitle = (subtitlePath: string) => {
+    setPairedSubtitlePaths((current) => current.filter((path) => path !== subtitlePath));
+    setManualSubtitlePairs((current) => Object.fromEntries(
+      Object.entries(current).filter(([, assignedPath]) => assignedPath !== subtitlePath),
+    ));
+  };
+
+  const clearSubtitlePairing = () => {
+    setPairedSubtitlePaths([]);
+    setManualSubtitlePairs({});
+  };
+
   const handleCreate = async () => {
     if (!selectedPath) {
       setError(missingFileHint || (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia")));
@@ -554,6 +637,9 @@ export default function HomePage() {
         return {
           task_type: taskType,
           media_path: mediaPath,
+          provided_subtitle_path: taskType === "translate-only"
+            ? undefined
+            : subtitlePairing.pairedByMedia.get(mediaPath),
           engine_id: engineId,
           model_id: modelId,
           source_language: sourceLanguage,
@@ -1036,7 +1122,7 @@ export default function HomePage() {
         </div>
       )}
 
-      <div className="grid items-start gap-5 min-[1120px]:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid items-start gap-5 min-[1440px]:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-5">
           <Card className="p-6 sm:p-7">
             <div className="grid gap-5 min-[1180px]:grid-cols-[minmax(0,1fr)_minmax(17rem,0.54fr)]">
@@ -1075,6 +1161,12 @@ export default function HomePage() {
                       </p>
                     </div>
                     <div className="ml-auto flex flex-wrap justify-end gap-2">
+                      {selectedInputKind === "media" && selectedPath && (
+                        <Button type="button" onClick={handleSelectPairedSubtitles} variant="secondary" size="sm">
+                          <Link2 size={14} />
+                          {t("home.pairSubtitles")}
+                        </Button>
+                      )}
                       <Button type="button" onClick={handleSelectMedia} variant="secondary" size="sm">
                         <FolderOpen size={14} />
                         {t("home.selectFile")}
@@ -1132,6 +1224,105 @@ export default function HomePage() {
                     </div>
                   )}
 
+                  {selectedInputKind === "media" && selectedPath && pairedSubtitlePaths.length > 0 && (
+                    <section
+                      className="mt-4 rounded-xl border border-border-subtle bg-surface-overlay/55 p-3.5"
+                      aria-labelledby="subtitle-pairing-title"
+                      data-testid="subtitle-pairing"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h4 id="subtitle-pairing-title" className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                            <Link2 size={14} className="text-brand" />
+                            {t("home.pairingTitle")}
+                          </h4>
+                          <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.pairingHint")}</p>
+                        </div>
+                        <Badge variant={asrFallbackCount === 0 ? "success" : "info"}>
+                          {t("home.pairingSummary", { paired: pairedSubtitleCount, asr: asrFallbackCount })}
+                        </Badge>
+                      </div>
+
+                      <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+                        {visiblePairingMedia.map((mediaPath) => {
+                          const hasManualChoice = Object.prototype.hasOwnProperty.call(manualSubtitlePairs, mediaPath);
+                          const manualPath = manualSubtitlePairs[mediaPath];
+                          const choice = hasManualChoice ? (manualPath || "__asr__") : "__auto__";
+                          const effectiveSubtitle = subtitlePairing.pairedByMedia.get(mediaPath);
+                          const subtitleOptions = manualPath && !visiblePairingSubtitles.includes(manualPath)
+                            ? [manualPath, ...visiblePairingSubtitles]
+                            : visiblePairingSubtitles;
+                          return (
+                            <div key={mediaPath} className="grid items-center gap-2 rounded-lg border border-border-subtle/80 bg-surface-raised/45 px-2.5 py-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(12rem,1fr)]">
+                              <div className="min-w-0">
+                                <p className="truncate font-mono text-[11px] font-semibold text-text-secondary" title={mediaPath}>
+                                  {fileNameFromPath(mediaPath)}
+                                </p>
+                                <p className={`mt-0.5 truncate text-[10px] ${effectiveSubtitle ? "text-success" : "text-text-tertiary"}`} title={effectiveSubtitle}>
+                                  {effectiveSubtitle
+                                    ? fileNameFromPath(effectiveSubtitle)
+                                    : t("home.pairWillUseAsr")}
+                                </p>
+                              </div>
+                              <Select
+                                value={choice}
+                                onChange={(event) => handlePairChoice(mediaPath, event.target.value)}
+                                aria-label={t("home.pairSelectFor", { file: fileNameFromPath(mediaPath) })}
+                                className="h-9 text-xs"
+                              >
+                                <option value="__auto__">{t("home.pairAuto")}</option>
+                                <option value="__asr__">{t("home.pairUseAsr")}</option>
+                                {subtitleOptions.map((subtitlePath) => (
+                                  <option key={subtitlePath} value={subtitlePath}>{fileNameFromPath(subtitlePath)}</option>
+                                ))}
+                              </Select>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {(selectedPaths.length > visiblePairingMedia.length || pairedSubtitlePaths.length > visiblePairingSubtitles.length) && (
+                        <p className="mt-2 text-[11px] leading-5 text-text-tertiary">
+                          {t("home.pairingMore", {
+                            media: Math.max(0, selectedPaths.length - visiblePairingMedia.length),
+                            subtitles: Math.max(0, pairedSubtitlePaths.length - visiblePairingSubtitles.length),
+                          })}
+                        </p>
+                      )}
+
+                      {subtitlePairing.unpairedSubtitles.length > 0 && (
+                        <div className="mt-3 border-t border-border-subtle pt-3">
+                          <p className="text-[11px] font-semibold text-text-tertiary">
+                            {t("home.pairUnused", { count: subtitlePairing.unpairedSubtitles.length })}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {subtitlePairing.unpairedSubtitles.slice(0, 12).map((subtitlePath) => (
+                              <button
+                                key={subtitlePath}
+                                type="button"
+                                onClick={() => removePairedSubtitle(subtitlePath)}
+                                title={`${t("home.removePairedSubtitle")}: ${subtitlePath}`}
+                                className="inline-flex max-w-full items-center gap-1 rounded-lg border border-border-subtle bg-surface-overlay px-2 py-1 font-mono text-[10px] text-text-secondary transition hover:border-danger/30 hover:text-danger"
+                              >
+                                <span className="truncate">{fileNameFromPath(subtitlePath)}</span>
+                                <Trash2 size={11} className="shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="mt-3 flex flex-wrap gap-3 border-t border-border-subtle pt-3 text-xs font-semibold">
+                        <button type="button" onClick={handleSelectPairedSubtitles} className="text-brand hover:text-brand-hover">
+                          {t("home.addPairedSubtitles")}
+                        </button>
+                        <button type="button" onClick={clearSubtitlePairing} className="text-text-tertiary hover:text-danger">
+                          {t("home.clearPairing")}
+                        </button>
+                      </div>
+                    </section>
+                  )}
+
                   {!selectedPath && (
                     <p className="mt-4 border-t border-dashed border-border-subtle pt-4 text-center text-xs text-text-tertiary">
                       {dragActive ? t("home.dropNow") : t("home.dragPasteHint")}
@@ -1143,13 +1334,19 @@ export default function HomePage() {
               <section className="core-picker rounded-[1.25rem] border border-brand/15 bg-brand/5 p-4 sm:p-5" aria-labelledby="task-core-title">
                 <div className="flex items-start gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand">
-                    {taskNeedsAsr ? <Cpu size={17} /> : <Languages size={17} />}
+                    {taskNeedsAsr
+                      ? <Cpu size={17} />
+                      : (allSelectedMediaPaired ? <Link2 size={17} /> : <Languages size={17} />)}
                   </span>
                   <div className="min-w-0">
                     <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand">{t("home.coreStep")}</p>
                     <h3 id="task-core-title" className="mt-1 font-display text-lg font-bold tracking-[-0.02em] text-text-primary">{t("home.coreStep")}</h3>
                     <p className="mt-1 text-xs leading-5 text-text-secondary">
-                      {taskNeedsAsr ? t("home.coreHint") : t("home.coreNotRequired")}
+                      {taskNeedsAsr
+                        ? (pairedSubtitleCount > 0
+                          ? t("home.corePartialPairing", { count: asrFallbackCount })
+                          : t("home.coreHint"))
+                        : (allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired"))}
                     </p>
                   </div>
                 </div>
@@ -1203,7 +1400,7 @@ export default function HomePage() {
                   </div>
                 ) : (
                   <div className="mt-4 rounded-xl border border-border-subtle bg-surface-overlay/60 px-3 py-2.5 text-xs leading-5 text-text-secondary">
-                    {t("home.coreNotRequired")}
+                    {allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired")}
                   </div>
                 )}
               </section>
@@ -1724,7 +1921,7 @@ export default function HomePage() {
           </Card>
         </div>
 
-        <aside className="space-y-5 min-[1120px]:sticky min-[1120px]:top-0">
+        <aside className="space-y-5 min-[1440px]:sticky min-[1440px]:top-0">
           <Card className="relative overflow-hidden p-5">
             <span className="pipeline-glow" />
             <div className="relative z-10">

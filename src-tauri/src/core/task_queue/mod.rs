@@ -253,6 +253,8 @@ pub struct Task {
     pub task_type: TaskType,
     pub status: TaskStatus,
     pub media_path: String,
+    #[serde(default)]
+    pub provided_subtitle_path: Option<String>,
     pub media_name: String,
     pub engine_id: String,
     pub model_id: String,
@@ -287,6 +289,8 @@ pub type TaskMap = Arc<RwLock<HashMap<String, Task>>>;
 pub struct CreateTaskParams {
     pub task_type: TaskType,
     pub media_path: String,
+    #[serde(default)]
+    pub provided_subtitle_path: Option<String>,
     pub media_name: String,
     pub engine_id: String,
     pub model_id: String,
@@ -309,6 +313,7 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         task_type: params.task_type,
         status: TaskStatus::Pending,
         media_path: params.media_path,
+        provided_subtitle_path: params.provided_subtitle_path,
         media_name: params.media_name,
         engine_id: params.engine_id,
         model_id: params.model_id,
@@ -393,6 +398,7 @@ mod tests {
         create_task(CreateTaskParams {
             task_type: TaskType::GenerateOnly,
             media_path: format!("/tmp/{name}.wav"),
+            provided_subtitle_path: None,
             media_name: format!("{name}.wav"),
             engine_id: "whisper-cpp".into(),
             model_id: "small".into(),
