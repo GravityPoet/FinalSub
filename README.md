@@ -1,4 +1,4 @@
-# 🌐 [点击这里切换到：中文版 (Chinese Version)](./README_zh.md)
+## 🌐 [点击这里切换到：中文版 (Chinese Version)](./README_zh.md)
 
 <p align="center">
   <img src="./src-tauri/icons/app-icon-source.png" alt="FinalSub Logo" width="120" height="120">
