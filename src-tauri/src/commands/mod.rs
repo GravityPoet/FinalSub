@@ -16,7 +16,8 @@ use crate::core::recipes::{self, SaveTaskRecipeRequest, TaskRecipe};
 use crate::core::settings::{self, Settings};
 use crate::core::subtitle::SubtitleTrack;
 use crate::core::task_queue::{
-    self, CreateTaskParams, Task, TaskMap, TaskStatus, TaskType, TranslationContentMode,
+    self, CreateTaskParams, PipelineConfig, Task, TaskMap, TaskStatus, TaskType,
+    TranslationContentMode,
 };
 use crate::core::translation::{self, TranslationProvider};
 use crate::core::tts::{
@@ -94,6 +95,9 @@ fn prepare_task_for_retry(task: &mut Task) {
     task.reviewed_at = None;
     task.status_message = "准备从上次进度继续...".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
+    if let Some(pipeline) = task.pipeline.as_mut() {
+        pipeline.prepare_current_stage_for_resume("准备从当前阶段重试");
+    }
 }
 
 async fn persist_tasks_snapshot(app_config_dir: &Path, tasks: &TaskMap) -> Result<(), String> {
@@ -1105,6 +1109,154 @@ pub struct CreateTaskRequest {
     pub strip_chinese_punctuation: Option<bool>,
     pub review_required: Option<bool>,
     pub max_subtitle_chars: Option<i32>,
+    #[serde(default)]
+    pub pipeline: Option<PipelineConfig>,
+}
+
+fn normalize_pipeline_config(
+    task_type: TaskType,
+    requested: Option<PipelineConfig>,
+) -> Result<Option<PipelineConfig>, String> {
+    let Some(config) = requested else {
+        return Ok(None);
+    };
+    if !config.enable_dubbing
+        && !config.enable_compose
+        && !config.subtitle_review
+        && !config.dubbing_review
+    {
+        return Ok(None);
+    }
+    if (config.enable_dubbing || config.enable_compose) && task_type == TaskType::TranslateOnly {
+        return Err("配音或成片目标需要音视频输入；仅翻译任务只能输出字幕".into());
+    }
+    if config.dubbing_review && !config.enable_dubbing {
+        return Err("配音确认闸门需要先启用配音目标".into());
+    }
+    if config.enable_dubbing {
+        let dubbing = config
+            .dubbing
+            .as_ref()
+            .ok_or_else(|| "已选择配音目标，但没有配音引擎配置".to_string())?;
+        let engine = dubbing.engine.trim().to_ascii_lowercase();
+        if !matches!(engine.as_str(), "local" | "cloud") {
+            return Err("配音引擎只支持 local 或 cloud".into());
+        }
+        let target_id = dubbing.model_or_provider_id.trim();
+        if target_id.is_empty() || target_id.len() > 200 || target_id.chars().any(char::is_control)
+        {
+            return Err("配音模型或服务实例不能为空".into());
+        }
+        if engine == "cloud" && uuid::Uuid::parse_str(target_id).is_err() {
+            return Err("在线 TTS 实例 ID 无效".into());
+        }
+        if dubbing.voice.chars().any(char::is_control) || dubbing.voice.chars().count() > 200 {
+            return Err("配音音色 ID 无效".into());
+        }
+        if !dubbing.global_speed.is_finite() || !(0.5..=2.0).contains(&dubbing.global_speed) {
+            return Err("整体语速必须在 0.5-2.0 之间".into());
+        }
+        if dubbing
+            .num_steps
+            .is_some_and(|steps| !(1..=20).contains(&steps))
+        {
+            return Err("配音推理步数必须在 1-20 之间".into());
+        }
+        if dubbing
+            .reference_text
+            .as_ref()
+            .is_some_and(|text| text.len() > 20_000 || text.contains('\0'))
+        {
+            return Err("参考文本不能包含空字符，且不能超过 20 KB".into());
+        }
+        if let Some(reference_audio_path) = dubbing
+            .reference_audio_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            let reference_audio_path = Path::new(reference_audio_path);
+            if !reference_audio_path.is_absolute() || !reference_audio_path.is_file() {
+                return Err("参考音频必须是存在的绝对文件路径".into());
+            }
+        }
+    }
+    if config.enable_compose {
+        let compose = config
+            .compose
+            .as_ref()
+            .ok_or_else(|| "已选择成片目标，但没有视频合成配置".to_string())?;
+        if !matches!(
+            compose.audio_mode.trim(),
+            "keep" | "replace" | "mix" | "add-track"
+        ) {
+            return Err("成片音频模式只支持 keep、replace、mix 或 add-track".into());
+        }
+        if compose.audio_mode.trim() != "keep" && !config.enable_dubbing {
+            return Err("替换、混合或新增音轨前，需要先启用配音目标".into());
+        }
+        if !matches!(
+            compose.encoder_mode.trim(),
+            "auto" | "cpu" | "hardware" | "hw"
+        ) {
+            return Err("成片编码模式只支持 auto、cpu 或 hardware".into());
+        }
+    }
+    let normalized_dubbing = config.dubbing.map(|mut value| {
+        value.engine = value.engine.trim().to_ascii_lowercase();
+        value.model_or_provider_id = value.model_or_provider_id.trim().to_string();
+        value.voice = value.voice.trim().to_string();
+        value.reference_audio_path = value
+            .reference_audio_path
+            .map(|path| path.trim().to_string())
+            .filter(|path| !path.is_empty());
+        value.reference_text = value
+            .reference_text
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
+        value
+    });
+    let normalized_compose = config.compose.map(|mut value| {
+        value.audio_mode = value.audio_mode.trim().to_ascii_lowercase();
+        value.encoder_mode = value.encoder_mode.trim().to_ascii_lowercase();
+        value
+    });
+    Ok(Some(PipelineConfig::for_task(
+        task_type,
+        config.enable_dubbing,
+        config.enable_compose,
+        config.subtitle_review,
+        config.dubbing_review && config.enable_dubbing,
+        normalized_dubbing,
+        normalized_compose,
+    )))
+}
+
+fn validate_pipeline_input_contract(
+    media_path: &Path,
+    output_format: &str,
+    pipeline: Option<&PipelineConfig>,
+) -> Result<(), String> {
+    let Some(pipeline) = pipeline else {
+        return Ok(());
+    };
+    if pipeline.has_downstream() && output_format == "txt" {
+        return Err("配音或成片需要带时间轴的字幕格式，请选择 SRT、VTT、ASS 或 LRC".into());
+    }
+    if pipeline.enable_compose {
+        let extension = media_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if !matches!(
+            extension.as_str(),
+            "mp4" | "mkv" | "mov" | "avi" | "webm" | "m4v" | "mpeg" | "mpg" | "ts" | "m2ts"
+        ) {
+            return Err("成片目标需要包含画面的源视频；纯音频只能输出字幕或配音音轨".into());
+        }
+    }
+    Ok(())
 }
 
 fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
@@ -1157,6 +1309,12 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
         .unwrap_or("Unnamed media")
         .to_string();
 
+    let pipeline = normalize_pipeline_config(task_type, req.pipeline)?;
+    validate_pipeline_input_contract(
+        &media_path,
+        output_format.as_deref().unwrap_or("srt"),
+        pipeline.as_ref(),
+    )?;
     Ok(task_queue::create_task(CreateTaskParams {
         task_type,
         media_path: media_path.to_string_lossy().to_string(),
@@ -1171,6 +1329,7 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
         strip_chinese_punctuation: req.strip_chinese_punctuation.unwrap_or(false),
         review_required: req.review_required.unwrap_or(false),
         max_subtitle_chars,
+        pipeline,
     }))
 }
 
@@ -1290,6 +1449,7 @@ pub async fn create_preview_task(
         strip_chinese_punctuation: false,
         review_required: false,
         max_subtitle_chars: 0,
+        pipeline: None,
     });
     let task_clone = task.clone();
     state.tasks.write().await.insert(task.id.clone(), task);
@@ -1354,6 +1514,29 @@ async fn approve_tasks_by_ids(
     for task in &approved {
         emit_task_update(app, task);
     }
+
+    let mut starts = Vec::new();
+    {
+        let mut controls = state.task_controls.write().await;
+        for task in &approved {
+            if task.status != TaskStatus::Pending {
+                continue;
+            }
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+            controls.insert(task.id.clone(), cancel_tx);
+            starts.push((task.id.clone(), cancel_rx));
+        }
+    }
+    for (task_id, cancel_rx) in starts {
+        crate::core::task_runner::start_task(
+            app.clone(),
+            state.tasks.clone(),
+            state.task_controls.clone(),
+            state.app_config_dir.clone(),
+            task_id,
+            cancel_rx,
+        );
+    }
     Ok(approved)
 }
 
@@ -1381,8 +1564,62 @@ fn approve_review_tasks(
         let task = next
             .get_mut(task_id)
             .ok_or_else(|| format!("task not found: {task_id}"))?;
-        task.status = TaskStatus::Done;
-        task.status_message = "审核通过".into();
+        let mut resume_stage = None;
+        let mut pipeline_finished = false;
+        if let Some(pipeline) = task.pipeline.as_mut() {
+            let review_stage = pipeline
+                .current_stage
+                .filter(|kind| {
+                    pipeline.stage(*kind).is_some_and(|stage| {
+                        stage.status == task_queue::PipelineStageStatus::Review
+                    })
+                })
+                .or_else(|| {
+                    pipeline
+                        .stages
+                        .iter()
+                        .find(|stage| stage.status == task_queue::PipelineStageStatus::Review)
+                        .map(|stage| stage.kind)
+                });
+            if let Some(review_stage) = review_stage {
+                if let Some(stage) = pipeline.stage_mut(review_stage) {
+                    stage.status = task_queue::PipelineStageStatus::Done;
+                    stage.progress = 1.0;
+                    stage.message = "已确认".into();
+                    stage.error = None;
+                    stage.completed_at = Some(reviewed_at.to_string());
+                }
+                resume_stage = pipeline
+                    .stages
+                    .iter()
+                    .find(|stage| stage.status == task_queue::PipelineStageStatus::Pending)
+                    .map(|stage| stage.kind);
+                if resume_stage == Some(task_queue::PipelineStageKind::Done) {
+                    if let Some(done) = pipeline.stage_mut(task_queue::PipelineStageKind::Done) {
+                        done.status = task_queue::PipelineStageStatus::Done;
+                        done.progress = 1.0;
+                        done.message = "流水线已完成".into();
+                        done.started_at = Some(reviewed_at.to_string());
+                        done.completed_at = Some(reviewed_at.to_string());
+                    }
+                    resume_stage = None;
+                    pipeline_finished = true;
+                }
+                pipeline.current_stage = resume_stage;
+            }
+        }
+        if pipeline_finished || task.pipeline.is_none() {
+            task.status = TaskStatus::Done;
+            task.progress = 1.0;
+            task.status_message = "审核通过".into();
+        } else if resume_stage.is_some() {
+            task.status = TaskStatus::Pending;
+            task.status_message = "审核通过，正在继续后续处理...".into();
+        } else {
+            task.status = TaskStatus::Done;
+            task.progress = 1.0;
+            task.status_message = "审核通过".into();
+        }
         task.reviewed_at = Some(reviewed_at.to_string());
         task.updated_at = reviewed_at.to_string();
         approved.push(task.clone());
@@ -1482,6 +1719,9 @@ pub async fn pause_task(
     task.status = TaskStatus::Paused;
     task.status_message = "Paused".into();
     task.updated_at = chrono::Utc::now().to_rfc3339();
+    if let Some(pipeline) = task.pipeline.as_mut() {
+        pipeline.prepare_current_stage_for_resume("已暂停，稍后从当前阶段继续");
+    }
     let task_clone = task.clone();
     drop(tasks);
 
@@ -4034,6 +4274,7 @@ mod tests {
                 strip_chinese_punctuation: false,
                 review_required: true,
                 max_subtitle_chars: 0,
+                pipeline: None,
             });
             task.status = TaskStatus::Review;
             task.output_path = Some(format!("/tmp/{name}.srt"));
@@ -4066,6 +4307,190 @@ mod tests {
         invalid.get_mut(&second.id).unwrap().status = TaskStatus::Done;
         assert!(approve_review_tasks(&invalid, &ids, "2026-07-19T00:00:00Z").is_err());
         assert_eq!(invalid[&first.id].status, TaskStatus::Review);
+    }
+
+    #[test]
+    fn pipeline_review_approval_advances_to_persisted_downstream_stage() {
+        let mut task = task_queue::create_task(CreateTaskParams {
+            task_type: TaskType::GenerateAndTranslate,
+            media_path: "/tmp/pipeline.mp4".into(),
+            media_name: "pipeline.mp4".into(),
+            engine_id: "parakeet-mlx".into(),
+            model_id: "parakeet-tdt-0.6b-v2".into(),
+            source_language: Some("auto".into()),
+            target_language: Some("zh".into()),
+            translation_content_mode: TranslationContentMode::TargetOnly,
+            output_format: Some("srt".into()),
+            output_name: None,
+            strip_chinese_punctuation: false,
+            review_required: false,
+            max_subtitle_chars: 0,
+            pipeline: Some(task_queue::PipelineConfig::for_task(
+                TaskType::GenerateAndTranslate,
+                true,
+                true,
+                true,
+                false,
+                Some(task_queue::PipelineDubbingConfig {
+                    engine: "local".into(),
+                    model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
+                    voice: "10".into(),
+                    global_speed: 1.0,
+                    reference_audio_path: None,
+                    reference_text: None,
+                    num_steps: None,
+                }),
+                Some(task_queue::PipelineComposeConfig {
+                    soft_subtitle: false,
+                    audio_mode: "replace".into(),
+                    encoder_mode: "auto".into(),
+                }),
+            )),
+        });
+        task.status = TaskStatus::Review;
+        task.output_path = Some("/tmp/pipeline.finalsub.zh.srt".into());
+        let pipeline = task.pipeline.as_mut().unwrap();
+        for kind in [
+            task_queue::PipelineStageKind::Transcribe,
+            task_queue::PipelineStageKind::Translate,
+        ] {
+            let stage = pipeline.stage_mut(kind).unwrap();
+            stage.status = task_queue::PipelineStageStatus::Done;
+            stage.progress = 1.0;
+        }
+        let review = pipeline
+            .stage_mut(task_queue::PipelineStageKind::SubtitleReview)
+            .unwrap();
+        review.status = task_queue::PipelineStageStatus::Review;
+        review.progress = 1.0;
+        pipeline.current_stage = Some(task_queue::PipelineStageKind::SubtitleReview);
+
+        let id = task.id.clone();
+        let original = HashMap::from([(id.clone(), task)]);
+        let (approved_map, approved) =
+            approve_review_tasks(&original, std::slice::from_ref(&id), "2026-07-20T00:00:00Z")
+                .unwrap();
+        assert_eq!(approved.len(), 1);
+        assert_eq!(approved[0].status, TaskStatus::Pending);
+        let advanced = approved_map[&id].pipeline.as_ref().unwrap();
+        assert_eq!(
+            advanced.current_stage,
+            Some(task_queue::PipelineStageKind::Dub)
+        );
+        assert_eq!(
+            advanced
+                .stage(task_queue::PipelineStageKind::SubtitleReview)
+                .unwrap()
+                .status,
+            task_queue::PipelineStageStatus::Done
+        );
+    }
+
+    #[test]
+    fn pipeline_request_rejects_media_targets_for_translation_only() {
+        let config = task_queue::PipelineConfig::for_task(
+            TaskType::TranslateOnly,
+            false,
+            true,
+            false,
+            false,
+            None,
+            Some(task_queue::PipelineComposeConfig {
+                soft_subtitle: false,
+                audio_mode: "keep".into(),
+                encoder_mode: "auto".into(),
+            }),
+        );
+        assert!(normalize_pipeline_config(TaskType::TranslateOnly, Some(config)).is_err());
+    }
+
+    #[test]
+    fn pipeline_request_rejects_unresolved_audio_dependencies_and_bad_cloud_ids() {
+        let review_without_dubbing = task_queue::PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            false,
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
+        assert!(
+            normalize_pipeline_config(TaskType::GenerateOnly, Some(review_without_dubbing))
+                .is_err()
+        );
+
+        let compose_without_dubbing = task_queue::PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            false,
+            true,
+            false,
+            false,
+            None,
+            Some(task_queue::PipelineComposeConfig {
+                soft_subtitle: false,
+                audio_mode: "replace".into(),
+                encoder_mode: "auto".into(),
+            }),
+        );
+        assert!(
+            normalize_pipeline_config(TaskType::GenerateOnly, Some(compose_without_dubbing))
+                .is_err()
+        );
+
+        let invalid_cloud_id = task_queue::PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            true,
+            false,
+            false,
+            false,
+            Some(task_queue::PipelineDubbingConfig {
+                engine: "cloud".into(),
+                model_or_provider_id: "not-a-provider-uuid".into(),
+                voice: String::new(),
+                global_speed: 1.0,
+                reference_audio_path: None,
+                reference_text: None,
+                num_steps: None,
+            }),
+            None,
+        );
+        assert!(normalize_pipeline_config(TaskType::GenerateOnly, Some(invalid_cloud_id)).is_err());
+    }
+
+    #[test]
+    fn pipeline_input_contract_requires_video_and_timed_subtitles_for_downstream_work() {
+        let compose = task_queue::PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            false,
+            true,
+            false,
+            false,
+            None,
+            Some(task_queue::PipelineComposeConfig {
+                soft_subtitle: false,
+                audio_mode: "keep".into(),
+                encoder_mode: "auto".into(),
+            }),
+        );
+        assert!(validate_pipeline_input_contract(
+            Path::new("/tmp/audio.wav"),
+            "srt",
+            Some(&compose)
+        )
+        .is_err());
+        assert!(validate_pipeline_input_contract(
+            Path::new("/tmp/video.mp4"),
+            "txt",
+            Some(&compose)
+        )
+        .is_err());
+        assert!(validate_pipeline_input_contract(
+            Path::new("/tmp/video.mp4"),
+            "srt",
+            Some(&compose)
+        )
+        .is_ok());
     }
 
     #[test]
@@ -4113,6 +4538,7 @@ mod tests {
             strip_chinese_punctuation: false,
             review_required: false,
             max_subtitle_chars: 0,
+            pipeline: None,
         });
 
         task.status = TaskStatus::Paused;
@@ -4168,6 +4594,7 @@ mod tests {
             strip_chinese_punctuation: false,
             review_required: false,
             max_subtitle_chars: 0,
+            pipeline: None,
         });
         task.status = TaskStatus::Error;
         task.progress = 0.87;

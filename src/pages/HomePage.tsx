@@ -11,6 +11,7 @@ import {
   FileVideo,
   FolderOpen,
   FolderTree,
+  Film,
   Languages,
   Mic,
   Pencil,
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Volume2,
 } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import {
@@ -29,6 +31,8 @@ import {
   getAppInfo,
   getFfmpegVersion,
   listAsrModels,
+  listTtsModels,
+  listTtsProviders,
   listenDragDrop,
   getSettings,
   checkForUpdate,
@@ -44,6 +48,8 @@ import {
   type TranslationContentMode,
   type TaskRecipe,
   type TaskRecipeSnapshot,
+  type TtsModelInfo,
+  type TtsProviderProfile,
   type UpdateInfo,
   type VideoMetadata,
 } from "../lib/tauri";
@@ -56,6 +62,10 @@ import { Badge } from "../components/ui/Badge";
 const mediaExtensions = [
   "mp4", "mkv", "mov", "avi", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts",
   "mp3", "wav", "m4a", "flac", "aac", "ogg", "opus", "wma",
+];
+
+const videoExtensions = [
+  "mp4", "mkv", "mov", "avi", "webm", "m4v", "mpeg", "mpg", "ts", "m2ts",
 ];
 
 const subtitleExtensions = ["srt", "vtt", "ass", "lrc"];
@@ -161,6 +171,8 @@ export default function HomePage() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [ffmpegVersion, setFfmpegVersion] = useState<string>("detecting");
   const [models, setModels] = useState<AsrModelInfo[]>([]);
+  const [ttsModels, setTtsModels] = useState<TtsModelInfo[]>([]);
+  const [ttsProviders, setTtsProviders] = useState<TtsProviderProfile[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   // The imported source is an asset, while taskType is only a processing
   // recipe. Keep the asset kind separately so changing the recipe cannot
@@ -189,6 +201,16 @@ export default function HomePage() {
   const [customSubtitleDraft, setCustomSubtitleDraft] = useState("40");
   const [stripChinesePunctuation, setStripChinesePunctuation] = useState(false);
   const [reviewRequired, setReviewRequired] = useState(false);
+  const [enableDubbing, setEnableDubbing] = useState(false);
+  const [enableCompose, setEnableCompose] = useState(false);
+  const [dubbingReview, setDubbingReview] = useState(false);
+  const [dubbingEngine, setDubbingEngine] = useState<"local" | "cloud">("local");
+  const [dubbingTargetId, setDubbingTargetId] = useState("");
+  const [dubbingVoice, setDubbingVoice] = useState("");
+  const [dubbingSpeed, setDubbingSpeed] = useState(1);
+  const [composeSoftSubtitle, setComposeSoftSubtitle] = useState(false);
+  const [composeAudioMode, setComposeAudioMode] = useState<"replace" | "mix" | "add-track">("replace");
+  const [composeEncoderMode, setComposeEncoderMode] = useState<"auto" | "cpu" | "hardware">("auto");
   const [dragActive, setDragActive] = useState(false);
   const [recipes, setRecipes] = useState<TaskRecipe[]>([]);
   const [recipeNotice, setRecipeNotice] = useState("");
@@ -238,8 +260,10 @@ export default function HomePage() {
   const loadWorkspace = useCallback(async () => {
     setBootstrapState("loading");
     try {
-      const [loadedModels, settings, loadedRecipes] = await Promise.all([
+      const [loadedModels, loadedTtsModels, loadedTtsProviders, settings, loadedRecipes] = await Promise.all([
         listAsrModels(),
+        listTtsModels(),
+        listTtsProviders(),
         getSettings(),
         listTaskRecipes().catch((recipeError) => {
           console.error("Failed to load task recipes:", recipeError);
@@ -261,6 +285,8 @@ export default function HomePage() {
       ) ?? loadedModels.find((model) => model.engine_id === nextEngineId);
 
       setModels(loadedModels);
+      setTtsModels(loadedTtsModels);
+      setTtsProviders(loadedTtsProviders);
       setRecipes(loadedRecipes);
       setEngineId(nextEngineId);
       setModelId(nextModel?.id ?? "");
@@ -279,6 +305,19 @@ export default function HomePage() {
           ? settings.subtitle_output_format
           : "srt",
       );
+      const readyLocalTts = loadedTtsModels.find(
+        (model) => model.status === "ready" && !model.clone_only,
+      );
+      const readyCloudTts = loadedTtsProviders.find((provider) => provider.text_upload_consent);
+      if (readyLocalTts) {
+        setDubbingEngine("local");
+        setDubbingTargetId(readyLocalTts.id);
+        setDubbingVoice(readyLocalTts.default_voice_id);
+      } else if (readyCloudTts) {
+        setDubbingEngine("cloud");
+        setDubbingTargetId(readyCloudTts.id);
+        setDubbingVoice(readyCloudTts.voice);
+      }
       setBootstrapState("ready");
 
       if (settings.check_update_on_startup) {
@@ -352,6 +391,23 @@ export default function HomePage() {
 
   const engineModels = models.filter((m) => m.engine_id === engineId);
   const engines = [...new Set(models.map((m) => m.engine_id))];
+  const readyTtsModels = ttsModels.filter((model) => model.status === "ready" && !model.clone_only);
+  const selectedTtsModel = ttsModels.find((model) => model.id === dubbingTargetId);
+  const selectedTtsProvider = ttsProviders.find((provider) => provider.id === dubbingTargetId);
+  const dubbingReady = !enableDubbing || (
+    dubbingEngine === "local"
+      ? Boolean(selectedTtsModel?.status === "ready" && !selectedTtsModel.clone_only)
+      : Boolean(selectedTtsProvider?.text_upload_consent)
+  );
+  const selectedSourcesAreVideo = selectedPaths.every((path) => videoExtensions.includes(fileExtensionFromPath(path)));
+  const composeSourceReady = !enableCompose
+    || !selectedPath
+    || (selectedSourcesAreVideo && (selectedPaths.length > 1 || Boolean(mediaMetadata?.width)));
+  const timedSubtitleReady = (!enableDubbing && !enableCompose) || outputFormat !== "txt";
+  const downstreamInputReady = (
+    (!enableDubbing && !enableCompose) || taskType !== "translate-only"
+  ) && composeSourceReady;
+  const pipelineReady = dubbingReady && downstreamInputReady && timedSubtitleReady;
 
   const taskNeedsAsr = taskType !== "translate-only";
   const availableSourceLanguages = taskNeedsAsr
@@ -373,7 +429,23 @@ export default function HomePage() {
   const canStartTask = bootstrapState === "ready"
     && (!taskNeedsAsr || sourceLanguageSupported)
     && modelReady
+    && pipelineReady
     && !inputTypeMismatch;
+
+  const plannedStages = [
+    ...(taskType === "translate-only" ? [] : [t("home.stageTranscribe")]),
+    ...(taskType === "generate-only" ? [] : [t("home.stageTranslate")]),
+    ...(reviewRequired ? [t("home.stageSubtitleReview")] : []),
+    ...(enableDubbing ? [t("home.stageDub")] : []),
+    ...(enableDubbing && dubbingReview ? [t("home.stageDubbingReview")] : []),
+    ...(enableCompose ? [t("home.stageCompose")] : []),
+    t("home.stageDeliver"),
+  ];
+  const deliveryTargets = [
+    t("home.targetSubtitle"),
+    ...(enableDubbing ? [t("home.targetDubbing")] : []),
+    ...(enableCompose ? [t("home.targetVideo")] : []),
+  ].join(" · ");
 
   useEffect(() => {
     if (!sourceLanguageSupported) {
@@ -390,6 +462,13 @@ export default function HomePage() {
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
     : "";
   const modelPrerequisiteHint = selectedPath && !modelReady ? t("home.prereqModel") : "";
+  const pipelinePrerequisiteHint = !composeSourceReady
+    ? t("home.pipelineNeedsVideo")
+    : (!downstreamInputReady
+      ? t("home.pipelineNeedsMedia")
+      : (enableDubbing && !dubbingReady
+        ? t("home.pipelineNeedsTts")
+        : (!timedSubtitleReady ? t("home.pipelineNeedsTimedSubtitle") : "")));
 
   const handleSelectMedia = async () => {
     setError("");
@@ -436,7 +515,7 @@ export default function HomePage() {
       return;
     }
     if (!canStartTask) {
-      setError(modelPrerequisiteHint || t("home.prereqModel"));
+      setError(modelPrerequisiteHint || pipelinePrerequisiteHint || t("home.prereqModel"));
       return;
     }
     setCreating(true);
@@ -446,6 +525,7 @@ export default function HomePage() {
         const resolvedOutputName = outputName.trim()
           ? outputName.trim().split("{index}").join(String(index + 1).padStart(2, "0"))
           : undefined;
+        const pipelineEnabled = reviewRequired || enableDubbing || enableCompose || dubbingReview;
         return {
           task_type: taskType,
           media_path: mediaPath,
@@ -458,8 +538,25 @@ export default function HomePage() {
           output_format: outputFormat,
           output_name: resolvedOutputName,
           strip_chinese_punctuation: stripChinesePunctuation,
-          review_required: reviewRequired,
+          review_required: pipelineEnabled ? false : reviewRequired,
           max_subtitle_chars: maxSubtitleChars,
+          pipeline: pipelineEnabled ? {
+            enable_dubbing: enableDubbing,
+            enable_compose: enableCompose,
+            subtitle_review: reviewRequired,
+            dubbing_review: enableDubbing && dubbingReview,
+            dubbing: enableDubbing ? {
+              engine: dubbingEngine,
+              model_or_provider_id: dubbingTargetId,
+              voice: dubbingVoice,
+              global_speed: dubbingSpeed,
+            } : undefined,
+            compose: enableCompose ? {
+              soft_subtitle: composeSoftSubtitle,
+              audio_mode: enableDubbing ? composeAudioMode : "keep" as const,
+              encoder_mode: composeEncoderMode,
+            } : undefined,
+          } : undefined,
         };
       });
       await createTasks(requests);
@@ -521,12 +618,51 @@ export default function HomePage() {
     }
   };
 
+  const recipeLocalTts = readyTtsModels[0]
+    ?? ttsModels.find((model) => !model.clone_only);
+  const recipeCloudTts = ttsProviders.find((provider) => provider.text_upload_consent)
+    ?? ttsProviders[0];
+  const recipeDubbingEngine: "local" | "cloud" = recipeLocalTts ? "local" : "cloud";
+  const recipeDubbingTarget = recipeLocalTts?.id ?? recipeCloudTts?.id ?? "tts-not-configured";
+  const recipeDubbingVoice = recipeLocalTts?.default_voice_id ?? recipeCloudTts?.voice ?? "";
+
   const builtInRecipes: Array<{
     id: string;
     name: string;
     description: string;
     snapshot: TaskRecipeSnapshot;
   }> = [
+    {
+      id: "video-dub-final",
+      name: t("home.recipeDubVideoName"),
+      description: t("home.recipeDubVideoDesc"),
+      snapshot: {
+        task_type: "generate-and-translate",
+        engine_id: "parakeet-mlx",
+        model_id: "parakeet-tdt-0.6b-v2",
+        source_language: "auto",
+        target_language: "zh",
+        translation_content_mode: "target-only",
+        output_format: "srt",
+        output_name: "",
+        strip_chinese_punctuation: false,
+        review_required: true,
+        max_subtitle_chars: 0,
+        pipeline: {
+          enable_dubbing: true,
+          enable_compose: true,
+          subtitle_review: true,
+          dubbing_review: false,
+          dubbing_engine: recipeDubbingEngine,
+          dubbing_model_or_provider_id: recipeDubbingTarget,
+          dubbing_voice: recipeDubbingVoice,
+          dubbing_speed: 1,
+          compose_soft_subtitle: false,
+          compose_audio_mode: "replace",
+          compose_encoder_mode: "auto",
+        },
+      },
+    },
     {
       id: "offline-fast",
       name: t("home.recipeOfflineName"),
@@ -595,6 +731,19 @@ export default function HomePage() {
     strip_chinese_punctuation: stripChinesePunctuation,
     review_required: reviewRequired,
     max_subtitle_chars: maxSubtitleChars,
+    pipeline: (reviewRequired || enableDubbing || enableCompose || dubbingReview) ? {
+      enable_dubbing: enableDubbing,
+      enable_compose: enableCompose,
+      subtitle_review: reviewRequired,
+      dubbing_review: enableDubbing && dubbingReview,
+      dubbing_engine: dubbingEngine,
+      dubbing_model_or_provider_id: dubbingTargetId,
+      dubbing_voice: dubbingVoice,
+      dubbing_speed: dubbingSpeed,
+      compose_soft_subtitle: composeSoftSubtitle,
+      compose_audio_mode: enableDubbing ? composeAudioMode : "keep",
+      compose_encoder_mode: composeEncoderMode,
+    } : undefined,
   });
 
   const applyRecipe = (snapshot: TaskRecipeSnapshot, name: string) => {
@@ -653,7 +802,49 @@ export default function HomePage() {
     );
     setOutputName(snapshot.output_name);
     setStripChinesePunctuation(snapshot.strip_chinese_punctuation);
-    setReviewRequired(snapshot.review_required);
+    const recipePipeline = snapshot.pipeline;
+    setEnableDubbing(Boolean(recipePipeline?.enable_dubbing));
+    setEnableCompose(Boolean(recipePipeline?.enable_compose));
+    setDubbingReview(Boolean(recipePipeline?.enable_dubbing && recipePipeline.dubbing_review));
+    setReviewRequired(recipePipeline?.subtitle_review ?? snapshot.review_required);
+    if (recipePipeline) {
+      const exactLocal = ttsModels.find(
+        (model) => model.id === recipePipeline.dubbing_model_or_provider_id
+          && model.status === "ready"
+          && !model.clone_only,
+      );
+      const exactCloud = ttsProviders.find(
+        (provider) => provider.id === recipePipeline.dubbing_model_or_provider_id
+          && provider.text_upload_consent,
+      );
+      const fallbackLocal = readyTtsModels[0];
+      const fallbackCloud = ttsProviders.find((provider) => provider.text_upload_consent);
+      if (recipePipeline.enable_dubbing) {
+        if (recipePipeline.dubbing_engine === "local" && (exactLocal || fallbackLocal)) {
+          const selected = exactLocal ?? fallbackLocal!;
+          setDubbingEngine("local");
+          setDubbingTargetId(selected.id);
+          setDubbingVoice(exactLocal ? recipePipeline.dubbing_voice : selected.default_voice_id);
+          usedFallback ||= !exactLocal;
+        } else if (exactCloud || fallbackCloud) {
+          const selected = exactCloud ?? fallbackCloud!;
+          setDubbingEngine("cloud");
+          setDubbingTargetId(selected.id);
+          setDubbingVoice(exactCloud ? recipePipeline.dubbing_voice : selected.voice);
+          usedFallback ||= !exactCloud || recipePipeline.dubbing_engine !== "cloud";
+        } else {
+          setDubbingEngine(recipePipeline.dubbing_engine);
+          setDubbingTargetId(recipePipeline.dubbing_model_or_provider_id);
+          setDubbingVoice(recipePipeline.dubbing_voice);
+        }
+      }
+      setDubbingSpeed(recipePipeline.dubbing_speed);
+      setComposeSoftSubtitle(recipePipeline.compose_soft_subtitle);
+      if (recipePipeline.compose_audio_mode !== "keep") {
+        setComposeAudioMode(recipePipeline.compose_audio_mode);
+      }
+      setComposeEncoderMode(recipePipeline.compose_encoder_mode);
+    }
     const recipeSubtitleChars = snapshot.max_subtitle_chars ?? 0;
     setMaxSubtitleChars(recipeSubtitleChars);
     if (recipeSubtitleChars > 0) {
@@ -719,7 +910,7 @@ export default function HomePage() {
   const taskReady = Boolean(selectedPath && canStartTask);
   const readinessHint = !selectedPath
     ? missingFileHint
-    : (inputTypeMismatchHint || modelPrerequisiteHint || t("home.readyToStart"));
+    : (inputTypeMismatchHint || modelPrerequisiteHint || pipelinePrerequisiteHint || t("home.readyToStart"));
   const workspaceStatus = bootstrapState === "error" || ffmpegVersion === "unavailable"
     ? "error"
     : (bootstrapState === "loading" || ffmpegVersion === "detecting" ? "loading" : "ready");
@@ -819,7 +1010,7 @@ export default function HomePage() {
       <div className="grid items-start gap-5 min-[1120px]:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-5">
           <Card className="p-6 sm:p-7">
-            <div className="grid gap-5 min-[1440px]:grid-cols-[minmax(0,1fr)_minmax(17rem,0.54fr)]">
+            <div className="grid gap-5 min-[1180px]:grid-cols-[minmax(0,1fr)_minmax(17rem,0.54fr)]">
               <div className="min-w-0">
                 <div className="mb-5">
                   <span className="step-label">01 · {t("home.sourceStep")}</span>
@@ -1015,6 +1206,168 @@ export default function HomePage() {
             </div>
 
             <div className="space-y-6">
+              <fieldset className="rounded-[1.2rem] border border-brand/16 bg-brand/[0.045] p-4 sm:p-5" data-testid="delivery-targets">
+                <legend className="sr-only">{t("home.deliveryTargets")}</legend>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.deliveryTargets")}</p>
+                    <h4 className="mt-1 text-base font-bold text-text-primary">{t("home.chooseDeliverables")}</h4>
+                    <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.deliveryTargetsHint")}</p>
+                  </div>
+                  <span className="rounded-full border border-brand/15 bg-surface-overlay px-3 py-1.5 text-xs font-semibold text-brand">
+                    {deliveryTargets}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid gap-2.5 sm:grid-cols-3">
+                  <div
+                    className="liquid-selected flex min-h-20 items-start gap-3 rounded-[1rem] border p-3.5 text-left"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand/15 text-brand"><FileText size={16} /></span>
+                    <span><span className="block text-sm font-semibold text-text-primary">{t("home.targetSubtitle")}</span><span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.targetSubtitleDesc")}</span></span>
+                  </div>
+                  <button
+                    type="button"
+                    aria-pressed={enableDubbing}
+                    disabled={taskType === "translate-only" && !enableDubbing}
+                    onClick={() => {
+                      const next = !enableDubbing;
+                      setEnableDubbing(next);
+                      if (!next) setDubbingReview(false);
+                      setError("");
+                    }}
+                    className={`flex min-h-20 items-start gap-3 rounded-[1rem] border p-3.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${enableDubbing ? "liquid-selected" : "border-border-default bg-surface-overlay/35 hover:border-border-strong"}`}
+                  >
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${enableDubbing ? "bg-brand/15 text-brand" : "bg-surface-overlay text-text-tertiary"}`}><Volume2 size={16} /></span>
+                    <span><span className="block text-sm font-semibold text-text-primary">{t("home.targetDubbing")}</span><span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.targetDubbingDesc")}</span></span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={enableCompose}
+                    disabled={taskType === "translate-only" && !enableCompose}
+                    onClick={() => {
+                      const next = !enableCompose;
+                      setEnableCompose(next);
+                      setError("");
+                    }}
+                    className={`flex min-h-20 items-start gap-3 rounded-[1rem] border p-3.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${enableCompose ? "liquid-selected" : "border-border-default bg-surface-overlay/35 hover:border-border-strong"}`}
+                  >
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${enableCompose ? "bg-brand/15 text-brand" : "bg-surface-overlay text-text-tertiary"}`}><Film size={16} /></span>
+                    <span><span className="block text-sm font-semibold text-text-primary">{t("home.targetVideo")}</span><span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.targetVideoDesc")}</span></span>
+                  </button>
+                </div>
+
+                <div className="mt-4 overflow-x-auto pb-1" aria-label={t("home.plannedFlow")}>
+                  <ol className="flex min-w-max items-center gap-1.5">
+                    {plannedStages.map((stage, index) => (
+                      <li key={`${stage}-${index}`} className="flex items-center gap-1.5">
+                        <span className="rounded-full border border-border-subtle bg-surface-overlay px-2.5 py-1.5 text-[11px] font-semibold text-text-secondary">
+                          {index + 1}. {stage}
+                        </span>
+                        {index < plannedStages.length - 1 && <ChevronRight size={12} className="text-text-tertiary" aria-hidden="true" />}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                {(enableDubbing || enableCompose) && (
+                  <div className="mt-4 grid gap-4 border-t border-border-subtle pt-4 lg:grid-cols-2">
+                    {enableDubbing && (
+                      <div className="rounded-xl border border-border-subtle bg-surface-overlay/55 p-3.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-text-primary">{t("home.dubbingConfig")}</p>
+                          <Badge variant={dubbingReady ? "success" : "warning"}>{dubbingReady ? t("home.coreReady") : t("home.coreNeedsSetup")}</Badge>
+                        </div>
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label htmlFor="pipeline-tts-target" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.dubbingEngine")}</label>
+                            <Select
+                              id="pipeline-tts-target"
+                              value={dubbingTargetId ? `${dubbingEngine}:${dubbingTargetId}` : ""}
+                              onChange={(event) => {
+                                const separator = event.target.value.indexOf(":");
+                                const kind = event.target.value.slice(0, separator) as "local" | "cloud";
+                                const id = event.target.value.slice(separator + 1);
+                                setDubbingEngine(kind);
+                                setDubbingTargetId(id);
+                                if (kind === "local") {
+                                  const model = ttsModels.find((item) => item.id === id);
+                                  setDubbingVoice(model?.default_voice_id ?? "");
+                                } else {
+                                  const provider = ttsProviders.find((item) => item.id === id);
+                                  setDubbingVoice(provider?.voice ?? "");
+                                }
+                              }}
+                            >
+                              {!dubbingTargetId && <option value="">{t("home.dubbingNoEngine")}</option>}
+                              <optgroup label={t("home.dubbingLocalModels")}>
+                                {readyTtsModels.map((model) => <option key={model.id} value={`local:${model.id}`}>{model.name}</option>)}
+                              </optgroup>
+                              <optgroup label={t("home.dubbingCloudServices")}>
+                                {ttsProviders.map((provider) => <option key={provider.id} value={`cloud:${provider.id}`}>{provider.name}{provider.text_upload_consent ? "" : ` · ${t("home.dubbingNeedsConsent")}`}</option>)}
+                              </optgroup>
+                            </Select>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
+                            <div>
+                              <label htmlFor="pipeline-tts-voice" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.dubbingVoice")}</label>
+                              {dubbingEngine === "local" && selectedTtsModel?.voices.length ? (
+                                <Select id="pipeline-tts-voice" value={dubbingVoice} onChange={(event) => setDubbingVoice(event.target.value)}>
+                                  {selectedTtsModel.voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
+                                </Select>
+                              ) : (
+                                <Input id="pipeline-tts-voice" value={dubbingVoice} onChange={(event) => setDubbingVoice(event.target.value)} placeholder={t("home.dubbingVoicePlaceholder")} />
+                              )}
+                            </div>
+                            <div>
+                              <label htmlFor="pipeline-tts-speed" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.dubbingSpeed")}</label>
+                              <Select id="pipeline-tts-speed" value={String(dubbingSpeed)} onChange={(event) => setDubbingSpeed(Number(event.target.value))}>
+                                <option value="0.85">0.85×</option><option value="1">1.00×</option><option value="1.15">1.15×</option><option value="1.3">1.30×</option>
+                              </Select>
+                            </div>
+                          </div>
+                          {!dubbingReady && (
+                            <button type="button" onClick={() => navigate("/models")} className="text-xs font-semibold text-brand hover:text-brand-hover">
+                              {t("home.openModelManage")} <ChevronRight size={12} className="inline" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {enableCompose && (
+                      <div className="rounded-xl border border-border-subtle bg-surface-overlay/55 p-3.5">
+                        <p className="text-sm font-semibold text-text-primary">{t("home.composeConfig")}</p>
+                        <div className="mt-3 space-y-3">
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div><label htmlFor="pipeline-subtitle-mode" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeSubtitleMode")}</label><Select id="pipeline-subtitle-mode" value={composeSoftSubtitle ? "soft" : "hard"} onChange={(event) => setComposeSoftSubtitle(event.target.value === "soft")}><option value="hard">{t("home.composeHardSubtitle")}</option><option value="soft">{t("home.composeSoftSubtitle")}</option></Select></div>
+                            <div><label htmlFor="pipeline-encoder-mode" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeEncoder")}</label><Select id="pipeline-encoder-mode" value={composeEncoderMode} onChange={(event) => setComposeEncoderMode(event.target.value as "auto" | "cpu" | "hardware")} disabled={composeSoftSubtitle}><option value="auto">{t("home.composeEncoderAuto")}</option><option value="cpu">CPU</option><option value="hardware">{t("home.composeEncoderHardware")}</option></Select></div>
+                          </div>
+                          {enableDubbing ? (
+                            <div><label htmlFor="pipeline-audio-mode" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.composeAudioMode")}</label><Select id="pipeline-audio-mode" value={composeAudioMode} onChange={(event) => setComposeAudioMode(event.target.value as "replace" | "mix" | "add-track")}><option value="replace">{t("home.composeReplaceAudio")}</option><option value="mix">{t("home.composeMixAudio")}</option><option value="add-track">{t("home.composeAddTrack")}</option></Select></div>
+                          ) : (
+                            <p className="rounded-lg bg-surface-overlay px-3 py-2 text-xs leading-5 text-text-tertiary">{t("home.composeKeepAudio")}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4 grid gap-2.5 border-t border-border-subtle pt-4 sm:grid-cols-2">
+                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-warning/15 bg-warning/5 px-3.5 py-3 text-sm text-text-secondary">
+                    <input type="checkbox" checked={reviewRequired} onChange={(event) => setReviewRequired(event.target.checked)} className="h-4 w-4 rounded border-border-strong accent-brand" />
+                    <ShieldCheck size={17} className="shrink-0 text-warning" />
+                    <span><span className="block font-semibold text-text-primary">{t("home.subtitleReviewGate")}</span><span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.subtitleReviewGateHint")}</span></span>
+                  </label>
+                  <label className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 text-sm text-text-secondary ${enableDubbing ? "cursor-pointer border-border-subtle bg-surface-overlay/45" : "cursor-not-allowed border-border-subtle/50 opacity-50"}`}>
+                    <input type="checkbox" checked={enableDubbing && dubbingReview} disabled={!enableDubbing} onChange={(event) => setDubbingReview(event.target.checked)} className="h-4 w-4 rounded border-border-strong accent-brand" />
+                    <Volume2 size={17} className="shrink-0 text-brand" />
+                    <span><span className="block font-semibold text-text-primary">{t("home.dubbingReviewGate")}</span><span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.dubbingReviewGateHint")}</span></span>
+                  </label>
+                </div>
+              </fieldset>
+
               <fieldset>
                 <legend className="mb-2.5 text-xs font-bold uppercase tracking-[0.1em] text-text-tertiary">{t("home.taskType")}</legend>
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3" role="radiogroup">
@@ -1271,19 +1624,6 @@ export default function HomePage() {
                     <span className="mt-0.5 block text-xs text-text-tertiary">{t("home.stripChinesePunctuationHint")}</span>
                   </span>
                 </label>
-                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-warning/15 bg-warning/5 px-3.5 py-3 text-sm text-text-secondary sm:col-span-2">
-                  <input
-                    type="checkbox"
-                    checked={reviewRequired}
-                    onChange={(event) => setReviewRequired(event.target.checked)}
-                    className="h-4 w-4 rounded border-border-strong accent-brand"
-                  />
-                  <ShieldCheck size={17} className="shrink-0 text-warning" />
-                  <span>
-                    <span className="block font-semibold text-text-primary">{t("home.reviewRequired")}</span>
-                    <span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.reviewRequiredHint")}</span>
-                  </span>
-                </label>
               </div>
 
               {modelPrerequisiteHint && (
@@ -1293,6 +1633,18 @@ export default function HomePage() {
                   <button type="button" onClick={() => navigate("/models")} className="font-semibold underline underline-offset-2 hover:text-warning/80">
                     {t("home.openModelManage")}
                   </button>
+                </div>
+              )}
+
+              {pipelinePrerequisiteHint && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning" role="status">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{pipelinePrerequisiteHint}</span>
+                  {enableDubbing && !dubbingReady && (
+                    <button type="button" onClick={() => navigate("/models")} className="font-semibold underline underline-offset-2 hover:text-warning/80">
+                      {t("home.openModelManage")}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1329,6 +1681,10 @@ export default function HomePage() {
                   <dd className="text-right text-sm font-semibold text-text-primary">{pipelineLanguage}</dd>
                 </div>
                 <div className="system-row">
+                  <dt className="text-xs text-text-tertiary">{t("home.deliveryTargets")}</dt>
+                  <dd className="max-w-[12rem] text-right text-sm font-semibold text-text-primary">{deliveryTargets}</dd>
+                </div>
+                <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryFormat")}</dt>
                   <dd className="font-mono text-sm font-bold uppercase text-brand">{outputFormat}</dd>
                 </div>
@@ -1361,7 +1717,7 @@ export default function HomePage() {
                   onClick={handleCreate}
                   disabled={creating}
                   aria-describedby={modelPrerequisiteHint ? "task-prerequisite-hint" : undefined}
-                  title={modelPrerequisiteHint || undefined}
+                  title={modelPrerequisiteHint || pipelinePrerequisiteHint || undefined}
                   variant="primary"
                   size="lg"
                   className="w-full"

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { useI18n } from "../lib/i18n";
+import { useI18n, type TranslationKey } from "../lib/i18n";
 import {
   approveTask,
   approveTasks,
@@ -18,6 +18,7 @@ import {
   TASK_UPDATED_EVENT,
   type Task,
   type TaskDeletedPayload,
+  type PipelineStageKind,
 } from "../lib/tauri";
 import {
   AlertCircle,
@@ -82,6 +83,56 @@ function upsertTask(tasks: Task[], task: Task): Task[] {
 
 function canDeleteTask(task: Task): boolean {
   return ["review", "done", "error", "cancelled", "paused"].includes(task.status);
+}
+
+const pipelineStageKeys: Record<PipelineStageKind, TranslationKey> = {
+  transcribe: "home.stageTranscribe",
+  translate: "home.stageTranslate",
+  "subtitle-review": "home.stageSubtitleReview",
+  dub: "home.stageDub",
+  "dubbing-review": "home.stageDubbingReview",
+  compose: "home.stageCompose",
+  done: "home.stageDeliver",
+};
+
+function PipelineRail({ task }: { task: Task }) {
+  const { t } = useI18n();
+  if (!task.pipeline?.stages?.length) return null;
+  return (
+    <div className="mt-4 rounded-xl border border-border-subtle bg-surface-overlay/45 p-3.5" data-testid="task-pipeline-rail">
+      <div className="mb-2.5 flex items-center justify-between gap-3">
+        <p className="text-xs font-bold uppercase tracking-[0.1em] text-text-tertiary">{t("tasks.pipelineProgress")}</p>
+        {task.status === "review" && <span className="text-xs font-semibold text-warning">{t("tasks.pipelineWaiting")}</span>}
+      </div>
+      <ol className="flex min-w-0 flex-wrap items-center gap-2">
+        {task.pipeline.stages.map((stage, index) => {
+          const isCurrent = task.pipeline?.current_stage === stage.kind;
+          const color = stage.status === "done"
+            ? "border-success/25 bg-success/10 text-success"
+            : stage.status === "running"
+              ? "border-brand/30 bg-brand/10 text-brand"
+              : stage.status === "review"
+                ? "border-warning/30 bg-warning/10 text-warning"
+                : stage.status === "error"
+                  ? "border-danger/30 bg-danger/10 text-danger"
+                  : "border-border-subtle bg-surface-overlay text-text-tertiary";
+          return (
+            <li key={stage.kind} className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[11px] font-semibold ${color} ${isCurrent ? "ring-2 ring-brand/15" : ""}`}
+                title={stage.message || undefined}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${stage.status === "done" ? "bg-success" : stage.status === "running" ? "bg-brand animate-pulse" : stage.status === "review" ? "bg-warning" : stage.status === "error" ? "bg-danger" : "bg-border-strong"}`} />
+                {t(pipelineStageKeys[stage.kind])}
+                {stage.status === "running" && stage.progress > 0 && ` ${Math.round(stage.progress * 100)}%`}
+              </span>
+              {index < task.pipeline!.stages!.length - 1 && <span className="text-xs text-border-strong">→</span>}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -395,6 +446,18 @@ export default function TasksPage() {
         <div className="space-y-4">
           {tasks.map((task) => {
             const isSelected = selectedTaskIds.includes(task.id);
+            const reviewStage = task.pipeline?.current_stage;
+            const reviewTitle = reviewStage === "dubbing-review"
+              ? t("tasks.dubbingReviewTitle")
+              : (task.pipeline ? t("tasks.subtitleReviewTitle") : t("tasks.reviewTitle"));
+            const reviewDescription = reviewStage === "dubbing-review"
+              ? t("tasks.dubbingReviewDesc")
+              : (task.pipeline ? t("tasks.subtitleReviewDesc") : t("tasks.reviewDesc"));
+            const artifactPaths = [
+              { label: t("tasks.artifactSubtitle"), path: task.pipeline?.subtitle_output_path ?? task.output_path },
+              { label: t("tasks.artifactDubbing"), path: task.pipeline?.dubbed_audio_path },
+              { label: t("tasks.artifactVideo"), path: task.pipeline?.final_video_path },
+            ].filter((artifact): artifact is { label: string; path: string } => Boolean(artifact.path));
             return (
               <Card
                 key={task.id}
@@ -523,15 +586,17 @@ export default function TasksPage() {
                   </div>
                 )}
 
-                {(task.status === "review" || task.status === "done") && task.output_path && (
+                <PipelineRail task={task} />
+
+                {(task.status === "review" || artifactPaths.length > 0) && (
                   <div className="mt-4 space-y-3 rounded-xl border border-border-subtle bg-surface-overlay p-3.5 text-sm">
                     {task.status === "review" && (
                       <div className="flex flex-col gap-3 rounded-xl border border-warning/20 bg-warning/10 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex min-w-0 items-start gap-2.5">
                           <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning" />
                           <div>
-                            <p className="font-semibold text-text-primary">{t("tasks.reviewTitle")}</p>
-                            <p className="mt-1 text-xs leading-5 text-text-secondary">{t("tasks.reviewDesc")}</p>
+                            <p className="font-semibold text-text-primary">{reviewTitle}</p>
+                            <p className="mt-1 text-xs leading-5 text-text-secondary">{reviewDescription}</p>
                           </div>
                         </div>
                         <Button
@@ -543,30 +608,25 @@ export default function TasksPage() {
                           className="shrink-0"
                         >
                           <CheckCircle size={14} />
-                          {approvingTaskIds.includes(task.id) ? t("tasks.approving") : t("tasks.approveTask")}
+                          {approvingTaskIds.includes(task.id)
+                            ? t("tasks.approving")
+                            : (task.pipeline ? t("tasks.approveAndContinue") : t("tasks.approveTask"))}
                         </Button>
                       </div>
                     )}
-                    <p className="font-semibold text-text-secondary truncate" title={task.output_path}>
-                      {t("tasks.outputPath")}{task.output_path}
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        onClick={() => handleOpenFile(task.output_path!)}
-                        variant="secondary"
-                        size="sm"
-                      >
-                        {t("tasks.openOutputFile")}
-                      </Button>
-                      <Button
-                        type="button"
-                        onClick={() => handleOpenFolder(task.output_path!)}
-                        variant="secondary"
-                        size="sm"
-                      >
-                        {t("tasks.openOutputDir")}
-                      </Button>
+                    <div className="space-y-2.5">
+                      {artifactPaths.map((artifact) => (
+                        <div key={`${artifact.label}-${artifact.path}`} className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-tertiary">{artifact.label}</p>
+                            <p className="mt-1 truncate font-mono text-xs font-semibold text-text-secondary" title={artifact.path}>{artifact.path}</p>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <Button type="button" onClick={() => handleOpenFile(artifact.path)} variant="secondary" size="sm">{t("tasks.openOutputFile")}</Button>
+                            <Button type="button" onClick={() => handleOpenFolder(artifact.path)} variant="secondary" size="sm">{t("tasks.openOutputDir")}</Button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}

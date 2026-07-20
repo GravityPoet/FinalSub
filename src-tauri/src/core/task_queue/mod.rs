@@ -33,6 +33,209 @@ pub enum TranslationContentMode {
     TargetAndSource,
 }
 
+/// 用户可见的端到端处理节点。名称保持产品语义，前端不需要暴露内部
+/// worker/pipe 概念；每个节点的状态会随任务快照持久化，应用重启后可以
+/// 从最后一个节点继续，而不是把已经完成的字幕重新上传或重做。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PipelineStageKind {
+    Transcribe,
+    Translate,
+    SubtitleReview,
+    Dub,
+    DubbingReview,
+    Compose,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PipelineStageStatus {
+    Pending,
+    Running,
+    Review,
+    Done,
+    Skipped,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineStage {
+    pub kind: PipelineStageKind,
+    pub status: PipelineStageStatus,
+    #[serde(default)]
+    pub progress: f32,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl PipelineStage {
+    pub fn pending(kind: PipelineStageKind) -> Self {
+        Self {
+            kind,
+            status: PipelineStageStatus::Pending,
+            progress: 0.0,
+            message: String::new(),
+            started_at: None,
+            completed_at: None,
+            error: None,
+        }
+    }
+}
+
+/// 配音配置刻意使用字符串 ID，以便任务快照不依赖 TTS provider 的内部
+/// Rust 类型；旧任务读取时缺少这些字段会自动保持为空。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineDubbingConfig {
+    /// `local` 或 `cloud`。
+    pub engine: String,
+    /// 本地模型 ID 或在线 TTS provider 实例 UUID。
+    pub model_or_provider_id: String,
+    pub voice: String,
+    #[serde(default = "default_dubbing_speed")]
+    pub global_speed: f32,
+    #[serde(default)]
+    pub reference_audio_path: Option<String>,
+    #[serde(default)]
+    pub reference_text: Option<String>,
+    #[serde(default)]
+    pub num_steps: Option<i32>,
+}
+
+fn default_dubbing_speed() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineComposeConfig {
+    #[serde(default)]
+    pub soft_subtitle: bool,
+    #[serde(default = "default_compose_audio_mode")]
+    pub audio_mode: String,
+    #[serde(default = "default_compose_encoder_mode")]
+    pub encoder_mode: String,
+}
+
+fn default_compose_audio_mode() -> String {
+    "keep".into()
+}
+
+fn default_compose_encoder_mode() -> String {
+    "auto".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineConfig {
+    #[serde(default)]
+    pub enable_dubbing: bool,
+    #[serde(default)]
+    pub enable_compose: bool,
+    #[serde(default)]
+    pub subtitle_review: bool,
+    #[serde(default)]
+    pub dubbing_review: bool,
+    #[serde(default)]
+    pub dubbing: Option<PipelineDubbingConfig>,
+    #[serde(default)]
+    pub compose: Option<PipelineComposeConfig>,
+    #[serde(default)]
+    pub stages: Vec<PipelineStage>,
+    #[serde(default)]
+    pub current_stage: Option<PipelineStageKind>,
+    #[serde(default)]
+    pub subtitle_output_path: Option<String>,
+    #[serde(default)]
+    pub dubbing_session_id: Option<String>,
+    #[serde(default)]
+    pub dubbed_audio_path: Option<String>,
+    #[serde(default)]
+    pub final_video_path: Option<String>,
+}
+
+impl PipelineConfig {
+    pub fn for_task(
+        task_type: TaskType,
+        enable_dubbing: bool,
+        enable_compose: bool,
+        subtitle_review: bool,
+        dubbing_review: bool,
+        dubbing: Option<PipelineDubbingConfig>,
+        compose: Option<PipelineComposeConfig>,
+    ) -> Self {
+        let mut stages = Vec::new();
+        if task_type != TaskType::TranslateOnly {
+            stages.push(PipelineStage::pending(PipelineStageKind::Transcribe));
+        }
+        if task_type == TaskType::GenerateAndTranslate || task_type == TaskType::TranslateOnly {
+            stages.push(PipelineStage::pending(PipelineStageKind::Translate));
+        }
+        if subtitle_review {
+            stages.push(PipelineStage::pending(PipelineStageKind::SubtitleReview));
+        }
+        if enable_dubbing {
+            stages.push(PipelineStage::pending(PipelineStageKind::Dub));
+            if dubbing_review {
+                stages.push(PipelineStage::pending(PipelineStageKind::DubbingReview));
+            }
+        }
+        if enable_compose {
+            stages.push(PipelineStage::pending(PipelineStageKind::Compose));
+        }
+        stages.push(PipelineStage::pending(PipelineStageKind::Done));
+        let current_stage = stages.first().map(|stage| stage.kind);
+        Self {
+            enable_dubbing,
+            enable_compose,
+            subtitle_review,
+            dubbing_review,
+            dubbing,
+            compose,
+            stages,
+            current_stage,
+            subtitle_output_path: None,
+            dubbing_session_id: None,
+            dubbed_audio_path: None,
+            final_video_path: None,
+        }
+    }
+
+    pub fn has_downstream(&self) -> bool {
+        self.enable_dubbing || self.enable_compose
+    }
+
+    pub fn stage_mut(&mut self, kind: PipelineStageKind) -> Option<&mut PipelineStage> {
+        self.stages.iter_mut().find(|stage| stage.kind == kind)
+    }
+
+    pub fn stage(&self, kind: PipelineStageKind) -> Option<&PipelineStage> {
+        self.stages.iter().find(|stage| stage.kind == kind)
+    }
+
+    pub fn prepare_current_stage_for_resume(&mut self, message: &str) {
+        let Some(kind) = self.current_stage else {
+            return;
+        };
+        let Some(stage) = self.stage_mut(kind) else {
+            return;
+        };
+        if matches!(
+            stage.status,
+            PipelineStageStatus::Running | PipelineStageStatus::Error
+        ) {
+            stage.status = PipelineStageStatus::Pending;
+            stage.error = None;
+            stage.completed_at = None;
+            stage.message = message.to_string();
+        }
+    }
+}
+
 impl TranslationContentMode {
     pub fn is_bilingual(self) -> bool {
         !matches!(self, TranslationContentMode::TargetOnly)
@@ -63,6 +266,8 @@ pub struct Task {
     pub max_subtitle_chars: i32,
     #[serde(default)]
     pub reviewed_at: Option<String>,
+    #[serde(default)]
+    pub pipeline: Option<PipelineConfig>,
     pub progress: f32,
     pub status_message: String,
     pub output_path: Option<String>,
@@ -88,6 +293,8 @@ pub struct CreateTaskParams {
     pub strip_chinese_punctuation: bool,
     pub review_required: bool,
     pub max_subtitle_chars: i32,
+    #[serde(default)]
+    pub pipeline: Option<PipelineConfig>,
 }
 
 pub fn create_task(params: CreateTaskParams) -> Task {
@@ -109,6 +316,7 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         review_required: params.review_required,
         max_subtitle_chars: params.max_subtitle_chars,
         reviewed_at: None,
+        pipeline: params.pipeline,
         progress: 0.0,
         status_message: "待处理".into(),
         output_path: None,
@@ -119,6 +327,9 @@ pub fn create_task(params: CreateTaskParams) -> Task {
 }
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+static TASK_SAVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub fn tasks_path(app_config_dir: &Path) -> PathBuf {
     app_config_dir.join("tasks").join("tasks.json")
@@ -139,6 +350,10 @@ pub fn load_tasks(app_config_dir: &Path) -> Result<HashMap<String, Task>, String
 }
 
 pub fn save_tasks(app_config_dir: &Path, tasks: &HashMap<String, Task>) -> Result<(), String> {
+    let _save_guard = TASK_SAVE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "任务快照写入锁不可用".to_string())?;
     let path = tasks_path(app_config_dir);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -184,6 +399,7 @@ mod tests {
             strip_chinese_punctuation: false,
             review_required: false,
             max_subtitle_chars: 0,
+            pipeline: None,
         })
     }
 
@@ -233,11 +449,109 @@ mod tests {
         object.remove("review_required");
         object.remove("reviewed_at");
         object.remove("max_subtitle_chars");
+        object.remove("pipeline");
 
         let restored: Task = serde_json::from_value(value).unwrap();
 
         assert!(!restored.review_required);
         assert!(restored.reviewed_at.is_none());
         assert_eq!(restored.max_subtitle_chars, 0);
+        assert!(restored.pipeline.is_none());
+    }
+
+    #[test]
+    fn pipeline_plan_is_target_driven_and_serializable() {
+        let pipeline = PipelineConfig::for_task(
+            TaskType::GenerateAndTranslate,
+            true,
+            true,
+            true,
+            true,
+            Some(PipelineDubbingConfig {
+                engine: "local".into(),
+                model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
+                voice: "10".into(),
+                global_speed: 1.0,
+                reference_audio_path: None,
+                reference_text: None,
+                num_steps: None,
+            }),
+            Some(PipelineComposeConfig {
+                soft_subtitle: false,
+                audio_mode: "replace".into(),
+                encoder_mode: "auto".into(),
+            }),
+        );
+        assert_eq!(
+            pipeline
+                .stages
+                .iter()
+                .map(|stage| stage.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                PipelineStageKind::Transcribe,
+                PipelineStageKind::Translate,
+                PipelineStageKind::SubtitleReview,
+                PipelineStageKind::Dub,
+                PipelineStageKind::DubbingReview,
+                PipelineStageKind::Compose,
+                PipelineStageKind::Done,
+            ]
+        );
+        assert!(pipeline.has_downstream());
+        let restored: PipelineConfig =
+            serde_json::from_value(serde_json::to_value(&pipeline).unwrap()).unwrap();
+        assert_eq!(restored.current_stage, Some(PipelineStageKind::Transcribe));
+        assert_eq!(restored.stages.len(), 7);
+    }
+
+    #[test]
+    fn translate_only_pipeline_never_schedules_media_stages() {
+        let pipeline = PipelineConfig::for_task(
+            TaskType::TranslateOnly,
+            false,
+            false,
+            true,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(
+            pipeline
+                .stages
+                .iter()
+                .map(|stage| stage.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                PipelineStageKind::Translate,
+                PipelineStageKind::SubtitleReview,
+                PipelineStageKind::Done,
+            ]
+        );
+    }
+
+    #[test]
+    fn interrupted_pipeline_stage_is_prepared_for_resume_without_losing_progress() {
+        let mut pipeline = PipelineConfig::for_task(
+            TaskType::GenerateOnly,
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        let transcribe = pipeline.stage_mut(PipelineStageKind::Transcribe).unwrap();
+        transcribe.status = PipelineStageStatus::Error;
+        transcribe.progress = 0.42;
+        transcribe.error = Some("interrupted".into());
+
+        pipeline.prepare_current_stage_for_resume("准备继续");
+
+        let transcribe = pipeline.stage(PipelineStageKind::Transcribe).unwrap();
+        assert_eq!(transcribe.status, PipelineStageStatus::Pending);
+        assert_eq!(transcribe.progress, 0.42);
+        assert!(transcribe.error.is_none());
+        assert_eq!(transcribe.message, "准备继续");
     }
 }
