@@ -1076,6 +1076,7 @@ export interface TranslateRequest {
   structured_output?: TranslationStructuredOutputMode;
   response_json_schema?: Record<string, unknown>;
   glossary_prompt?: string;
+  enable_thinking?: boolean;
 }
 
 export interface TranslateResponse {
@@ -1083,6 +1084,7 @@ export interface TranslateResponse {
   provider: string;
   success: boolean;
   error?: string;
+  thinking_enabled?: boolean;
 }
 
 export async function listTranslationProviders(): Promise<TranslationProvider[]> {
@@ -1169,6 +1171,7 @@ export interface Settings {
   translate_custom_body: Record<string, Record<string, unknown>>;
   translate_structured_output: Record<string, TranslationStructuredOutputMode>;
   translate_echo_anchoring: Record<string, boolean>;
+  translate_enable_thinking: Record<string, boolean>;
   translation_glossaries: TranslationGlossary[];
   translate_batch_size: number;
   translate_concurrency: number;
@@ -1368,6 +1371,7 @@ function createMockSettings(): Settings {
     translate_custom_body: {},
     translate_structured_output: {},
     translate_echo_anchoring: {},
+    translate_enable_thinking: {},
     translation_glossaries: [],
     translate_batch_size: 24,
     translate_concurrency: 1,
@@ -2257,6 +2261,7 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
         translated_text: "你好，你怎么样？",
         provider: "dev-browser-mock",
         success: true,
+        thinking_enabled: false,
       } satisfies TranslateResponse;
     case "test_translation_proxy":
       return "HTTP 200";

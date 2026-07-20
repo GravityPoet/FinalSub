@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -99,6 +100,17 @@ function requiredSecretFields(providerId: string): string[] {
   }
 }
 
+function isThinkingOnlyModelName(modelName: string): boolean {
+  const model = modelName.trim().toLowerCase();
+  return Boolean(model) && (
+    model.includes("deepseek-reasoner")
+    || model.includes("thinking-")
+    || model.endsWith("-thinking")
+    || model.includes("-reasoning")
+    || model.endsWith("-reasoner")
+  );
+}
+
 function secretDraftKey(providerId: string, field: string): string {
   return `finalsub:translate-secret-draft:${providerId}:${field}`;
 }
@@ -176,6 +188,7 @@ export default function TranslationPage() {
   const [selectedProvider, setSelectedProvider] = useState("");
   const [testText, setTestText] = useState("Hello, how are you?");
   const [testResult, setTestResult] = useState<string>("");
+  const [testThinkingStatus, setTestThinkingStatus] = useState<"disabled" | "active" | null>(null);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -197,6 +210,7 @@ export default function TranslationPage() {
   const [runtimeSaved, setRuntimeSaved] = useState(false);
   const [structuredOutput, setStructuredOutput] = useState<TranslationStructuredOutputMode>("json_schema");
   const [echoAnchoring, setEchoAnchoring] = useState(true);
+  const [enableThinking, setEnableThinking] = useState(false);
   const [glossaryDrafts, setGlossaryDrafts] = useState<TranslationGlossary[]>([]);
   const [activeGlossaryId, setActiveGlossaryId] = useState("");
   const [glossarySaved, setGlossarySaved] = useState(false);
@@ -264,6 +278,7 @@ export default function TranslationPage() {
     setCustomBodyJson(formatJsonObject(settings.translate_custom_body?.[selectedProvider]));
     setStructuredOutput(settings.translate_structured_output?.[selectedProvider] ?? "json_schema");
     setEchoAnchoring(settings.translate_echo_anchoring?.[selectedProvider] ?? true);
+    setEnableThinking(settings.translate_enable_thinking?.[selectedProvider] ?? false);
     setProxyStatus("");
 
     if (selectedProviderInfo?.secret_fields) {
@@ -311,6 +326,7 @@ export default function TranslationPage() {
     settings?.translate_models?.[selectedProvider],
     settings?.translate_structured_output?.[selectedProvider],
     settings?.translate_echo_anchoring?.[selectedProvider],
+    settings?.translate_enable_thinking?.[selectedProvider],
   ]);
 
   const handleSecretChange = (field: string, val: string) => {
@@ -350,6 +366,7 @@ export default function TranslationPage() {
       const updatedCustomBody = { ...(settings.translate_custom_body || {}), [selectedProvider]: parsedCustomBody };
       const updatedStructuredOutput = { ...(settings.translate_structured_output || {}), [selectedProvider]: structuredOutput };
       const updatedEchoAnchoring = { ...(settings.translate_echo_anchoring || {}), [selectedProvider]: echoAnchoring };
+      const updatedEnableThinking = { ...(settings.translate_enable_thinking || {}), [selectedProvider]: enableThinking };
 
       const updated = {
         ...settings,
@@ -362,6 +379,7 @@ export default function TranslationPage() {
         translate_custom_body: updatedCustomBody,
         translate_structured_output: updatedStructuredOutput,
         translate_echo_anchoring: updatedEchoAnchoring,
+        translate_enable_thinking: updatedEnableThinking,
       };
 
       if (selectedProviderInfo?.secret_fields) {
@@ -411,6 +429,7 @@ export default function TranslationPage() {
     setTesting(true);
     setError("");
     setTestResult("");
+    setTestThinkingStatus(null);
     try {
       const parsedCustomHeaders = selectedProviderInfo?.is_ai ? parseCustomHeaders() : {};
       const parsedCustomBody = selectedProviderInfo?.is_ai ? parseCustomBody() : {};
@@ -436,10 +455,16 @@ export default function TranslationPage() {
         proxy_url: settings?.proxy_enabled ? settings.proxy_url.trim() || undefined : undefined,
         custom_headers: Object.keys(parsedCustomHeaders).length > 0 ? parsedCustomHeaders : undefined,
         custom_body: Object.keys(parsedCustomBody).length > 0 ? parsedCustomBody : undefined,
+        enable_thinking: enableThinking,
       });
 
       if (resp.success) {
         setTestResult(resp.translated_text);
+        setTestThinkingStatus(
+          !enableThinking && typeof resp.thinking_enabled === "boolean"
+            ? (resp.thinking_enabled ? "active" : "disabled")
+            : null,
+        );
       } else {
         setError(resp.error || t("translation.testFailed"));
       }
@@ -829,6 +854,24 @@ export default function TranslationPage() {
 
             {selectedProviderInfo.is_ai && (
               <div className="grid gap-4 lg:grid-cols-2">
+                <label className="liquid-panel flex cursor-pointer items-start gap-3 rounded-2xl border border-border-subtle p-4 lg:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={enableThinking}
+                    onChange={(event) => setEnableThinking(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-brand"
+                  />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                      <Sparkles size={15} className="text-brand" />
+                      {t("translation.thinkingMode")}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("translation.thinkingModeDesc")}</span>
+                    {isThinkingOnlyModelName(modelName) && !enableThinking && (
+                      <span className="mt-2 block text-xs leading-5 text-warning">{t("translation.thinkingOnlyHint")}</span>
+                    )}
+                  </span>
+                </label>
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.systemPrompt")}</label>
                   <Textarea
@@ -1373,6 +1416,11 @@ export default function TranslationPage() {
           <div className="mb-4 rounded-xl border border-success/20 bg-success/10 px-3.5 py-3">
             <div className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-success">
               <CheckCircle size={15} /> {t("translation.testResult")}
+              {testThinkingStatus && (
+                <span className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium ${testThinkingStatus === "disabled" ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                  {testThinkingStatus === "disabled" ? t("translation.thinkingDisabled") : t("translation.thinkingUnavailable")}
+                </span>
+              )}
             </div>
             <p className="text-sm text-text-primary leading-relaxed">{testResult}</p>
           </div>

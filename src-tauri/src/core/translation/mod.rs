@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error as StdError;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::error::{FinalSubError, Result};
+
+const MAX_PROVIDER_ERROR_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationProvider {
@@ -113,6 +117,23 @@ fn describe_reqwest_error(err: &reqwest::Error) -> String {
     parts.join("；")
 }
 
+async fn limited_response_text(mut response: reqwest::Response) -> String {
+    let mut body = Vec::new();
+    while body.len() < MAX_PROVIDER_ERROR_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = MAX_PROVIDER_ERROR_BYTES - body.len();
+                body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&body)
+        .chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
+        .collect()
+}
+
 fn validation_message(err: FinalSubError) -> String {
     match err {
         FinalSubError::Validation(msg) => msg,
@@ -173,8 +194,8 @@ pub fn builtin_providers() -> Vec<TranslationProvider> {
         TranslationProvider {
             id: "doubao".into(),
             name: "豆包翻译".into(),
-            provider_type: "api".into(),
-            is_ai: false,
+            provider_type: "ai".into(),
+            is_ai: true,
             implemented: true,
             requires_api_key: true,
             requires_endpoint: true,
@@ -367,6 +388,13 @@ pub struct TranslateRequest {
     pub response_json_schema: Option<serde_json::Value>,
     #[serde(default)]
     pub glossary_prompt: Option<String>,
+    /// Positive semantic switch: true follows the model default; false/None
+    /// lets FinalSub proactively disable reasoning where the provider allows it.
+    #[serde(default)]
+    pub enable_thinking: Option<bool>,
+    /// Internal retry flag. It is never accepted from or returned to the UI.
+    #[serde(skip)]
+    pub thinking_control_bypassed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,9 +403,268 @@ pub struct TranslateResponse {
     pub provider: String,
     pub success: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub thinking_enabled: Option<bool>,
+}
+
+const THINKING_PARAM_KEYS: [&str; 4] = ["enable_thinking", "thinking", "think", "reasoning_effort"];
+
+static THINKING_PARAM_REJECTION_CACHE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn thinking_rejection_cache() -> &'static Mutex<HashSet<String>> {
+    THINKING_PARAM_REJECTION_CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn thinking_cache_key(req: &TranslateRequest) -> String {
+    format!(
+        "{}:{}:{}",
+        req.provider.trim().to_ascii_lowercase(),
+        req.api_url
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase(),
+        req.model_name
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+    )
+}
+
+fn has_thinking_param_rejection(req: &TranslateRequest) -> bool {
+    thinking_rejection_cache()
+        .lock()
+        .map(|cache| cache.contains(&thinking_cache_key(req)))
+        .unwrap_or(false)
+}
+
+fn mark_thinking_param_rejected(req: &TranslateRequest) {
+    if let Ok(mut cache) = thinking_rejection_cache().lock() {
+        cache.insert(thinking_cache_key(req));
+    }
+}
+
+/// Clear the in-memory refusal cache before a user-triggered provider probe.
+/// The cache intentionally does not persist across app launches.
+pub fn clear_thinking_param_rejection(req: &TranslateRequest) {
+    if let Ok(mut cache) = thinking_rejection_cache().lock() {
+        cache.remove(&thinking_cache_key(req));
+    }
+}
+
+fn is_thinking_only_model(model: Option<&str>) -> bool {
+    let model = model.unwrap_or_default().trim().to_ascii_lowercase();
+    !model.is_empty()
+        && (model.contains("deepseek-reasoner")
+            || model.contains("thinking-")
+            || model.ends_with("-thinking")
+            || model.contains("-reasoning")
+            || model.ends_with("-reasoner"))
+}
+
+fn has_custom_thinking_override(req: &TranslateRequest) -> bool {
+    req.custom_body
+        .as_ref()
+        .map(|body| {
+            body.keys().any(|key| {
+                THINKING_PARAM_KEYS
+                    .iter()
+                    .any(|reserved| key.trim().eq_ignore_ascii_case(reserved))
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn url_contains(req: &TranslateRequest, needle: &str) -> bool {
+    req.api_url
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .contains(needle)
+}
+
+/// Resolve the provider-specific parameter used to proactively disable model
+/// reasoning. Unknown services deliberately return None: sending an invented
+/// field to a strict OpenAI-compatible gateway would be worse than no control.
+fn resolve_thinking_params(req: &TranslateRequest) -> Option<serde_json::Value> {
+    if req.enable_thinking == Some(true)
+        || req.thinking_control_bypassed
+        || is_thinking_only_model(req.model_name.as_deref())
+        || has_thinking_param_rejection(req)
+        || has_custom_thinking_override(req)
+    {
+        return None;
+    }
+
+    let provider = req.provider.trim().to_ascii_lowercase();
+    let model = req
+        .model_name
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    if provider == "qwen" || url_contains(req, "dashscope.aliyuncs.com") {
+        return Some(serde_json::json!({"enable_thinking": false}));
+    }
+    if provider == "siliconflow" || url_contains(req, "siliconflow") {
+        return Some(serde_json::json!({"enable_thinking": false}));
+    }
+    if url_contains(req, "volces.com") || url_contains(req, "volcengine") {
+        return Some(serde_json::json!({"thinking": {"type": "disabled"}}));
+    }
+    if provider == "ollama" {
+        return Some(serde_json::json!({"think": false}));
+    }
+    if provider == "gemini" || url_contains(req, "generativelanguage.googleapis.com") {
+        return Some(serde_json::json!({"reasoning_effort": "none"}));
+    }
+    // DeepSeek chooses reasoning by model name and exposes no portable switch.
+    if provider == "deepseek" || url_contains(req, "api.deepseek.com") {
+        return None;
+    }
+    if model.starts_with("gpt-5") {
+        return Some(serde_json::json!({"reasoning_effort": "minimal"}));
+    }
+    let is_o_series = ["o1", "o3", "o4"].iter().any(|prefix| {
+        model == *prefix
+            || (model.starts_with(prefix)
+                && model
+                    .chars()
+                    .nth(prefix.len())
+                    .map(|character| matches!(character, '-' | ':' | '.'))
+                    .unwrap_or(false))
+    });
+    if is_o_series {
+        return Some(serde_json::json!({"reasoning_effort": "low"}));
+    }
+    None
+}
+
+fn is_thinking_param_rejected_error(error: &FinalSubError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    let mentions_param = message.contains("think")
+        || message.contains("reasoning_effort")
+        || message.contains("reasoning.effort")
+        || message.contains("budget");
+    mentions_param
+        && [
+            "unsupported",
+            "not support",
+            "unrecognized",
+            "unknown",
+            "invalid",
+            "not allowed",
+            "unexpected",
+            "extra_forbidden",
+            "must be set to true",
+            "不支持",
+            "无效",
+            "未知",
+            "不允许",
+        ]
+        .iter()
+        .any(|keyword| message.contains(keyword))
+}
+
+fn append_no_think_soft_switch(mut prompt: String, req: &TranslateRequest) -> String {
+    if req.enable_thinking == Some(true)
+        || has_custom_thinking_override(req)
+        || is_thinking_only_model(req.model_name.as_deref())
+        || !req
+            .model_name
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("qwen3")
+        || resolve_thinking_params(req).is_some()
+        || prompt.contains("/no_think")
+    {
+        return prompt;
+    }
+    prompt.push_str("\n/no_think");
+    prompt
+}
+
+fn apply_thinking_control(
+    mut body: serde_json::Value,
+    req: &TranslateRequest,
+) -> serde_json::Value {
+    let Some(params) = resolve_thinking_params(req) else {
+        return body;
+    };
+    let Some(body_object) = body.as_object_mut() else {
+        return body;
+    };
+    let Some(params) = params.as_object() else {
+        return body;
+    };
+    for (key, value) in params {
+        if !body_object.contains_key(key) {
+            body_object.insert(key.clone(), value.clone());
+        }
+    }
+    body
+}
+
+fn detect_openai_thinking(value: &serde_json::Value) -> bool {
+    let message = &value["choices"][0]["message"];
+    let reasoning_content = message["reasoning_content"].as_str().unwrap_or_default();
+    let thinking = message["thinking"].as_str().unwrap_or_default();
+    let reasoning_tokens = value["usage"]["completion_tokens_details"]["reasoning_tokens"]
+        .as_u64()
+        .unwrap_or(0);
+    !reasoning_content.trim().is_empty() || !thinking.trim().is_empty() || reasoning_tokens > 0
+}
+
+fn detect_ollama_thinking(value: &serde_json::Value) -> bool {
+    value["message"]["thinking"]
+        .as_str()
+        .map(|thinking| !thinking.trim().is_empty())
+        .unwrap_or(false)
+        || value["thinking"]
+            .as_str()
+            .map(|thinking| !thinking.trim().is_empty())
+            .unwrap_or(false)
+}
+
+fn detect_gemini_thinking(value: &serde_json::Value) -> bool {
+    value["candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|candidate| candidate["content"]["parts"].as_array())
+        .flatten()
+        .any(|part| part["thought"].as_bool().unwrap_or(false) || part["thinking"].is_string())
+}
+
+fn can_retry_without_thinking_params(req: &TranslateRequest) -> bool {
+    !req.thinking_control_bypassed
+        && !has_custom_thinking_override(req)
+        && resolve_thinking_params(req).is_some()
 }
 
 pub async fn translate_text(req: &TranslateRequest) -> Result<TranslateResponse> {
+    let mut attempt = req.clone();
+    loop {
+        match translate_text_with_structured_fallback(&attempt).await {
+            Ok(response) => return Ok(response),
+            Err(error)
+                if can_retry_without_thinking_params(&attempt)
+                    && is_thinking_param_rejected_error(&error) =>
+            {
+                mark_thinking_param_rejected(&attempt);
+                attempt.thinking_control_bypassed = true;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn translate_text_with_structured_fallback(
+    req: &TranslateRequest,
+) -> Result<TranslateResponse> {
     let requested_mode = req
         .structured_output
         .as_deref()
@@ -525,7 +812,7 @@ pub async fn list_provider_models(req: &TranslateRequest) -> Result<Vec<String>>
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = redact_secrets(&limited_response_text(response).await, req);
         return Err(FinalSubError::Validation(format!(
             "模型列表接口返回 {status}：{body}"
         )));
@@ -707,7 +994,7 @@ fn translation_system_prompt(req: &TranslateRequest) -> String {
         prompt.push_str("\n\n");
         prompt.push_str(glossary);
     }
-    prompt
+    append_no_think_soft_switch(prompt, req)
 }
 
 fn is_structured_output_unsupported_error(error: &FinalSubError) -> bool {
@@ -1049,6 +1336,7 @@ async fn translate_baidu(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "baidu".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -1082,7 +1370,7 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let err_body = resp.text().await.unwrap_or_default();
+        let err_body = limited_response_text(resp).await;
         return Err(FinalSubError::Validation(format!(
             "谷歌翻译返回错误 {status}: {err_body}"
         )));
@@ -1103,6 +1391,7 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "google".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -1149,6 +1438,7 @@ async fn translate_deeplx(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "deeplx".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -1177,6 +1467,7 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
         req,
         &["model", "prompt", "stream"],
     )?;
+    let body = apply_thinking_control(body, req);
     let body = apply_ollama_structured_output(body, req)?;
 
     let builder = apply_custom_headers(client.post(api_url), req)?;
@@ -1190,9 +1481,10 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
         })?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
+        let body = limited_response_text(resp).await;
         return Err(FinalSubError::Validation(format!(
-            "Ollama 返回错误：{}",
-            resp.status()
+            "Ollama 返回错误 {status}：{body}"
         )));
     }
 
@@ -1202,12 +1494,14 @@ async fn translate_ollama(req: &TranslateRequest) -> Result<TranslateResponse> {
         .map_err(|e| FinalSubError::Validation(format!("Ollama 响应解析失败：{e}")))?;
 
     let translated = data["response"].as_str().unwrap_or("").trim().to_string();
+    let thinking_enabled = detect_ollama_thinking(&data);
 
     Ok(TranslateResponse {
         translated_text: translated,
         provider: "ollama".into(),
         success: true,
         error: None,
+        thinking_enabled: Some(thinking_enabled),
     })
 }
 
@@ -1242,6 +1536,7 @@ async fn translate_openai_compatible(
         req,
         &["model", "messages"],
     )?;
+    let body = apply_thinking_control(body, req);
     let body = apply_openai_structured_output(body, req)?;
 
     let builder = client
@@ -1262,7 +1557,7 @@ async fn translate_openai_compatible(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
+        let body_text = limited_response_text(resp).await;
         return Err(FinalSubError::Validation(format!(
             "{provider_name} 返回错误 {status}：{body_text}"
         )));
@@ -1272,6 +1567,7 @@ async fn translate_openai_compatible(
         .json()
         .await
         .map_err(|e| FinalSubError::Validation(format!("{provider_name} 响应解析失败：{e}")))?;
+    let thinking_enabled = detect_openai_thinking(&data);
 
     let translated = data["choices"][0]["message"]["content"]
         .as_str()
@@ -1284,6 +1580,7 @@ async fn translate_openai_compatible(
         provider: req.provider.clone(),
         success: true,
         error: None,
+        thinking_enabled: Some(thinking_enabled),
     })
 }
 
@@ -1318,6 +1615,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         req,
         &["systemInstruction", "contents"],
     )?;
+    let body = apply_thinking_control(body, req);
     let body = apply_gemini_structured_output(body, req)?;
 
     let builder = client
@@ -1335,7 +1633,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
+        let body_text = limited_response_text(resp).await;
         return Err(FinalSubError::Validation(format!(
             "Gemini 返回错误 {status}：{body_text}"
         )));
@@ -1345,6 +1643,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         .json()
         .await
         .map_err(|e| FinalSubError::Validation(format!("Gemini 响应解析失败：{e}")))?;
+    let thinking_enabled = detect_gemini_thinking(&data);
 
     let translated = data["candidates"][0]["content"]["parts"]
         .as_array()
@@ -1370,6 +1669,7 @@ async fn translate_gemini(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: req.provider.clone(),
         success: true,
         error: None,
+        thinking_enabled: Some(thinking_enabled),
     })
 }
 
@@ -1527,7 +1827,7 @@ async fn translate_azure(req: &TranslateRequest) -> Result<TranslateResponse> {
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let err_body = resp.text().await.unwrap_or_default();
+        let err_body = limited_response_text(resp).await;
         return Err(FinalSubError::Validation(format!(
             "微软翻译返回错误 {status}: {err_body}"
         )));
@@ -1548,6 +1848,7 @@ async fn translate_azure(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "azure".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -1593,6 +1894,7 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         req,
         &["messages"],
     )?;
+    let body = apply_thinking_control(body, req);
     let body = apply_openai_structured_output(body, req)?;
 
     let builder = client
@@ -1612,7 +1914,7 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let err_body = resp.text().await.unwrap_or_default();
+        let err_body = limited_response_text(resp).await;
         return Err(FinalSubError::Validation(format!(
             "Azure OpenAI 返回错误 {status}: {err_body}"
         )));
@@ -1622,6 +1924,7 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         .json()
         .await
         .map_err(|e| FinalSubError::Validation(format!("Azure OpenAI 响应解析失败: {e}")))?;
+    let thinking_enabled = detect_openai_thinking(&res_json);
 
     let translated = res_json["choices"][0]["message"]["content"]
         .as_str()
@@ -1634,6 +1937,7 @@ async fn translate_azureopenai(req: &TranslateRequest) -> Result<TranslateRespon
         provider: "azureopenai".into(),
         success: true,
         error: None,
+        thinking_enabled: Some(thinking_enabled),
     })
 }
 
@@ -1686,6 +1990,7 @@ async fn translate_niutrans(req: &TranslateRequest) -> Result<TranslateResponse>
         provider: "niutrans".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -1788,6 +2093,7 @@ async fn translate_tencent(req: &TranslateRequest) -> Result<TranslateResponse> 
         provider: "tencent".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -1900,6 +2206,7 @@ async fn translate_aliyun(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "aliyun".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -2045,6 +2352,7 @@ async fn translate_volc(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "volc".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -2162,6 +2470,7 @@ async fn translate_xunfei(req: &TranslateRequest) -> Result<TranslateResponse> {
         provider: "xunfei".into(),
         success: true,
         error: None,
+        thinking_enabled: None,
     })
 }
 
@@ -2240,6 +2549,8 @@ mod tests {
             structured_output: None,
             response_json_schema: None,
             glossary_prompt: None,
+            enable_thinking: None,
+            thinking_control_bypassed: false,
         }
     }
 
@@ -2521,6 +2832,205 @@ mod tests {
             translation_system_prompt(&request),
             "Translate en to zh.\n\n# Terminology\n[]"
         );
+    }
+
+    #[test]
+    fn thinking_control_maps_known_providers_and_stays_conservative() {
+        let request = |provider: &str, endpoint: &str, model: &str| TranslateRequest {
+            provider: provider.into(),
+            api_url: Some(endpoint.into()),
+            model_name: Some(model.into()),
+            enable_thinking: Some(false),
+            ..base_test_request()
+        };
+
+        assert_eq!(
+            resolve_thinking_params(&request("qwen", "https://example.com/v1", "qwen-plus")),
+            Some(serde_json::json!({"enable_thinking": false}))
+        );
+        assert_eq!(
+            resolve_thinking_params(&request(
+                "custom-openai",
+                "https://api.siliconflow.cn/v1",
+                "Qwen/Qwen3-8B"
+            )),
+            Some(serde_json::json!({"enable_thinking": false}))
+        );
+        assert_eq!(
+            resolve_thinking_params(&request(
+                "custom-openai",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "doubao-seed"
+            )),
+            Some(serde_json::json!({"thinking": {"type": "disabled"}}))
+        );
+        assert_eq!(
+            resolve_thinking_params(&request("ollama", "http://localhost:11434", "qwen3:8b")),
+            Some(serde_json::json!({"think": false}))
+        );
+        assert_eq!(
+            resolve_thinking_params(&request(
+                "gemini",
+                "https://generativelanguage.googleapis.com",
+                "gemini-2.5-flash"
+            )),
+            Some(serde_json::json!({"reasoning_effort": "none"}))
+        );
+        assert_eq!(
+            resolve_thinking_params(&request(
+                "custom-openai",
+                "https://api.openai.com/v1",
+                "gpt-5-mini"
+            )),
+            Some(serde_json::json!({"reasoning_effort": "minimal"}))
+        );
+        assert_eq!(
+            resolve_thinking_params(&request(
+                "azureopenai",
+                "https://example.openai.azure.com",
+                "o3-mini"
+            )),
+            Some(serde_json::json!({"reasoning_effort": "low"}))
+        );
+        assert!(resolve_thinking_params(&request(
+            "custom-openai",
+            "https://gateway.example.com/v1",
+            "gpt-4o"
+        ))
+        .is_none());
+        assert!(resolve_thinking_params(&request(
+            "deepseek",
+            "https://api.deepseek.com/v1",
+            "deepseek-chat"
+        ))
+        .is_none());
+        assert!(resolve_thinking_params(&request(
+            "qwen",
+            "https://example.com/v1",
+            "qwen3-235b-thinking-2507"
+        ))
+        .is_none());
+
+        let enabled = TranslateRequest {
+            enable_thinking: Some(true),
+            ..request("qwen", "https://example.com/v1", "qwen-plus")
+        };
+        assert!(resolve_thinking_params(&enabled).is_none());
+    }
+
+    #[test]
+    fn custom_thinking_parameter_overrides_the_switch() {
+        let request = TranslateRequest {
+            provider: "qwen".into(),
+            enable_thinking: Some(false),
+            custom_body: Some(serde_json::Map::from_iter([(
+                "enable_thinking".into(),
+                serde_json::json!(true),
+            )])),
+            ..base_test_request()
+        };
+        let body =
+            merge_custom_body(serde_json::json!({"model": "qwen-plus"}), &request, &[]).unwrap();
+        let body = apply_thinking_control(body, &request);
+
+        assert_eq!(body["enable_thinking"], true);
+        assert!(!can_retry_without_thinking_params(&request));
+    }
+
+    #[test]
+    fn qwen3_soft_switch_is_only_used_when_parameter_control_is_unavailable() {
+        let unknown = TranslateRequest {
+            provider: "custom-openai".into(),
+            api_url: Some("https://gateway.example.com/v1".into()),
+            model_name: Some("qwen3:8b".into()),
+            enable_thinking: Some(false),
+            ..base_test_request()
+        };
+        assert!(translation_system_prompt(&unknown).ends_with("/no_think"));
+
+        let mapped = TranslateRequest {
+            provider: "qwen".into(),
+            ..unknown.clone()
+        };
+        assert!(!translation_system_prompt(&mapped).contains("/no_think"));
+
+        mark_thinking_param_rejected(&mapped);
+        assert!(translation_system_prompt(&mapped).ends_with("/no_think"));
+        clear_thinking_param_rejection(&mapped);
+    }
+
+    #[test]
+    fn thinking_response_metadata_is_detected_without_exposing_token_counts() {
+        assert!(detect_openai_thinking(&serde_json::json!({
+            "choices": [{"message": {"content": "译文", "reasoning_content": "推理"}}],
+            "usage": {"completion_tokens_details": {"reasoning_tokens": 0}}
+        })));
+        assert!(detect_openai_thinking(&serde_json::json!({
+            "choices": [{"message": {"content": "译文"}}],
+            "usage": {"completion_tokens_details": {"reasoning_tokens": 12}}
+        })));
+        assert!(!detect_openai_thinking(&serde_json::json!({
+            "choices": [{"message": {"content": "译文"}}]
+        })));
+        assert!(detect_ollama_thinking(
+            &serde_json::json!({"thinking": "step"})
+        ));
+        assert!(detect_gemini_thinking(&serde_json::json!({
+            "candidates": [{"content": {"parts": [{"thought": true, "text": "step"}]}}]
+        })));
+    }
+
+    #[tokio::test]
+    async fn rejected_thinking_parameter_is_removed_retried_and_cached() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for attempt in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                let body = request.split_once("\r\n\r\n").unwrap().1;
+                let json: serde_json::Value = serde_json::from_str(body).unwrap();
+                if attempt == 0 {
+                    assert_eq!(json["enable_thinking"], false);
+                    let response = r#"{"error":{"message":"unknown field enable_thinking"}}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                } else {
+                    assert!(json.get("enable_thinking").is_none());
+                    let response = r#"{"choices":[{"message":{"content":"你好"}}]}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(),
+                        response
+                    )
+                    .unwrap();
+                }
+            }
+        });
+
+        let request = TranslateRequest {
+            provider: "qwen".into(),
+            api_url: Some(format!("http://{endpoint}/v1")),
+            model_name: Some("qwen-plus".into()),
+            enable_thinking: Some(false),
+            ..base_test_request()
+        };
+        clear_thinking_param_rejection(&request);
+
+        let first = translate_text(&request).await.unwrap();
+        let second = translate_text(&request).await.unwrap();
+        assert_eq!(first.translated_text, "你好");
+        assert_eq!(second.translated_text, "你好");
+        assert!(has_thinking_param_rejection(&request));
+
+        clear_thinking_param_rejection(&request);
+        server.join().unwrap();
     }
 
     #[tokio::test]
