@@ -220,17 +220,14 @@ select {
 }
 
 .sidebar-nav-collapsed {
-  scrollbar-gutter: stable both-edges;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-@supports not (scrollbar-gutter: stable) {
-  .sidebar-nav-collapsed {
-    scrollbar-width: none;
-  }
-
-  .sidebar-nav-collapsed::-webkit-scrollbar {
-    display: none;
-  }
+.sidebar-nav-collapsed::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 @layer components {
