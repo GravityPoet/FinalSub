@@ -681,7 +681,10 @@ async fn run_task_impl(
                 }
                 "parakeet-mlx" => {
                     let models_dir = parakeet_models_dir(&app_config_dir)?;
-                    Box::new(ParakeetNativeEngine::new(models_dir))
+                    Box::new(ParakeetNativeEngine::new(
+                        models_dir,
+                        sherpa_vad_model_path(app)?,
+                    ))
                 }
                 "sensevoice" => {
                     let models_dir = whisper_models_dir(&app_config_dir)?;

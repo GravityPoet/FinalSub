@@ -6,10 +6,13 @@ use crate::core::subtitle::SubtitleTrack;
 pub mod cloud;
 pub mod custom;
 pub mod parakeet;
+mod parakeet_worker;
 pub mod sensevoice;
 pub mod sherpa_native;
 pub(crate) mod vad;
 pub mod whisper;
+
+pub use parakeet_worker::maybe_run_parakeet_worker;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsrCapabilities {

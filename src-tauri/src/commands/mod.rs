@@ -872,10 +872,11 @@ pub async fn synthesize_dubbing_cue(
     }
     let _power_save_lease = state.power_save.acquire(format!("tts:{generation_id}"));
 
-    let prepared = match {
+    let prepared_result = {
         let _session_io = state.dubbing_session_io.lock().await;
         crate::core::tts::prepare_dubbing_cue(&state.app_config_dir, &request)
-    } {
+    };
+    let prepared = match prepared_result {
         Ok(prepared) => prepared,
         Err(error) => {
             state.tts_controls.write().await.remove(&generation_id);
@@ -2825,14 +2826,17 @@ pub struct TranscribeParakeetRequest {
 
 #[tauri::command]
 pub async fn transcribe_parakeet(
-    _app: AppHandle,
+    app: AppHandle,
     state: State<'_, AppState>,
     req: TranscribeParakeetRequest,
 ) -> Result<String, String> {
     let audio_path = validate_existing_file_path(&req.audio_path, "Audio file")?;
     let output_path = validate_new_output_path(&req.output_path, "Subtitle output path")?;
     let models_dir = parakeet_models_dir(&state.app_config_dir)?;
-    let engine = ParakeetNativeEngine::new(models_dir);
+    let engine = ParakeetNativeEngine::new(
+        models_dir,
+        crate::core::task_runner::sherpa_vad_model_path(&app)?,
+    );
     let model_ref = AsrModelRef {
         engine_id: "parakeet-mlx".into(),
         model_id: "parakeet-tdt-0.6b-v2".into(),

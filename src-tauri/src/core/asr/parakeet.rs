@@ -7,7 +7,7 @@ use crate::error::{FinalSubError, Result};
 
 pub const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
 pub const PARAKEET_ARCHIVE_DIR: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
-const REQUIRED_MODEL_FILES: &[&str] = &[
+pub(super) const REQUIRED_MODEL_FILES: &[&str] = &[
     "encoder.int8.onnx",
     "decoder.int8.onnx",
     "joiner.int8.onnx",
@@ -20,11 +20,15 @@ const REQUIRED_MODEL_FILES: &[&str] = &[
 /// settings and task history, but the runtime no longer invokes MLX, Python, or uv.
 pub struct ParakeetNativeEngine {
     models_dir: PathBuf,
+    vad_model_path: PathBuf,
 }
 
 impl ParakeetNativeEngine {
-    pub fn new(models_dir: PathBuf) -> Self {
-        Self { models_dir }
+    pub fn new(models_dir: PathBuf, vad_model_path: PathBuf) -> Self {
+        Self {
+            models_dir,
+            vad_model_path,
+        }
     }
 
     pub fn model_dir(&self, model: &AsrModelRef) -> PathBuf {
@@ -101,65 +105,16 @@ impl AsrEngine for ParakeetNativeEngine {
             .await
             .ok();
 
-        let audio_path = job.audio_path.clone();
-        type DecodeResult =
-            std::result::Result<(String, Vec<String>, Option<Vec<f32>>, u64), String>;
-        let handle = tokio::task::spawn_blocking(move || -> DecodeResult {
-            let path = |name: &str| model_dir.join(name).to_string_lossy().to_string();
-            let mut config = sherpa_onnx::OfflineRecognizerConfig::default();
-            config.model_config.transducer = sherpa_onnx::OfflineTransducerModelConfig {
-                encoder: Some(path("encoder.int8.onnx")),
-                decoder: Some(path("decoder.int8.onnx")),
-                joiner: Some(path("joiner.int8.onnx")),
-            };
-            config.model_config.tokens = Some(path("tokens.txt"));
-            config.model_config.model_type = Some("nemo_transducer".into());
-            config.model_config.num_threads = std::thread::available_parallelism()
-                .map(|count| count.get().clamp(2, 8) as i32)
-                .unwrap_or(2);
-            config.model_config.provider = Some("cpu".into());
-            config.decoding_method = Some("greedy_search".into());
-
-            let recognizer = sherpa_onnx::OfflineRecognizer::create(&config)
-                .ok_or_else(|| "创建 Parakeet 原生识别器失败".to_string())?;
-            let wave = sherpa_onnx::Wave::read(&audio_path)
-                .ok_or_else(|| "读取 WAV 音频失败；请确认音频提取步骤已生成有效文件".to_string())?;
-            let sample_rate = wave.sample_rate().max(1) as u64;
-            let duration_ms = (wave.samples().len() as u64 * 1_000) / sample_rate;
-
-            let stream = recognizer.create_stream();
-            stream.accept_waveform(wave.sample_rate(), wave.samples());
-            recognizer.decode(&stream);
-            let result = stream
-                .get_result()
-                .ok_or_else(|| "Parakeet 未返回识别结果".to_string())?;
-            Ok((result.text, result.tokens, result.timestamps, duration_ms))
-        });
-
-        let decoded = if let Some(mut cancel) = cancel_rx {
-            tokio::pin!(handle);
-            loop {
-                tokio::select! {
-                    result = &mut handle => {
-                        break result
-                            .map_err(|error| FinalSubError::Validation(format!("Parakeet 线程池异常：{error}")))?
-                            .map_err(FinalSubError::Validation)?;
-                    }
-                    changed = cancel.changed() => {
-                        if changed.is_err() || *cancel.borrow() {
-                            return Err(FinalSubError::Validation("任务已取消".into()));
-                        }
-                    }
-                }
-            }
-        } else {
-            handle
-                .await
-                .map_err(|error| {
-                    FinalSubError::Validation(format!("Parakeet 线程池异常：{error}"))
-                })?
-                .map_err(FinalSubError::Validation)?
-        };
+        let audio_path = PathBuf::from(&job.audio_path);
+        let track = super::parakeet_worker::transcribe_isolated(
+            &model_dir,
+            &self.vad_model_path,
+            &audio_path,
+            job.max_subtitle_chars,
+            progress.clone(),
+            cancel_rx,
+        )
+        .await?;
 
         progress
             .send(ProgressUpdate {
@@ -169,15 +124,7 @@ impl AsrEngine for ParakeetNativeEngine {
             .await
             .ok();
 
-        let (text, tokens, timestamps, duration_ms) = decoded;
-        let cues = build_cues(
-            &text,
-            &tokens,
-            timestamps.as_deref(),
-            duration_ms,
-            job.max_subtitle_chars,
-        );
-        if cues.is_empty() {
+        if track.cues.is_empty() {
             return Err(FinalSubError::Validation(
                 "Parakeet 未识别到字幕内容。该模型仅适用于英文语音；其他语言请切换 Whisper.cpp 或 SenseVoice。".into(),
             ));
@@ -186,11 +133,11 @@ impl AsrEngine for ParakeetNativeEngine {
         progress
             .send(ProgressUpdate {
                 progress: 1.0,
-                message: format!("Parakeet 转录完成，共 {} 条字幕", cues.len()),
+                message: format!("Parakeet 转录完成，共 {} 条字幕", track.cues.len()),
             })
             .await
             .ok();
-        Ok(SubtitleTrack { cues })
+        Ok(track)
     }
 }
 
@@ -225,7 +172,7 @@ fn push_cue(cues: &mut Vec<Cue>, text: &mut String, start_ms: u64, end_ms: u64) 
     });
 }
 
-fn build_cues(
+pub(super) fn build_cues(
     full_text: &str,
     tokens: &[String],
     timestamps: Option<&[f32]>,
@@ -367,7 +314,10 @@ mod tests {
         for name in REQUIRED_MODEL_FILES {
             std::fs::write(model_dir.join(name), b"test").unwrap();
         }
-        let engine = ParakeetNativeEngine::new(temp.path().to_path_buf());
+        let engine = ParakeetNativeEngine::new(
+            temp.path().to_path_buf(),
+            PathBuf::from("/vad/silero_vad.onnx"),
+        );
         assert!(ParakeetNativeEngine::is_model_installed_at(
             &engine.model_dir(&model_ref())
         ));
@@ -375,7 +325,10 @@ mod tests {
 
     #[test]
     fn capabilities_are_native_downloaded_and_english_only() {
-        let engine = ParakeetNativeEngine::new(PathBuf::from("/models"));
+        let engine = ParakeetNativeEngine::new(
+            PathBuf::from("/models"),
+            PathBuf::from("/vad/silero_vad.onnx"),
+        );
         let capabilities = engine.capabilities();
         assert!(capabilities.requires_model_download);
         assert_eq!(capabilities.supported_languages, vec!["en", "auto"]);
