@@ -1,4 +1,8 @@
-👉 **[English Version](./README.md)**
+<p align="center">
+  <a href="./README.md">
+    <img src="https://img.shields.io/badge/%F0%9F%87%BA%F0%9F%87%B8%20English%20Version-English%20Version-blue?style=for-the-badge" alt="English Version">
+  </a>
+</p>
 
 <p align="center">
   <img src="./src-tauri/icons/app-icon-source.png" alt="FinalSub Logo" width="120" height="120">
