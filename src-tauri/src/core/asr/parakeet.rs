@@ -187,8 +187,10 @@ pub(super) fn build_cues(
             let mut previous_token_ms = 0;
 
             for (index, token) in tokens.iter().enumerate() {
-                let token = token.trim();
-                if token.is_empty() || (token.starts_with('<') && token.ends_with('>')) {
+                let token_content = token.trim();
+                if token_content.is_empty()
+                    || (token_content.starts_with('<') && token_content.ends_with('>'))
+                {
                     continue;
                 }
                 let token_ms = (timestamps[index].max(0.0) * 1_000.0) as u64;
@@ -225,7 +227,7 @@ pub(super) fn build_cues(
                         max_subtitle_chars,
                         normalized_text.chars().count() >= 84,
                     );
-                if ends_sentence(token) || too_long {
+                if ends_sentence(token_content) || too_long {
                     push_cue(&mut cues, &mut text, cue_start, next_ms);
                 }
             }
@@ -354,6 +356,24 @@ mod tests {
         assert_eq!(cues[0].text, "Hello world.");
         assert_eq!(cues[1].text, "Next line!");
         assert!(cues[0].end_ms <= cues[1].start_ms);
+    }
+
+    #[test]
+    fn sherpa_decoded_leading_spaces_preserve_english_word_boundaries() {
+        let tokens = vec![
+            " I".into(),
+            " belie".into(),
+            "ve".into(),
+            " the".into(),
+            " ro".into(),
+            "le".into(),
+            ".".into(),
+        ];
+        let timestamps = [0.0, 0.2, 0.4, 0.7, 0.9, 1.1, 1.3];
+        let cues = build_cues("I believe the role.", &tokens, Some(&timestamps), 1_600, -1);
+
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].text, "I believe the role.");
     }
 
     #[test]
