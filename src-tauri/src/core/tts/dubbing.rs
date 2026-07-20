@@ -63,6 +63,8 @@ pub struct DubbingRunConfig {
     pub engine: DubbingEngineSelection,
     pub voice: String,
     pub global_speed: f32,
+    #[serde(default = "default_local_concurrency")]
+    pub local_concurrency: u8,
     pub reference_audio_path: Option<String>,
     pub reference_text: Option<String>,
     pub num_steps: Option<i32>,
@@ -128,9 +130,15 @@ pub struct DubbingSynthesizeCueRequest {
     pub engine: DubbingEngineSelection,
     pub voice: String,
     pub global_speed: f32,
+    #[serde(default = "default_local_concurrency")]
+    pub local_concurrency: u8,
     pub reference_audio_path: Option<String>,
     pub reference_text: Option<String>,
     pub num_steps: Option<i32>,
+}
+
+fn default_local_concurrency() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -595,6 +603,11 @@ fn validate_run_config(request: &DubbingSynthesizeCueRequest) -> Result<DubbingR
             "工作台整体语速必须在 0.5-2.0 之间".into(),
         ));
     }
+    if !(1..=3).contains(&request.local_concurrency) {
+        return Err(FinalSubError::Validation(
+            "本地 TTS 并行路数必须在 1-3 之间".into(),
+        ));
+    }
     match &request.engine {
         DubbingEngineSelection::Local { model_id } => {
             if model_id.trim().is_empty() || model_id.chars().any(char::is_control) {
@@ -610,6 +623,7 @@ fn validate_run_config(request: &DubbingSynthesizeCueRequest) -> Result<DubbingR
         engine: request.engine.clone(),
         voice: request.voice.trim().to_string(),
         global_speed: request.global_speed,
+        local_concurrency: request.local_concurrency,
         reference_audio_path: request.reference_audio_path.clone(),
         reference_text: request.reference_text.clone(),
         num_steps: request.num_steps,
@@ -1468,7 +1482,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn prepared(slot_ms: u64, can_resynthesize: bool) -> PreparedDubbingCue {
-        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_id = "00000000-0000-0000-0000-000000000000".to_string();
         PreparedDubbingCue {
             session_id,
             cue_index: 0,
@@ -1480,6 +1494,7 @@ mod tests {
                 },
                 voice: "af_heart".into(),
                 global_speed: 1.0,
+                local_concurrency: 1,
                 reference_audio_path: None,
                 reference_text: None,
                 num_steps: None,
@@ -1592,6 +1607,30 @@ mod tests {
             ),
             4_000
         );
+    }
+
+    #[test]
+    fn local_concurrency_defaults_to_one_and_rejects_out_of_range_values() {
+        let value = serde_json::json!({
+            "session_id": "00000000-0000-0000-0000-000000000000",
+            "cue_index": 0,
+            "engine": { "kind": "local", "model_id": "kokoro-multi-lang-v1_1" },
+            "voice": "af_heart",
+            "global_speed": 1.0,
+            "reference_audio_path": null,
+            "reference_text": null,
+            "num_steps": null
+        });
+        let mut request: DubbingSynthesizeCueRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(request.local_concurrency, 1);
+        assert_eq!(validate_run_config(&request).unwrap().local_concurrency, 1);
+
+        request.local_concurrency = 3;
+        assert_eq!(validate_run_config(&request).unwrap().local_concurrency, 3);
+        request.local_concurrency = 0;
+        assert!(validate_run_config(&request).is_err());
+        request.local_concurrency = 4;
+        assert!(validate_run_config(&request).is_err());
     }
 
     #[cfg(target_os = "macos")]

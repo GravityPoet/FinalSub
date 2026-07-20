@@ -3,12 +3,12 @@ use std::ffi::OsStr;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore};
 
 use super::engine::{
     synthesize_local, LocalTtsSynthesisRequest, TtsEngineCache, TtsSynthesisResult,
@@ -22,6 +22,7 @@ const MAX_PROTOCOL_LINE_BYTES: usize = 64 * 1024;
 const RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const WORKER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_TTS_WORKERS: usize = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -281,7 +282,9 @@ struct TtsWorkerProcess {
 
 #[derive(Clone)]
 pub(crate) struct TtsWorkerManager {
-    process: Arc<Mutex<Option<TtsWorkerProcess>>>,
+    processes: Arc<Vec<Mutex<Option<TtsWorkerProcess>>>>,
+    capacity: Arc<Semaphore>,
+    next_slot: Arc<AtomicUsize>,
     executable: Arc<PathBuf>,
 }
 
@@ -289,26 +292,56 @@ impl Default for TtsWorkerManager {
     fn default() -> Self {
         let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::new());
         Self {
-            process: Arc::new(Mutex::new(None)),
+            processes: Arc::new((0..MAX_TTS_WORKERS).map(|_| Mutex::new(None)).collect()),
+            capacity: Arc::new(Semaphore::new(MAX_TTS_WORKERS)),
+            next_slot: Arc::new(AtomicUsize::new(0)),
             executable: Arc::new(executable),
         }
     }
 }
 
 impl TtsWorkerManager {
-    async fn lock_unless_cancelled(
-        &self,
-        cancelled: &AtomicBool,
-    ) -> Result<MutexGuard<'_, Option<TtsWorkerProcess>>> {
+    async fn acquire_capacity(&self, cancelled: &AtomicBool) -> Result<OwnedSemaphorePermit> {
         loop {
             if cancelled.load(Ordering::Relaxed) {
                 return Err(FinalSubError::Validation("配音已取消".into()));
             }
-            if let Ok(guard) =
-                tokio::time::timeout(RESPONSE_POLL_INTERVAL, self.process.lock()).await
+            if let Ok(result) = tokio::time::timeout(
+                RESPONSE_POLL_INTERVAL,
+                self.capacity.clone().acquire_owned(),
+            )
+            .await
             {
-                return Ok(guard);
+                return result
+                    .map_err(|_| FinalSubError::EngineNotReady("本地 TTS worker 池已关闭".into()));
             }
+        }
+    }
+
+    async fn lock_available_process(
+        &self,
+        cancelled: &AtomicBool,
+    ) -> Result<MutexGuard<'_, Option<TtsWorkerProcess>>> {
+        let start = self.next_slot.fetch_add(1, Ordering::Relaxed) % MAX_TTS_WORKERS;
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(FinalSubError::Validation("配音已取消".into()));
+            }
+            for offset in 0..MAX_TTS_WORKERS {
+                let index = (start + offset) % MAX_TTS_WORKERS;
+                if let Ok(guard) = self.processes[index].try_lock() {
+                    if guard.is_some() {
+                        return Ok(guard);
+                    }
+                }
+            }
+            for offset in 0..MAX_TTS_WORKERS {
+                let index = (start + offset) % MAX_TTS_WORKERS;
+                if let Ok(guard) = self.processes[index].try_lock() {
+                    return Ok(guard);
+                }
+            }
+            tokio::time::sleep(RESPONSE_POLL_INTERVAL).await;
         }
     }
 
@@ -455,7 +488,8 @@ impl TtsWorkerManager {
         request: LocalTtsSynthesisRequest,
         cancelled: Arc<AtomicBool>,
     ) -> Result<TtsSynthesisResult> {
-        let mut process = self.lock_unless_cancelled(&cancelled).await?;
+        let _capacity = self.acquire_capacity(&cancelled).await?;
+        let mut process = self.lock_available_process(&cancelled).await?;
         self.ensure_worker(&mut process).await?;
         let request_id = uuid::Uuid::new_v4().to_string();
         let worker_request = TtsWorkerRequest::Synthesize {
@@ -525,8 +559,7 @@ impl TtsWorkerManager {
         }
     }
 
-    pub(crate) async fn stop(&self) {
-        let mut process = self.process.lock().await;
+    async fn stop_process(process: &mut Option<TtsWorkerProcess>) {
         if let Some(worker) = process.as_mut() {
             let request_id = uuid::Uuid::new_v4().to_string();
             let dispose = TtsWorkerRequest::Dispose {
@@ -547,7 +580,32 @@ impl TtsWorkerManager {
                 return;
             }
         }
-        Self::terminate(&mut process).await;
+        Self::terminate(process).await;
+    }
+
+    pub(crate) async fn trim_idle_workers(&self) {
+        for process in self.processes.iter().skip(1) {
+            if let Ok(mut process) = process.try_lock() {
+                Self::stop_process(&mut process).await;
+            }
+        }
+        self.next_slot.store(0, Ordering::Relaxed);
+    }
+
+    pub(crate) async fn stop(&self) {
+        let Ok(_capacity) = self
+            .capacity
+            .clone()
+            .acquire_many_owned(MAX_TTS_WORKERS as u32)
+            .await
+        else {
+            return;
+        };
+        for process in self.processes.iter() {
+            let mut process = process.lock().await;
+            Self::stop_process(&mut process).await;
+        }
+        self.next_slot.store(0, Ordering::Relaxed);
     }
 }
 
@@ -601,5 +659,12 @@ mod tests {
             ProtocolLine::Data
         );
         assert_eq!(buffer, b"{}");
+    }
+
+    #[test]
+    fn manager_reserves_three_lazy_worker_slots() {
+        let manager = TtsWorkerManager::default();
+        assert_eq!(manager.processes.len(), MAX_TTS_WORKERS);
+        assert_eq!(manager.capacity.available_permits(), MAX_TTS_WORKERS);
     }
 }

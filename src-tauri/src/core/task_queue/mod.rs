@@ -102,6 +102,8 @@ pub struct PipelineDubbingConfig {
     pub voice: String,
     #[serde(default = "default_dubbing_speed")]
     pub global_speed: f32,
+    #[serde(default = "default_local_tts_concurrency")]
+    pub local_concurrency: u8,
     #[serde(default)]
     pub reference_audio_path: Option<String>,
     #[serde(default)]
@@ -112,6 +114,10 @@ pub struct PipelineDubbingConfig {
 
 fn default_dubbing_speed() -> f32 {
     1.0
+}
+
+fn default_local_tts_concurrency() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -483,6 +489,7 @@ mod tests {
                 model_or_provider_id: "kokoro-multi-lang-v1_1".into(),
                 voice: "10".into(),
                 global_speed: 1.0,
+                local_concurrency: 1,
                 reference_audio_path: None,
                 reference_text: None,
                 num_steps: None,
