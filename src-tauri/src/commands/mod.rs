@@ -2683,6 +2683,8 @@ pub async fn list_translation_models(
         structured_output: None,
         response_json_schema: None,
         glossary_prompt: None,
+        enable_thinking: None,
+        thinking_control_bypassed: false,
     };
     translation::list_provider_models(&request)
         .await
@@ -2720,10 +2722,20 @@ pub async fn test_translation(
         if req.custom_body.is_none() {
             req.custom_body = settings.translate_custom_body.get(&req.provider).cloned();
         }
+        if req.enable_thinking.is_none() {
+            req.enable_thinking = settings
+                .translate_enable_thinking
+                .get(&req.provider)
+                .copied();
+        }
         if req.proxy_url.is_none() && settings.proxy_enabled {
             req.proxy_url = Some(settings.proxy_url);
         }
     }
+
+    // A provider test is always a fresh probe: an older backend may have
+    // started accepting a parameter that was rejected earlier in this session.
+    translation::clear_thinking_param_rejection(&req);
 
     let provider_info = translation::builtin_providers()
         .into_iter()

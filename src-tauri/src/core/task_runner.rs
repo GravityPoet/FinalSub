@@ -908,6 +908,11 @@ async fn run_task_impl(
             .get(&provider)
             .copied()
             .unwrap_or(true);
+        let enable_thinking = settings
+            .translate_enable_thinking
+            .get(&provider)
+            .copied()
+            .unwrap_or(false);
         let glossary_resolution = if provider_info
             .as_ref()
             .map(|info| info.is_ai)
@@ -1030,6 +1035,8 @@ async fn run_task_impl(
                         structured_output: None,
                         response_json_schema: None,
                         glossary_prompt: None,
+                        enable_thinking: Some(enable_thinking),
+                        thinking_control_bypassed: false,
                     };
                     let mut child_cancel = cancel_rx.clone();
                     requests.spawn(async move {
@@ -1126,6 +1133,8 @@ async fn run_task_impl(
                     structured_output: Some(structured_output.clone()),
                     response_json_schema: None,
                     glossary_prompt: (!glossary_prompt.is_empty()).then_some(glossary_prompt),
+                    enable_thinking: Some(enable_thinking),
+                    thinking_control_bypassed: false,
                 };
 
                 match translate_aligned_batch(
@@ -1239,6 +1248,8 @@ async fn run_task_impl(
                 structured_output: None,
                 response_json_schema: None,
                 glossary_prompt: single_glossary_prompt,
+                enable_thinking: Some(enable_thinking),
+                thinking_control_bypassed: false,
             };
 
             let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await {

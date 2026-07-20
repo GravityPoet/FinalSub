@@ -114,6 +114,11 @@ pub struct Settings {
     pub translate_structured_output: std::collections::HashMap<String, String>,
     #[serde(alias = "translateEchoAnchoring")]
     pub translate_echo_anchoring: std::collections::HashMap<String, bool>,
+    /// Whether AI translation may use the model's reasoning/thinking mode.
+    /// `false` (and a missing entry for legacy settings) actively disables it
+    /// when the provider exposes a compatible control parameter.
+    #[serde(alias = "translateEnableThinking")]
+    pub translate_enable_thinking: std::collections::HashMap<String, bool>,
     #[serde(alias = "translationGlossaries")]
     pub translation_glossaries: Vec<TranslationGlossary>,
     #[serde(alias = "translateBatchSize")]
@@ -188,6 +193,7 @@ impl Default for Settings {
             translate_custom_body: std::collections::HashMap::new(),
             translate_structured_output: std::collections::HashMap::new(),
             translate_echo_anchoring: std::collections::HashMap::new(),
+            translate_enable_thinking: std::collections::HashMap::new(),
             translation_glossaries: Vec::new(),
             translate_batch_size: 24,
             translate_concurrency: 1,
@@ -615,6 +621,7 @@ pub fn validate_settings(settings: &Settings) -> Result<()> {
     }
     if settings.translate_structured_output.len() > 64
         || settings.translate_echo_anchoring.len() > 64
+        || settings.translate_enable_thinking.len() > 64
     {
         return Err(crate::error::FinalSubError::Validation(
             "翻译服务的结构化输出配置不能超过 64 项".into(),
@@ -773,6 +780,9 @@ mod tests {
         settings
             .translate_echo_anchoring
             .insert("ollama".into(), true);
+        settings
+            .translate_enable_thinking
+            .insert("ollama".into(), false);
         settings.translation_glossaries = vec![TranslationGlossary {
             id: "product-terms".into(),
             name: "Product terms".into(),
@@ -791,6 +801,7 @@ mod tests {
         let loaded = load_settings(&dir).unwrap();
         assert_eq!(loaded.translate_structured_output["ollama"], "json_schema");
         assert!(loaded.translate_echo_anchoring["ollama"]);
+        assert!(!loaded.translate_enable_thinking["ollama"]);
         assert_eq!(loaded.translation_glossaries[0].entries[0].target, "终字幕");
 
         settings
@@ -837,6 +848,7 @@ mod tests {
         assert_eq!(imported.cloud_asr_request_concurrency, 1);
         assert!(imported.translate_structured_output.is_empty());
         assert!(imported.translate_echo_anchoring.is_empty());
+        assert!(imported.translate_enable_thinking.is_empty());
         assert!(imported.translation_glossaries.is_empty());
     }
 
