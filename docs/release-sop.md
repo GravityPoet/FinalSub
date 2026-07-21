@@ -16,7 +16,7 @@
 - 包管理器：`npm`
 - 当前本机完整验收平台：macOS 12+ Universal（arm64 + x86_64）
 - 当前默认 macOS 构建脚本：`npm run build:universal`
-- `src-tauri/tauri.conf.json` 本地使用 `signingIdentity: "-"`，Tauri 会在制作 DMG 前完成 ad-hoc 签名；GitHub Actions 中的 `APPLE_SIGNING_IDENTITY` 会覆盖该本地值。
+- `src-tauri/tauri.conf.json` 本地使用稳定自签名身份 `ChordVox Local Code Signing`；仓库只钉扎公开证书，私钥留在本机钥匙串。该身份用于本机覆盖安装与权限连续性验证，不等同于 Apple Developer ID、Gatekeeper 信任或 notarization；GitHub Actions 中的正式 `APPLE_SIGNING_IDENTITY` 会覆盖本地身份。
 - Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；在对应 runner 真实跑通安装与启动前，状态仍是“流程已交付、目标机待验收”。
 
 ## 平台产物规划
@@ -93,6 +93,35 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && shasum -a 256 <artifact> > <artifact>.sha256
 ```
+
+## Windows / Linux 非公开安装包验证
+
+`.github/workflows/platform-validation.yml` 是只允许手动触发的目标机验证入口。它不读取生产签名密钥，不创建 Tag 或 Release，也不把产物公开分发；生成的未签名安装包只作为 7 天临时 Actions Artifact 保存。
+
+触发前必须满足：
+
+- `main` 对应的 `Quality` 在精确 commit SHA 上完成且成功。
+- 工作树与 `origin/main` 同步，准备验证的 commit 没有并发替换。
+- Windows/Linux sidecar 来源、固定 commit 与 SHA-256 检查仍由仓库脚本执行，禁止占位二进制绕过 Tauri `externalBin` 检查。
+
+触发和观察：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && gh workflow run platform-validation.yml --ref main
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && gh run list --workflow "Platform Package Validation" --limit 5
+```
+
+验收范围：
+
+- Linux：真实构建 AppImage 与 DEB；在临时 D-Bus、GNOME Keyring 和 Xvfb 会话中运行原生凭据存储回环；AppImage 与安装后的 DEB 主程序都必须连续存活 15 秒；随后真实移除 DEB并生成 SHA-256。
+- Windows：真实构建 NSIS；运行 Windows Credential Manager 回环；静默安装到 Runner 临时目录，主程序连续存活 10 秒，再静默卸载并生成 SHA-256。
+- 两个平台：安装包与 `.sha256` 由 `actions/upload-artifact` 保存 7 天；任一文件缺失即失败。
+
+边界：
+
+- 此工作流证明对应 GitHub-hosted Runner 上的构建、原生凭据存取、安装、启动和卸载，不证明任意客户机器或驱动组合均兼容。
+- Windows 未签名包的 Authenticode 状态必须写入 Step Summary，但当前验证阶段不因 `NotSigned` 失败；正式公开下载仍需代码签名并评估 SmartScreen。
+- Linux Xvfb + GNOME Keyring 是真实桌面服务 E2E，但仍需至少一台目标发行版实体/虚拟桌面做人工 UI 与桌面集成验收后才可扩大兼容性声明。
 
 ## macOS 打包
 
@@ -390,7 +419,7 @@ FinalSub.app: code has no resources but signature indicates they must be present
 
 处理：
 
-- `src-tauri/tauri.conf.json` 设置本地 `signingIdentity: "-"`，让 Tauri 在生成 DMG 前完成 ad-hoc 签名；CI 的 `APPLE_SIGNING_IDENTITY` 仍可覆盖为正式身份。
+- 2026-06-22 当时先用 `signingIdentity: "-"` 解决 Tauri 制作 DMG 前的签名时序；2026-07-21 已升级为稳定本地自签名身份 `ChordVox Local Code Signing`，继续由 Tauri 在制作 DMG 前签名，CI 的正式 `APPLE_SIGNING_IDENTITY` 仍可覆盖。
 - `build:local` / `build:universal` 不再在 DMG 生成后重签 `.app`。
 - 每次仍需挂载 Tauri 生成的 DMG，对镜像内部 `FinalSub.app` 执行深度签名、双架构与最低 macOS 版本验证。
 
@@ -526,6 +555,71 @@ error: this `impl` can be derived
 防复发：
 
 - 本机覆盖安装前先完成 `cargo clippy -- -D warnings`；若 clippy 失败，不要把旧构建当成最终安装结果，必须修复后重建再覆盖。
+
+### 2026-07-21：Quality 的 Linux 测试在业务测试开始前缺少 sidecar
+
+现象：
+
+```text
+resource path `binaries/ffmpeg-x86_64-unknown-linux-gnu` doesn't exist
+```
+
+原因：
+
+- `src-tauri/tauri.conf.json` 声明 FFmpeg 与 Whisper 为 `externalBin`，Tauri build script 在编译测试目标时也会验证目标平台文件。
+- Release job 会先运行固定摘要的 Linux sidecar 脚本，但旧 Quality 的 Ubuntu job 直接执行 `cargo test`，两个工作流的前置条件不一致。
+
+处理：
+
+- Quality 的 Ubuntu job 在 Rust 检查前复用 `scripts/install-ffmpeg-sidecar-linux.sh` 与 `scripts/build-whisper-sidecar-linux.sh`。
+- 禁止创建空占位文件或在测试配置中移除 `externalBin`，否则 CI 绿色不能证明发布构建的真实前置条件。
+
+防复发：
+
+- 新增或调整平台 sidecar 后，Quality、非公开平台验证和 Release 三条工作流必须复用同一组固定来源构建脚本。
+
+### 2026-07-21：pre-push 把运行时 UUID 误判为 secret assignment
+
+现象：
+
+```text
+content:secret-assignment at the runtime-generated session_id test field
+```
+
+原因：
+
+- 全局隐私门禁把测试中的 `session_id` 字段名视为疑似密钥赋值，但右值是每次运行动态生成的 UUID，不是硬编码凭据、账号、用户数据或可复用秘密。
+
+处理：
+
+- 精确审计命中提交与行内容后，只对该次推送使用门禁文档提供的 `git push --no-verify` reviewed exception；没有修改或关闭全局 hook。
+
+防复发：
+
+- 门禁命中时必须先审计原提交、字段来源与右值；只有确认是公开代码或运行时表达式时才能使用单次例外，真实常量或用户数据必须正常移除。
+
+### 2026-07-21：macOS 专用参数在 Linux Clippy 中未使用
+
+现象：
+
+```text
+error: unused variable: `app_config_dir`
+--> src/core/secrets.rs:396:32
+```
+
+原因：
+
+- macOS 凭据后端会用 `app_config_dir` 初始化本地加密仓库；Windows/Linux 通过条件编译改用系统凭据后端，同一参数在非 macOS 目标不参与表达式。
+- 既有本机 Clippy 只覆盖 macOS，因此直到 Ubuntu Quality 真正越过 sidecar 编译边界后才暴露。
+
+处理：
+
+- 参数改为 `_app_config_dir`，macOS 分支继续使用同一值；没有增加 `allow`、没有跳过 Linux Clippy，也没有改变任何凭据读写路径。
+- 本机重新通过凭据专项 6/6、全目标 Clippy 与格式检查；最终结论仍以精确 commit 的 Ubuntu Quality 为准。
+
+防复发：
+
+- 修改 `cfg(target_os)` 分支后，至少要求 macOS 与 Linux 的 `cargo clippy --all-targets --all-features -- -D warnings` 都在远端执行；涉及 Windows 专属代码时再由平台验证工作流覆盖 Windows 编译和原生凭据回环。
 
 ### 追加模板
 
