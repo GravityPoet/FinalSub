@@ -33,6 +33,10 @@ jobs:
             libkeyutils-dev \
             pkg-config
       - run: npm ci
+      - name: Build pinned Linux sidecars for Rust checks
+        run: |
+          bash scripts/install-ffmpeg-sidecar-linux.sh
+          bash scripts/build-whisper-sidecar-linux.sh
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
