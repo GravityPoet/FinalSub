@@ -170,7 +170,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 |---|---:|---|
 | macOS 12+ arm64/x86_64/universal | 🟢 | Whisper/FFmpeg sidecar 齐全；Universal `.app` 与 DMG 已真实构建、签名、挂载验证并安装到 `/Applications/FinalSub.app` |
 | macOS Developer ID / notarization / stapling | 🟡 | GitHub Actions 流程已配置；需仓库注入证书、签名身份、Apple ID、app password 与 Team ID 后做真实发布验收 |
-| Windows x86_64 安装包 | 🟢 验证 / 🟡 公签 | 固定摘要 sidecar、Credential Manager、NSIS 构建、静默安装、主程序启动与卸载已在 Windows runner 通过；正式公开下载仍需 Authenticode 与 SmartScreen 验收 |
+| Windows x86_64 安装包 | 🟢 验证 / 🟡 公签 | 固定摘要 sidecar、Credential Manager、NSIS 构建/安装/启动/卸载已通过；Release 已接 PFX 临时导入、自动 thumbprint、SHA-256 + RFC 3161 时间戳及安装包/主程序/sidecar 同证书验签，仍需正式 CA 证书与 SmartScreen 验收 |
 | Linux x86_64 安装包 | 🟢 | 固定摘要 sidecar、Secret Service + Keyutils、AppImage/DEB 构建与启动、DEB 安装/卸载已在 Ubuntu 22.04 runner 通过 |
 | 多平台发布编排 | 🟢 配置 | 单一 draft release 预创建，macOS/Windows/Linux 矩阵完成后生成逐资产 SHA-256 再发布，避免并发建 release 与半成品公开 |
 | 签名应用内更新 | 🟡 | Rust updater 固定 HTTPS manifest、限定 FinalSub 官方 GitHub Release asset、签名校验、进度、安装前任务/控制句柄竞态复检与重启已接入；CI 从 Secret 原子生成 git-ignored release 配置并产出 macOS App、Linux AppImage/DEB 与 Windows NSIS 签名包，`latest.json` 缺任一目标即熔断发布；仍需生产根密钥 ceremony 与真实远端升级 E2E |
@@ -210,7 +210,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 ## 13. 仍不能宣称完成的事项
 
 1. Apple Developer ID 正式签名、公证、stapling 尚未用仓库 secrets 跑通；本机稳定自签名包适合本地覆盖安装，但不能替代客户侧 Gatekeeper 信任。
-2. Windows 安装包代码签名证书尚未配置；NSIS 已完成真实安装/启动/卸载，但公开下载仍可能触发 SmartScreen。
+2. Windows PFX 导入、Tauri Authenticode 配置、同证书/时间戳验签门禁已交付；正式 CA 代码签名证书尚未配置，公开下载仍可能触发 SmartScreen。
 3. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
 4. 付费云 ASR、翻译、ElevenLabs 与豆包 provider 尚缺真实账号 smoke test；协议边界测试不能替代服务端验收。
 5. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛、人工红线续跑与可配置 1–3 路独立 worker 已交付；仍缺真实本地 TTS 模型音质 E2E 和 A/B 音色比较。
