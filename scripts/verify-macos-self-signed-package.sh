@@ -41,7 +41,7 @@ cleanup() {
       -u "$MOUNT_PATH/FinalSub.app" >/dev/null 2>&1 || true
   fi
   if [ -n "$DEVICE" ]; then
-    hdiutil detach "$DEVICE" >/dev/null 2>&1 || true
+    diskutil eject "$DEVICE" >/dev/null 2>&1 || true
   fi
   case "$WORK_DIR" in
     "${TMPDIR:-/tmp}"/finalsub-self-signed-verify.*)
