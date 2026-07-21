@@ -119,9 +119,12 @@ jobs:
             Write-Host "signing-fixture: exporting public certificate"
             Export-Certificate -Cert $certificate -FilePath $cerPath -Type CERT | Out-Null
             Write-Host "signing-fixture: trusting public certificate"
-            & certutil.exe -user -f -addstore Root $cerPath | Out-Null
+            & certutil.exe -f -addstore Root $cerPath | Out-Null
             if ($LASTEXITCODE -ne 0) {
               throw "certutil failed to trust the Windows signing fixture certificate."
+            }
+            if (-not (Test-Path "Cert:\LocalMachine\Root\$($certificate.Thumbprint)")) {
+              throw "The Windows signing fixture certificate is missing from LocalMachine Root."
             }
             Write-Host "signing-fixture: public certificate trusted"
             Remove-Item -Path "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
