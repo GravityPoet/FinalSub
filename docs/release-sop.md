@@ -17,15 +17,15 @@
 - 当前本机完整验收平台：macOS 12+ Universal（arm64 + x86_64）
 - 当前默认 macOS 构建脚本：`npm run build:universal`
 - `src-tauri/tauri.conf.json` 本地使用稳定自签名身份 `ChordVox Local Code Signing`；仓库只钉扎公开证书，私钥留在本机钥匙串。该身份用于本机覆盖安装与权限连续性验证，不等同于 Apple Developer ID、Gatekeeper 信任或 notarization；GitHub Actions 中的正式 `APPLE_SIGNING_IDENTITY` 会覆盖本地身份。
-- Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；在对应 runner 真实跑通安装与启动前，状态仍是“流程已交付、目标机待验收”。
+- Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；`b96134f` 已在 GitHub-hosted Windows/Linux runner 完成原生凭据、构建、安装、启动和卸载验证。
 
 ## 平台产物规划
 
 | 平台 | 当前状态 | 目标产物 | 备注 |
 | --- | --- | --- | --- |
 | macOS | Universal `.app` / `.dmg` 已验证 | `.dmg` | 正式外发需 Developer ID 签名和 notarization |
-| Windows | 构建脚本与 release job 已交付 | NSIS `.exe` | 仍需 Windows runner 安装/卸载验收；代码签名可选但强烈建议 |
-| Linux | 构建脚本与 release job 已交付 | `.AppImage` / `.deb` | 仍需 Linux 桌面会话启动与 Secret Service 验收 |
+| Windows | NSIS 构建/安装/启动/卸载已验证 | NSIS `.exe` | 正式公开下载仍需代码签名与 SmartScreen 验收 |
+| Linux | AppImage/DEB 构建、启动、安装/卸载及 Secret Service 已验证 | `.AppImage` / `.deb` | 扩大兼容性声明前仍建议目标发行版桌面抽检 |
 
 ## GitHub Release 规则
 
@@ -122,6 +122,8 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && gh run list --workflow "Platfor
 - 此工作流证明对应 GitHub-hosted Runner 上的构建、原生凭据存取、安装、启动和卸载，不证明任意客户机器或驱动组合均兼容。
 - Windows 未签名包的 Authenticode 状态必须写入 Step Summary，但当前验证阶段不因 `NotSigned` 失败；正式公开下载仍需代码签名并评估 SmartScreen。
 - Linux Xvfb + GNOME Keyring 是真实桌面服务 E2E，但仍需至少一台目标发行版实体/虚拟桌面做人工 UI 与桌面集成验收后才可扩大兼容性声明。
+
+最近通过的证据：GitHub Actions `Platform Package Validation` run `29812150992`，commit `b96134f96a18d6bee824a501045216da31df1ded`。Windows 与 Linux job 均成功；未签名验证产物及 SHA-256 作为 7 天临时 Artifact 保存至 2026-07-28。
 
 ## macOS 打包
 
@@ -367,7 +369,7 @@ npm ci
 npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis
 ```
 
-GitHub Actions 入口：`.github/workflows/release.yml`。当前仓库尚未配置 Windows 代码签名证书；这不阻止生成 NSIS，但正式公开下载前仍需 runner 上完成安装、覆盖安装、卸载与 SmartScreen/签名状态验收。
+GitHub Actions 入口：`.github/workflows/release.yml`。`b96134f` 已在 Windows runner 完成 Credential Manager 回环、NSIS 静默安装、主程序启动与静默卸载。当前仓库尚未配置 Windows 代码签名证书；正式公开下载前仍需完成 Authenticode 与 SmartScreen 验收。
 
 ## Linux 打包
 
@@ -380,7 +382,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm ci
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run tauri -- build --target x86_64-unknown-linux-gnu --bundles appimage,deb
 ```
 
-GitHub Actions 入口：`.github/workflows/release.yml`。正式宣称 Linux 可发布前，仍需在真实桌面会话验收 AppImage/DEB 启动、覆盖/卸载，以及 Secret Service + Keyutils 的 Keychain 存取。
+GitHub Actions 入口：`.github/workflows/release.yml`。`b96134f` 已在 Ubuntu 22.04 runner 的临时 D-Bus、GNOME Keyring 与 Xvfb 会话完成 Secret Service + Keyutils 回环、AppImage/DEB 启动、DEB 安装与卸载；该证据不替代所有目标发行版的桌面兼容性抽检。
 
 ## 踩坑记录
 
