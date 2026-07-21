@@ -33,7 +33,7 @@
     "active": true,
     "targets": "all",
     "macOS": {
-      "signingIdentity": "-",
+      "signingIdentity": "ChordVox Local Code Signing",
       "hardenedRuntime": true,
       "entitlements": "Entitlements.plist",
       "minimumSystemVersion": "12.0"

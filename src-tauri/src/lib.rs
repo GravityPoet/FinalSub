@@ -62,6 +62,8 @@ pub fn run() {
                 .app_config_dir()
                 .expect("failed to resolve app config dir");
             std::fs::create_dir_all(&config_dir).ok();
+            crate::core::secrets::initialize_secret_store(&config_dir)
+                .map_err(std::io::Error::other)?;
             let _ = crate::core::logs::cleanup_old_logs(&config_dir);
             // 读取 opt-in 设置决定是否真正上报遥测（默认关闭）。
             if let Ok(settings) = crate::core::settings::load_settings(&config_dir) {

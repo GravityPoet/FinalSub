@@ -32,7 +32,7 @@ FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 
 | 软字幕 / MKV 封装 | 🟢 | stream-copy 视频与原声，SRT/VTT 转 SubRip、ASS 保留 ASS，语言/标题 metadata 与默认轨道 disposition；双音轨自动使用 MKV |
 | TTS 配音与声音克隆 | 🟠 | 已交付本地/云端引擎、逐行/批量工作台、会话恢复、估时校准与时间轴自动收敛、本地/云端音色资产及 WAV/MP3 导出；云端创建、找回、状态刷新、训练次数、一键重训和 `.svoice` 迁移已接入，仍需真实本地模型音质与付费账号 E2E，见第 5 节 |
 | 端到端流水线 | 🟢 | 新建任务按交付目标生成转录 → 翻译 → 字幕校对 → 配音 → 配音确认 → 成片 → 完成阶段；状态与产物路径持久化，批准、暂停、重启和重试均从当前阶段续跑 |
-| 配置导入导出 | 🟢 | 普通 JSON 与 Argon2id + XChaCha20-Poly1305 加密格式；Keychain 密钥不导出 |
+| 配置导入导出 | 🟢 | 普通 JSON 与 Argon2id + XChaCha20-Poly1305 加密格式；本地凭据密钥不导出 |
 
 ## 2. ASR 覆盖
 
@@ -69,7 +69,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 - 必须显式开启音频上传授权。
 - 支持多套云 ASR 配置实例；旧单配置字段继续作为兼容镜像。
 - 同一协议与规范化 endpoint 跨任务共享服务商级请求闸门；并发数支持 1-8，片段启动间隔全局生效，排队可取消，不同协议或 endpoint 相互隔离。
-- Keychain account 绑定 `provider + endpoint + field`；协议或 endpoint 改变后不会读取旧密钥。
+- 凭据 account 绑定 `provider + endpoint + field`；协议或 endpoint 改变后不会读取旧密钥。macOS 使用应用私有 XChaCha20-Poly1305 加密存储，避免系统钥匙串反复弹出密码授权；Windows / Linux 继续使用系统凭据服务。
 - redirects 禁用，provider 错误体有长度限制并脱敏。
 - Gladia 与讯飞的异步订单在建单后原子落盘；完成或确定失败清理，取消、超时或瞬时网络错误保留用于续查。
 
@@ -111,9 +111,9 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 |---|---:|---|
 | 行级配音工作台 | 🟢 | 已支持字幕导入、视频播放/行级跳转/当前行高亮、逐行/批量生成、试听、重生成、状态统计和恢复；可修改单行文本、覆盖或恢复全局音色，编辑后只失效对应 WAV 与最终导出；可另存字幕副本，并仅在源文件哈希未改变时创建精确备份后原子写回 |
 | 本地 TTS | 🟠 | Rust 原生 sherpa-onnx 已接 Kokoro 103 音色、VITS 174 说话人与 ZipVoice；支持受管下载、取消、原子 WAV 与 1–3 路独立进程批量合成，额外 worker 批量后自动回收；仍缺真实本地 TTS 模型音质 E2E |
-| 云 TTS | 🟡 | OpenAI-compatible、Azure Speech、ElevenLabs、火山引擎豆包语音 V3 与 Edge TTS 免费试用档已接入；豆包固定官方 Endpoint、资源版本/音色路由、chunked base64 PCM、Keychain 与定向错误诊断已有协议测试，仍缺付费账号真实 E2E；Edge 无需 Key 但不承诺稳定性 |
+| 云 TTS | 🟡 | OpenAI-compatible、Azure Speech、ElevenLabs、火山引擎豆包语音 V3 与 Edge TTS 免费试用档已接入；豆包固定官方 Endpoint、资源版本/音色路由、chunked base64 PCM、本地凭据隔离与定向错误诊断已有协议测试，仍缺付费账号真实 E2E；Edge 无需 Key 但不承诺稳定性 |
 | 本地声音克隆 | 🟠 | ZipVoice 已支持参考 WAV + 逐字文本、4/8 步质量档与 30 秒/64 MB 边界；已补录音/文件导入、质量确认、持久音色实体、`.svoice` v1 导入导出、字幕行选段、参考文本预填和 FFmpeg `afftdn` 本地降噪兜底，仍缺真实模型音质 E2E 与 A/B 音色比较 |
-| 云声音克隆 | 🟡 | ElevenLabs 使用当前 IVC `POST /v1/voices/add`、V2 cloned 列表、找回与可选远端删除；豆包声音复刻 2.0 支持 S_ 槽位上传训练、V3 状态查询 + V1 回退、状态刷新、剩余训练次数、一键重训、手动找回、`.svoice` 导入导出和 `seed-icl-2.0` 合成路由。训练凭据与 TTS API Key 分离并只存 Keychain，音频上传逐次授权；仍需两家付费账号真实 E2E |
+| 云声音克隆 | 🟡 | ElevenLabs 使用当前 IVC `POST /v1/voices/add`、V2 cloned 列表、找回与可选远端删除；豆包声音复刻 2.0 支持 S_ 槽位上传训练、V3 状态查询 + V1 回退、状态刷新、剩余训练次数、一键重训、手动找回、`.svoice` 导入导出和 `seed-icl-2.0` 合成路由。训练凭据与 TTS API Key 分离并只存本地凭据存储，音频上传逐次授权；仍需两家付费账号真实 E2E |
 | 时间轴对齐 | 🟣 | CJK/拉丁混排估时、会话级语速校准、四档合成前预控、Kokoro/VITS 至多一次免费重合成、ZipVoice/云端本地 `atempo` 兜底均已接入；ElevenLabs 因 1.2× 服务端上限不虚报预控，云端不会为对齐重复计费。综合倍率超过 1.5× 时工作台与流水线统一停在人工处理，并可从任务卡直达原会话后续跑；真实 FFmpeg WAV 时长夹具已验证 |
 | 会话恢复 | 🟢 | 每行完成即原子保存；崩溃时 synthesizing → pending，单个 WAV 丢失只回退对应行，源字幕改变/消失可见 |
 | 输出模式 | 🟢 | 配音工作台可按原始 start_ms 多路混合并导出 WAV/MP3；视频合成页可继续做替换、sidechain ducking 混音或双轨 MKV |
@@ -156,7 +156,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 | 能力 | 状态 | 说明 |
 |---|---:|---|
-| 密钥存储 | 🟢 macOS / Windows；🟡 Linux | Apple/Windows 原生后端与 Linux Secret Service + Keyutils 持久后端已配置；密钥不进普通配置、不通过 IPC 返回前端 |
+| 密钥存储 | 🟢 macOS / Windows；🟡 Linux | macOS 使用应用私有 XChaCha20-Poly1305 加密存储与 owner-only 文件权限，不调用系统钥匙串；Windows 使用原生凭据后端，Linux 使用 Secret Service + Keyutils 持久后端；密钥不进普通配置、不通过 IPC 返回前端 |
 | Endpoint 绑定 | 🟢 | 导入配置或切换地址不会向新 endpoint 发送旧密钥 |
 | 配置加密 | 🟢 | Argon2id + XChaCha20-Poly1305；错误口令和篡改均拒绝 |
 | 文件边界 | 🟢 | 绝对路径、扩展名、存在性、敏感目录和路径逃逸校验；ZipVoice 参考 WAV 限 64 MB / 30 秒，豆包训练音频限 10 MB、响应限 64 KB，字幕会话限 20 MB / 2,000 行 |

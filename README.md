@@ -86,7 +86,7 @@ That's it. Watch your high-quality, translated subtitles render in real-time.
 - **Desktop Framework:** [Tauri 2.0](https://tauri.app/) (Rust-powered backend, blazing-fast, avoiding Electron's bloat)
 - **Frontend UI:** [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) + [TailwindCSS 4.0](https://tailwindcss.com/)
 - **Engines:** [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) (Metal GPU accelerated) + [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) + [FFmpeg 7.x](https://ffmpeg.org/) (Static universal binary sidecar)
-- **Security:** Rust `keyring` binding native macOS Keychain for API credentials.
+- **Security:** prompt-free encrypted credential vault on macOS; native OS credential stores on Windows and Linux.
 
 ---
 
@@ -95,7 +95,7 @@ That's it. Watch your high-quality, translated subtitles render in real-time.
 - FinalSub is a local client. Subtitles, audio chunks, and video files stay on your machine.
 - Local models process everything in memory and on disk offline.
 - Cloud APIs (ASR, Translation, TTS) are **strictly opt-in**. Audio is only uploaded in VAD-segmented chunks after you save endpoint credentials and grant explicit consent.
-- Secrets are stored in your OS Keychain—never sent over IPC or exposed in front-end logs.
+- On macOS, secrets are stored in an app-private XChaCha20-Poly1305 encrypted vault with owner-only permissions, avoiding recurring system password prompts. Windows and Linux use their native credential stores. Plaintext secrets are never returned to the front end or written to logs.
 
 ---
 

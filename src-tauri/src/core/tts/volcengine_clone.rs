@@ -1,7 +1,7 @@
 //! 火山引擎「声音复刻 2.0」的训练与状态协议。
 //!
 //! 合成接口使用 provider 的 API Key；声音复刻训练沿用火山当前兼容的
-//! APP ID + Access Token 双凭据，并且只把凭据放在系统 Keychain。这里不
+//! APP ID + Access Token 双凭据，并且只把凭据放在本地凭据存储。这里不
 //! 保存参考音频，也不把服务端响应原文无限制地带回前端。
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};

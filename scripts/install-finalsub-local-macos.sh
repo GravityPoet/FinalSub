@@ -20,6 +20,8 @@ BACKUP_ZIP="$BACKUP_DIR/FinalSub.app.zip"
 STAGE_APP="/Applications/.FinalSub-stage-$$"
 DISPLACED_APP="/Applications/.FinalSub-displaced-$$"
 VERIFY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/finalsub-install-verify.XXXXXX")"
+OLD_REQUIREMENT=""
+NEW_REQUIREMENT=""
 
 unregister_app_bundle() {
   app_bundle="$1"
@@ -85,7 +87,7 @@ fi
 mkdir -p "$TARGET_DIR" "$BACKUP_DIR"
 : > "$TARGET_DIR/.metadata_never_index"
 : > "$VERIFY_ROOT/.metadata_never_index"
-codesign --verify --deep --strict --verbose=2 "$SOURCE_APP"
+bash "$REPO_ROOT/scripts/verify-finalsub-macos-app.sh" "$SOURCE_APP"
 if [ "$(plutil -extract CFBundleIdentifier raw "$SOURCE_APP/Contents/Info.plist")" != "$BUNDLE_ID" ]; then
   echo "Unexpected source bundle identifier." >&2
   exit 1
@@ -97,7 +99,7 @@ done
 rm -rf "$STAGE_APP" "$DISPLACED_APP"
 ditto --noextattr --noqtn "$SOURCE_APP" "$STAGE_APP"
 xattr -cr "$STAGE_APP"
-codesign --verify --deep --strict --verbose=2 "$STAGE_APP"
+bash "$REPO_ROOT/scripts/verify-finalsub-macos-app.sh" "$STAGE_APP"
 ditto -c -k --sequesterRsrc --keepParent "$DEST_APP" "$BACKUP_ZIP"
 unzip -tq "$BACKUP_ZIP" >/dev/null
 ditto -x -k "$BACKUP_ZIP" "$VERIFY_ROOT"
@@ -107,6 +109,7 @@ if [ "$(plutil -extract CFBundleIdentifier raw "$BACKUP_APP/Contents/Info.plist"
   exit 1
 fi
 codesign --verify --deep --strict "$BACKUP_APP"
+OLD_REQUIREMENT="$(codesign -d -r- "$DEST_APP" 2>&1 | sed -n 's/^designated => //p' | head -n 1)"
 
 osascript -e 'tell application id "com.gravitypoet.finalsub" to quit' >/dev/null 2>&1 || true
 for _ in 1 2 3 4 5; do
@@ -127,7 +130,8 @@ fi
 "$LSREGISTER" -u "$DEST_APP" >/dev/null 2>&1 || true
 mv "$DEST_APP" "$DISPLACED_APP"
 mv "$STAGE_APP" "$DEST_APP"
-codesign --verify --deep --strict --verbose=2 "$DEST_APP"
+bash "$REPO_ROOT/scripts/verify-finalsub-macos-app.sh" "$DEST_APP"
+NEW_REQUIREMENT="$(codesign -d -r- "$DEST_APP" 2>&1 | sed -n 's/^designated => //p' | head -n 1)"
 if [ "$(plutil -extract CFBundleIdentifier raw "$DEST_APP/Contents/Info.plist")" != "$BUNDLE_ID" ]; then
   echo "Installed app has the wrong bundle identifier." >&2
   exit 1
@@ -239,5 +243,11 @@ fi
 
 rm -rf "$DISPLACED_APP"
 trap - EXIT INT TERM
+if [ "$OLD_REQUIREMENT" = "$NEW_REQUIREMENT" ]; then
+  printf 'SIGNING_REQUIREMENT_CHANGED=0\n'
+else
+  printf 'SIGNING_REQUIREMENT_CHANGED=1\n'
+fi
+printf 'SIGNING_REQUIREMENT=%s\n' "$NEW_REQUIREMENT"
 printf 'INSTALLED_APP=%s\nBACKUP_ZIP=%s\n' "$DEST_APP" "$BACKUP_ZIP"
 pgrep -fl "$PROCESS_PATTERN"

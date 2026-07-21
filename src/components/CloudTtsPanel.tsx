@@ -514,7 +514,7 @@ export function CloudTtsPanel() {
                   {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-              <p className="mt-2 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudKeychain")}</p>
+              <p className="mt-2 text-xs leading-5 text-text-tertiary">{t("models.ttsCloudSecretStorage")}</p>
             </div>
           ) : (
             <div className="rounded-2xl border border-success/20 bg-success/10 p-4">

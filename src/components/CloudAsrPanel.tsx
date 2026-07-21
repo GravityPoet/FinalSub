@@ -236,7 +236,7 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
         .catch(() => {
           if (!active) return;
           setKeyConfigured(false);
-          setError(t("models.cloudKeychainError"));
+          setError(t("models.cloudSecretStoreError"));
         })
         .finally(() => {
           if (active) setCheckingKey(false);
@@ -767,7 +767,7 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
         <div className="mt-5 flex items-center justify-between gap-3">
           <div className="hidden items-center gap-2 text-xs text-text-tertiary sm:flex">
             <KeyRound size={14} />
-            Keychain · endpoint-bound
+            {t("models.cloudSecretStorage")}
           </div>
           <Button
             type="submit"
