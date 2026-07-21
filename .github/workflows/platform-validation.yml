@@ -1,0 +1,104 @@
+name: Platform Package Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-package-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux package and desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils \
+            libdbus-1-dev \
+            libkeyutils-dev \
+            pkg-config \
+            libfuse2 \
+            xvfb \
+            xauth \
+            dbus-x11 \
+            gnome-keyring
+      - run: npm ci
+      - name: Build pinned Linux sidecars
+        run: |
+          bash scripts/install-ffmpeg-sidecar-linux.sh
+          bash scripts/build-whisper-sidecar-linux.sh
+      - name: Verify Linux native credential storage
+        run: |
+          dbus-run-session -- bash -c '
+            set -euo pipefail
+            printf "\n" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            cargo test --manifest-path src-tauri/Cargo.toml \
+              commands::tests::keyring_native_backend_manages_provider_secret \
+              -- --ignored --exact
+          '
+      - name: Build unsigned Linux validation packages
+        run: npm run tauri -- build --target x86_64-unknown-linux-gnu --bundles appimage,deb
+      - name: Install, launch, and remove Linux packages
+        run: bash scripts/verify-linux-packages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finalsub-linux-validation-${{ github.sha }}
+          path: |
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.sha256
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: npm ci
+      - name: Build pinned Windows sidecars
+        shell: pwsh
+        run: |
+          ./scripts/install-ffmpeg-sidecar-windows.ps1
+          ./scripts/build-whisper-sidecar-windows.ps1
+      - name: Verify Windows native credential storage
+        run: cargo test --manifest-path src-tauri/Cargo.toml commands::tests::keyring_native_backend_manages_provider_secret -- --ignored --exact
+      - name: Build unsigned Windows validation installer
+        run: npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Install, launch, and remove Windows package
+        shell: pwsh
+        run: ./scripts/verify-windows-package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finalsub-windows-validation-${{ github.sha }}
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sha256
+          if-no-files-found: error
+          retention-days: 7
