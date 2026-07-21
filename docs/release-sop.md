@@ -17,7 +17,7 @@
 - 当前本机完整验收平台：macOS 12+ Universal（arm64 + x86_64）
 - 当前默认 macOS 构建脚本：`npm run build:universal`
 - `src-tauri/tauri.conf.json` 本地使用稳定自签名身份 `ChordVox Local Code Signing`；仓库只钉扎公开证书，私钥留在本机钥匙串。该身份用于本机覆盖安装与权限连续性验证，不等同于 Apple Developer ID、Gatekeeper 信任或 notarization；GitHub Actions 中的正式 `APPLE_SIGNING_IDENTITY` 会覆盖本地身份。
-- Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；`b96134f` 已在 GitHub-hosted Windows/Linux runner 完成原生凭据、构建、安装、启动和卸载验证。
+- Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；`3427b3a` 已在 GitHub-hosted Windows/Linux runner 完成原生凭据、构建、安装、启动和卸载验证，Windows 还完整通过临时 PFX 导入、Tauri Authenticode、RFC 3161 时间戳与同证书验签。
 - Windows Release job 会临时导入 Base64 PFX、自动派生 SHA-1 thumbprint，以 SHA-256 + RFC 3161 时间戳交给 Tauri 签名，并在发布前要求安装包、主程序、FFmpeg 与 Whisper sidecar 均由同一证书签名且带时间戳；PFX 文件会在导入后立即物理删除，runner 证书在 `always()` 清理步骤移除。
 
 ## 平台产物规划
@@ -134,10 +134,10 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && gh run list --workflow "Platfor
 边界：
 
 - 此工作流证明对应 GitHub-hosted Runner 上的构建、原生凭据存取、安装、启动和卸载，不证明任意客户机器或驱动组合均兼容。
-- Windows 临时自签名证书只因被导入该 runner 的 CurrentUser Root 才能显示 `Valid`；它仅证明 PFX 导入、Tauri 配置、二进制签名和验签门禁可执行，不替代正式 CA 证书或 SmartScreen 信誉。
+- Windows 临时自签名证书只因被导入该 runner 的 `LocalMachine\Root` 才能显示 `Valid`；它仅证明 PFX 导入、Tauri 配置、二进制签名和验签门禁可执行，不替代正式 CA 证书或 SmartScreen 信誉。
 - Linux Xvfb + GNOME Keyring 是真实桌面服务 E2E，但仍需至少一台目标发行版实体/虚拟桌面做人工 UI 与桌面集成验收后才可扩大兼容性声明。
 
-最近通过的证据：GitHub Actions `Platform Package Validation` run `29812150992`，commit `b96134f96a18d6bee824a501045216da31df1ded`。Windows 与 Linux job 均成功；未签名验证产物及 SHA-256 作为 7 天临时 Artifact 保存至 2026-07-28。
+最近通过的证据：GitHub Actions `Platform Package Validation` run `29819811618`，commit `3427b3a8eed7aaf5a5188db82157d2776ab18a52`。Windows 与 Linux job 均成功；Windows 完成临时 PFX 导入、Tauri 对安装器/主程序/FFmpeg/Whisper 的同证书签名、RFC 3161 时间戳、NSIS 安装/10 秒启动/卸载和强制验签，Linux 完成 Secret Service + Keyutils、AppImage/DEB 构建与安装启动链。两套验证产物及 SHA-256 作为 7 天临时 Artifact 保存至 2026-07-28。
 
 ## macOS 打包
 
@@ -383,7 +383,7 @@ npm ci
 npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis
 ```
 
-GitHub Actions 入口：`.github/workflows/release.yml`。Release job 已接入 PFX 临时导入、自动 thumbprint、SHA-256 + RFC 3161 时间戳、Tauri 签名配置、安装包/主程序/sidecar 同证书验签及失败后证书清理。`b96134f` 已在 Windows runner 完成 Credential Manager 回环、NSIS 静默安装、主程序启动与静默卸载；正式 CA 证书尚未配置，公开下载前仍需完成生产 Authenticode 与 SmartScreen 验收。
+GitHub Actions 入口：`.github/workflows/release.yml`。Release job 已接入 PFX 临时导入、自动 thumbprint、SHA-256 + RFC 3161 时间戳、Tauri 签名配置、安装包/主程序/sidecar 同证书验签及失败后证书清理。`3427b3a` 的 run `29819811618` 已在 Windows runner 完成 Credential Manager 回环、临时 PFX 导入、Tauri 实际签名、四类文件同证书/时间戳验签、NSIS 静默安装、10 秒启动与静默卸载；正式 CA 证书尚未配置，公开下载前仍需完成生产 Authenticode 与 SmartScreen 验收。
 
 ## Linux 打包
 
@@ -396,7 +396,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm ci
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run tauri -- build --target x86_64-unknown-linux-gnu --bundles appimage,deb
 ```
 
-GitHub Actions 入口：`.github/workflows/release.yml`。`b96134f` 已在 Ubuntu 22.04 runner 的临时 D-Bus、GNOME Keyring 与 Xvfb 会话完成 Secret Service + Keyutils 回环、AppImage/DEB 启动、DEB 安装与卸载；该证据不替代所有目标发行版的桌面兼容性抽检。
+GitHub Actions 入口：`.github/workflows/release.yml`。`3427b3a` 的 run `29819811618` 已在 Ubuntu 22.04 runner 的临时 D-Bus、GNOME Keyring 与 Xvfb 会话完成 Secret Service + Keyutils 回环、AppImage/DEB 启动、DEB 安装与卸载；该证据不替代所有目标发行版的桌面兼容性抽检。
 
 ## 踩坑记录
 
@@ -634,6 +634,50 @@ content:secret-assignment scripts/import-windows-signing-certificate.ps1:35
 防复发：
 
 - Windows 签名改动若命中 `secret-assignment`，必须确认右值是运行时随机值或 Secret 引用，并复核没有日志输出、持久文件或仓库常量；不满足任一条件时禁止例外提交。
+
+### 2026-07-21：无桌面的 Windows runner 卡在用户根证书信任确认
+
+现象：
+
+```text
+signing-fixture: trusting public certificate
+The action 'Create ephemeral Windows signing fixture' has timed out after 5 minutes.
+```
+
+原因：
+
+- `Platform Package Validation` run `29815630855` 在同一步持续等待后被人工熔断；增加阶段标记和 5 分钟硬超时后，run `29817028449` 证明 `Import-Certificate` 卡在 `CurrentUser\Root`，run `29818067101` 证明 `certutil -user` 访问同一受保护根证书库也会等待交互确认。
+- 证书生成、PFX 导出和公钥导出均已在日志中完成；问题不在 Tauri、PFX 或业务代码，而是无桌面 runner 无法响应当前用户根证书信任对话框。
+
+处理：
+
+- GitHub-hosted Windows runner 以管理员身份运行且关闭 UAC，因此测试根证书改为通过 `certutil -f -addstore Root` 导入 `LocalMachine\Root`；导入后必须按精确 SHA-1 thumbprint 验证存在。
+- 清理脚本同时精确删除 `CurrentUser\My` 的临时私钥证书与 `LocalMachine\Root` 的测试根证书；夹具在根证书写入前就把两个 thumbprint 写入 `GITHUB_ENV`，失败或超时仍可由 `always()` 清理。
+
+防复发：
+
+- 无桌面 CI 不再把临时自签名证书写入 `CurrentUser\Root`；所有临时信任写入必须有硬超时、阶段标记、精确存在性校验和按 thumbprint 清理。
+
+### 2026-07-21：PowerShell EKU 的 ObjectId 被当成 Oid 对象
+
+现象：
+
+```text
+The property 'Value' cannot be found on this object.
+scripts/import-windows-signing-certificate.ps1:41
+```
+
+原因：
+
+- `EnhancedKeyUsageList` 的元素类型是 `EnhancedKeyUsageRepresentation`，其 `ObjectId` 属性已经是字符串；脚本错误地继续读取 `.ObjectId.Value`，导致 PFX 已导入后在 Code Signing EKU 筛选处失败。
+
+处理：
+
+- 按官方类型定义直接收集 `EnhancedKeyUsageList.ObjectId` 字符串，再与 Code Signing OID `1.3.6.1.5.5.7.3.3` 比较；无 EKU 的证书安全得到空列表，不放宽“必须恰好一个带私钥的代码签名证书”门禁。
+
+防复发：
+
+- PowerShell provider 注入的脚本属性必须按其公开类型使用，不能从底层 .NET `Oid` 类型推断属性层级；Windows runner 必须真实跑过 PFX 导入与 EKU 判断。
 
 ### 2026-07-21：macOS 专用参数在 Linux Clippy 中未使用
 
