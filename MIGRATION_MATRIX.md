@@ -174,14 +174,14 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | Linux x86_64 安装包 | 🟢 | 固定摘要 sidecar、Secret Service + Keyutils、AppImage/DEB 构建与启动、DEB 安装/卸载已在 Ubuntu 22.04 runner 通过 |
 | 多平台发布编排 | 🟢 配置 | 单一 draft release 预创建，macOS/Windows/Linux 矩阵完成后生成逐资产 SHA-256 再发布，避免并发建 release 与半成品公开 |
 | 签名应用内更新 | 🟡 | Rust updater 固定 HTTPS manifest、限定 FinalSub 官方 GitHub Release asset、签名校验、进度、安装前任务/控制句柄竞态复检与重启已接入；CI 从 Secret 原子生成 git-ignored release 配置并产出 macOS App、Linux AppImage/DEB 与 Windows NSIS 签名包，`latest.json` 缺任一目标即熔断发布；仍需生产根密钥 ceremony 与真实远端升级 E2E |
-| 质量 CI | 🟢 | `b96134f` 的 Quality run `29811668315` 与原生平台验证 run `29812150992` 均通过；覆盖前端 build、Rust fmt/test/clippy、macOS/Linux/Windows sidecar、原生凭据及安装包启动链路 |
+| 质量 CI | 🟢 | `3427b3a` 的 Quality run `29819798320` 与原生平台验证 run `29819811618` 均通过；覆盖前端 build、Rust fmt/test/clippy、macOS/Linux/Windows sidecar、原生凭据、Windows Authenticode/时间戳及安装包启动链路 |
 
 ## 11. 新鲜验证（2026-07-21）
 
 - SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设、云声音复刻与 worker 隔离。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC、豆包声音复刻主链路，以及语言感知估时、会话校准、合成前预控、一次本地重合成、云端不重复计费的后处理、1.5× 持久人工闸门、Parakeet/TTS 独立 worker 崩溃隔离和任务内 1–3 路本地 TTS 多进程并行。当前差距项为正式平台签名/公证、生产 updater 真实升级、真实本地模型音质与付费账号 E2E。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
 - 全量 `cargo test --lib` 为 329 passed / 0 failed / 7 ignored（336 项）；Parakeet 独立进程集成测试 2/2、TTS 独立进程集成测试 3/3 通过，覆盖协议握手、畸形消息恢复、强杀不带崩父进程与替代进程重启。曾触发 `Add` 广播维度异常并 `SIGABRT` 的真实 496.35 秒 WAV，已由安装后的 Universal worker 在约 55 秒 VAD 分段下完整生成 158 条字幕，最后时间戳 496,320 ms，期间没有新增崩溃报告；真实 sherpa token 的 ASCII 前导空格会保留为英文单词边界，安装后同一素材有 145 条多词字幕包含正常空格，首句恢复为 `I believe the role of financing infrastructure around`。其余覆盖保留统一存储根目录跟随、逐引擎覆盖、Unicode 路径和已有 Parakeet 目录无需下载的扫描闭环。`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check`、`git diff --check` 与 `npm run build` 通过。
-- 原生平台 E2E：`b96134f` 的 Platform Package Validation run `29812150992` 两个 job 均通过。Windows 完成 Credential Manager 回环、NSIS 构建、静默安装、10 秒启动与卸载；Linux 完成 Secret Service + Keyutils 回环、AppImage/DEB 构建、15 秒启动、DEB 安装与卸载。两套安装包及 SHA-256 临时 Artifact 保存至 2026-07-28。
+- 原生平台 E2E：`3427b3a` 的 Platform Package Validation run `29819811618` 两个 job 均通过。Windows 完成 Credential Manager 回环、一次性测试 PFX 导入、Tauri 对安装器/主程序/FFmpeg/Whisper 的同证书 Authenticode、RFC 3161 时间戳强制验签、NSIS 静默安装、10 秒启动与卸载；Linux 完成 Secret Service + Keyutils 回环、AppImage/DEB 构建、15 秒启动、DEB 安装与卸载。两套安装包及 SHA-256 临时 Artifact 保存至 2026-07-28；临时自签名证书只证明签名管线，不代表客户侧公信力。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
 - 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；首次引导缩为右上角非阻塞卡片且关闭按钮可点击。折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体与同名字幕后自动显示 `1 已配对 · 0 将转录`，模型下载提示消失且任务可直接开始；手动选择 ASR 后模型前置条件立即恢复，切换任务类型不丢媒体或配对。配音工作台在 1200×700 与 390×844 下显示估时、首轮/最终速度及自动/人工动作标签，无横向溢出；任务会话 URL 在清空本地最近会话后仍能恢复指定配音会话。控制台 0 error / 0 warning。设置页与模型页均显示统一根目录、四类实际解析路径和来源徽标，切换根目录后 Parakeet 派生路径即时更新；模型页本地/云端分区与“无需下载模型”说明可见。
