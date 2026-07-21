@@ -119,7 +119,10 @@ jobs:
             Write-Host "signing-fixture: exporting public certificate"
             Export-Certificate -Cert $certificate -FilePath $cerPath -Type CERT | Out-Null
             Write-Host "signing-fixture: trusting public certificate"
-            Import-Certificate -FilePath $cerPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+            & certutil.exe -user -f -addstore Root $cerPath | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "certutil failed to trust the Windows signing fixture certificate."
+            }
             Write-Host "signing-fixture: public certificate trusted"
             Remove-Item -Path "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
             $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfxPath))
