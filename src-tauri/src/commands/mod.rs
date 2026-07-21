@@ -312,6 +312,7 @@ pub async fn link_cloud_voice_profile(
 ) -> Result<VoiceProfile, String> {
     let mut profiles = state.voice_profiles.write().await;
     crate::core::tts::link_cloud_voice_profile(&state.app_config_dir, &mut profiles, request)
+        .await
         .map_err(|error| error.to_string())
 }
 

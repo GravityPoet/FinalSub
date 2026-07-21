@@ -1308,11 +1308,16 @@ pub async fn create_cloud_voice_profile(
     Ok(saved)
 }
 
-pub fn link_cloud_voice_profile(
+async fn link_cloud_voice_profile_with_volc_status<F, Fut>(
     app_config_dir: &Path,
     profiles: &mut HashMap<String, VoiceProfile>,
     request: LinkCloudVoiceProfileRequest,
-) -> Result<VoiceProfile> {
+    resolve_volc_status: F,
+) -> Result<VoiceProfile>
+where
+    F: FnOnce(PathBuf, String, String) -> Fut,
+    Fut: std::future::Future<Output = Result<super::volcengine_clone::CloneStatus>>,
+{
     if !request.consent {
         return Err(FinalSubError::Validation(
             "请确认你拥有该声音的使用授权".into(),
@@ -1331,6 +1336,20 @@ pub fn link_cloud_voice_profile(
     };
     let cloud_voice_id = validate_cloud_voice_id(engine, &request.voice_id)?;
     ensure_cloud_voice_not_linked(profiles, &request.provider_id, &cloud_voice_id)?;
+    let (cloud_status, volc_training_times_left) = if engine == "volcengine" {
+        let status = resolve_volc_status(
+            app_config_dir.to_path_buf(),
+            request.provider_id.clone(),
+            cloud_voice_id.clone(),
+        )
+        .await?;
+        (
+            cloud_status_from_clone_state(status.state),
+            status.training_times_left,
+        )
+    } else {
+        (CloudVoiceStatus::Ready, None)
+    };
     persist_cloud_profile(
         app_config_dir,
         profiles,
@@ -1345,12 +1364,36 @@ pub fn link_cloud_voice_profile(
             quality: cloud_quality_placeholder(),
             provider_id: Some(request.provider_id),
             cloud_voice_id: Some(cloud_voice_id),
-            cloud_status: Some(CloudVoiceStatus::Ready),
-            volc_training_times_left: None,
+            cloud_status: Some(cloud_status),
+            volc_training_times_left,
             created_at: chrono::Utc::now().timestamp_millis(),
         },
         None,
     )
+}
+
+pub async fn link_cloud_voice_profile(
+    app_config_dir: &Path,
+    profiles: &mut HashMap<String, VoiceProfile>,
+    request: LinkCloudVoiceProfileRequest,
+) -> Result<VoiceProfile> {
+    link_cloud_voice_profile_with_volc_status(
+        app_config_dir,
+        profiles,
+        request,
+        |app_config_dir, provider_id, cloud_voice_id| async move {
+            let (app_id, access_token, timeout_seconds) =
+                volc_clone_credentials(&app_config_dir, &provider_id)?;
+            super::volcengine_clone::query_status(
+                &app_id,
+                &access_token,
+                &cloud_voice_id,
+                timeout_seconds,
+            )
+            .await
+        },
+    )
+    .await
 }
 
 pub async fn refresh_cloud_voice_status(
@@ -1983,6 +2026,88 @@ mod tests {
         );
         assert!(validate_cloud_voice_id("volcengine", "voice-123").is_err());
         assert!(validate_cloud_voice_id("elevenlabs", "bad\nvoice").is_err());
+    }
+
+    fn save_test_volc_provider(app_config_dir: &Path) -> String {
+        crate::core::tts::providers::save_provider(
+            app_config_dir,
+            crate::core::tts::providers::SaveTtsProviderRequest {
+                id: None,
+                name: "Doubao clone test".into(),
+                protocol: crate::core::tts::providers::TtsProviderProtocol::Volcengine,
+                endpoint: String::new(),
+                model: String::new(),
+                voice: "BV001_streaming".into(),
+                region: String::new(),
+                resource_id: crate::core::tts::volcengine::DEFAULT_RESOURCE_ID.into(),
+                text_upload_consent: true,
+                timeout_seconds: 60,
+                request_concurrency: 1,
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    fn link_request(provider_id: String) -> LinkCloudVoiceProfileRequest {
+        LinkCloudVoiceProfileRequest {
+            name: "Recovered narrator".into(),
+            language: VoiceProfileLanguage::Zh,
+            provider_id,
+            voice_id: "S_recovery_test".into(),
+            consent: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_volc_recovery_does_not_persist_a_local_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let provider_id = save_test_volc_provider(root.path());
+        let mut profiles = HashMap::new();
+        let result = link_cloud_voice_profile_with_volc_status(
+            root.path(),
+            &mut profiles,
+            link_request(provider_id),
+            |_, _, _| async {
+                Err(FinalSubError::Validation(
+                    "remote slot is unavailable".into(),
+                ))
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(profiles.is_empty());
+        assert!(!voice_root(root.path()).exists());
+    }
+
+    #[tokio::test]
+    async fn recovered_volc_profile_persists_verified_remote_status() {
+        let root = tempfile::tempdir().unwrap();
+        let provider_id = save_test_volc_provider(root.path());
+        let mut profiles = HashMap::new();
+        let saved = link_cloud_voice_profile_with_volc_status(
+            root.path(),
+            &mut profiles,
+            link_request(provider_id),
+            |_, _, _| async {
+                Ok(super::super::volcengine_clone::CloneStatus {
+                    state: super::super::volcengine_clone::CloneState::Training,
+                    raw_status: Some(1),
+                    training_times_left: Some(2),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(saved.cloud_status, Some(CloudVoiceStatus::Training));
+        assert_eq!(saved.volc_training_times_left, Some(2));
+        let loaded = load_profiles(root.path()).unwrap();
+        assert_eq!(
+            loaded.get(&saved.id).unwrap().cloud_status,
+            saved.cloud_status
+        );
     }
 
     #[test]

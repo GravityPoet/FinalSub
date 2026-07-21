@@ -644,20 +644,13 @@ function CloudVoiceRecoveryDialog({
     setBusy(true);
     setError("");
     try {
-      let profile = await linkCloudVoiceProfile({
+      const profile = await linkCloudVoiceProfile({
         name,
         language,
         provider_id: providerId,
         voice_id: voiceId,
         consent,
       });
-      if (profile.engine === "volcengine") {
-        try {
-          profile = await refreshCloudVoiceStatus(profile.id);
-        } catch {
-          // Linking remains useful offline; the card can be refreshed later.
-        }
-      }
       onLinked(profile);
       onClose();
     } catch (reason) {

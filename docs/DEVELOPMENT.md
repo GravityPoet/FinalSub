@@ -14,9 +14,9 @@
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/app-icon-source.png
 ```
 
-## 当前发布边界（更新于 2026-07-20）
+## 当前发布边界（更新于 2026-07-21）
 
-模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、动态结构化批量翻译、术语表、回声对齐、服务商感知的思考控制、持久任务队列、目标驱动向导、可保存任务配方、字幕/配音双审核闸门、批准后自动续跑、校对、本地/云端 TTS（含豆包语音 V3）、可恢复且可与视频联动的配音工作台、字幕安全写回、硬/软字幕、可命名与重排并跨任务复用的字幕样式预设、配音音轨组合、合成进度/预览/取消、硬件编码探测与 CPU 回退、跨任务日志中心和 Universal 构建均已交付。对齐 SmartSub 的剩余产品边界主要是完整云声音克隆、独立 worker 隔离，以及跨平台安装/签名和付费云服务的真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)，任务阶段与恢复语义见 [`task-model.md`](task-model.md)，TTS 数据边界见 [`tts-dubbing.md`](tts-dubbing.md)。
+模型下载、本地原生 ASR、自定义命令、18 个翻译 provider、动态结构化批量翻译、术语表、回声对齐、服务商感知的思考控制、持久任务队列、目标驱动向导、可保存任务配方、字幕/配音双审核闸门、批准后自动续跑、校对、本地/云端 TTS（含豆包语音 V3）、完整云声音克隆与找回、独立本地 TTS worker、可恢复且可与视频联动的配音工作台、字幕安全写回、硬/软字幕、可命名与重排并跨任务复用的字幕样式预设、配音音轨组合、合成进度/预览/取消、硬件编码探测与 CPU 回退、跨任务日志中心和 Universal 构建均已交付。对齐 SmartSub 的核心产品边界已经闭环；剩余交付项是跨平台正式签名、公证、公开更新链和付费云服务真实账号 smoke test。逐项源码与验证证据见 [`MIGRATION_MATRIX.md`](../MIGRATION_MATRIX.md)，任务阶段与恢复语义见 [`task-model.md`](task-model.md)，TTS 数据边界见 [`tts-dubbing.md`](tts-dubbing.md)。
 
 ## 验收命令
 
@@ -34,7 +34,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build:universal
 
 本项目内置了已完成签名的、可直接分发的静态多架构 (Universal) `ffmpeg` 与 `whisper-cli` Sidecar 二进制文件（支持 x86_64 与 arm64），无外部 Homebrew 或系统运行时依赖，符合全自包含打包与沙箱安全合规要求。
 
-本地 TTS 不新增 sidecar：Kokoro、VITS 与 ZipVoice 复用 Rust 进程内的 `sherpa-onnx 1.13.3`。配音时间轴变速和最终 WAV/MP3 混音复用内置 FFmpeg。当前引擎缓存最多保留两个模型实例，但尚未迁移到独立 utility process；原生推理崩溃隔离仍列为后续缺口。
+本地 TTS 不新增独立 sidecar 工件：Kokoro、VITS 与 ZipVoice 由当前已签名应用可执行文件以 `--finalsub-tts-worker` 模式启动，最多保留三个按需 worker 槽位并隔离原生推理崩溃。worker 内复用 `sherpa-onnx 1.13.3`，配音时间轴变速和最终 WAV/MP3 混音复用内置 FFmpeg。
 
 ## 致敬与开源授权
 
