@@ -6,6 +6,7 @@ pub mod state;
 use state::AppState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
 /// 遥测上报开关。默认 false，仅当用户在设置里 opt-in 时才真正发送事件。
 /// Sentry 客户端始终初始化（保证 guard 生命周期与退出时 flush 正确），
@@ -40,7 +41,14 @@ pub fn run() {
         },
     ));
 
+    let window_state_flags =
+        StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::VISIBLE;
     let mut builder = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(window_state_flags)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
