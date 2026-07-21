@@ -19,6 +19,7 @@
 - `src-tauri/tauri.conf.json` 本地使用稳定自签名身份 `ChordVox Local Code Signing`；仓库只钉扎公开证书，私钥留在本机钥匙串。该身份用于本机覆盖安装与权限连续性验证，不等同于 Apple Developer ID、Gatekeeper 信任或 notarization；GitHub Actions 中的正式 `APPLE_SIGNING_IDENTITY` 会覆盖本地身份。
 - Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；`3427b3a` 已在 GitHub-hosted Windows/Linux runner 完成原生凭据、构建、安装、启动和卸载验证，Windows 还完整通过临时 PFX 导入、Tauri Authenticode、RFC 3161 时间戳与同证书验签。
 - Windows Release job 会临时导入 Base64 PFX、自动派生 SHA-1 thumbprint，以 SHA-256 + RFC 3161 时间戳交给 Tauri 签名，并在发布前要求安装包、主程序、FFmpeg 与 Whisper sidecar 均由同一证书签名且带时间戳；PFX 文件会在导入后立即物理删除，runner 证书在 `always()` 清理步骤移除。
+- Release workflow 会在创建 Draft 前验证 Tag、三处版本号和 11 项全平台必需 Secret；macOS 构建后还会挂载最终 DMG，独立验证 Developer ID、Team ID、secure timestamp、Hardened Runtime、stapled notarization ticket、Gatekeeper 与 Universal sidecar。
 
 ## 平台产物规划
 
@@ -31,6 +32,7 @@
 ## GitHub Release 规则
 
 - Tag 格式：`v<package.json version>`，例如 `v1.0.10`。
+- `npm run preflight:release -- <tag>` 必须在创建 Draft 前通过；缺 Secret、Tag/版本不一致、updater 公钥误填私钥、Apple Team ID 或 Windows 时间戳地址无效时，不得创建半成品 Release。
 - Release assets 必须同时上传安装包和对应 `.sha256`。
 - 公开创建 tag、推送 tag、创建 GitHub Release、上传资产属于 `[P1]`，执行前必须有回滚路径和熔断条件。
 - 本地打包、校验和生成、草稿说明属于低风险本地写入，不推送、不公开分发。
@@ -98,6 +100,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm ci
 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run build
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run test:release-preflight
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run test:windows-signing-config
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
 ```
@@ -362,6 +365,8 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && test "$(mdfind 'kMDItemCFBundle
 - `Developer ID Application`：签 `.app`。
 - `Developer ID Installer`：签 `.pkg`。
 - Apple notarization：提交并 staple。
+
+GitHub Release 的 macOS job 会对最终 DMG 调用 `scripts/verify-macos-release-package.sh`。任一 Developer ID/Team ID/secure timestamp/Hardened Runtime/双架构检查不符，或 `stapler validate`、`spctl --assess` 未通过，整个 Release 保持 Draft，不会公开。
 
 检查证书：
 
