@@ -9,6 +9,7 @@ import {
   KeyRound,
   LockKeyhole,
   Plus,
+  RefreshCw,
   Save,
   SlidersHorizontal,
   Trash2,
@@ -20,6 +21,7 @@ import {
   hasProviderSecret,
   saveSettingsCmd,
   setProviderSecret,
+  testCloudAsrConnection,
   type CloudAsrProfile,
   type CloudAsrProtocol,
   type Settings,
@@ -178,6 +180,26 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testStatus, setTestStatus] = useState("");
+
+  useEffect(() => {
+    setTestStatus("");
+  }, [
+    activeProfileId,
+    profileName,
+    protocol,
+    endpoint,
+    model,
+    apiKey,
+    apiSecret,
+    accountId,
+    consent,
+    timeoutSeconds,
+    retryTimes,
+    requestConcurrency,
+    requestIntervalMs,
+  ]);
 
   const applyProfile = (profile: CloudAsrProfile) => {
     setActiveProfileId(profile.id);
@@ -316,8 +338,8 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
     }
   };
 
-  const handleSave = async () => {
-    if (!settings) return;
+  const handleSave = async (): Promise<boolean> => {
+    if (!settings) return false;
     setSaving(true);
     setSaved(false);
     setError("");
@@ -385,15 +407,41 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
       setSaved(true);
       onSaved();
       window.setTimeout(() => setSaved(false), 3200);
+      return true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
+  const handleTestConnection = async () => {
+    if (!settings || testing) return;
+    setTesting(true);
+    setTestStatus("");
+    setError("");
+    try {
+      if (!await handleSave()) return;
+      const result = await testCloudAsrConnection(activeProfileId);
+      setTestStatus(t("models.cloudTestSuccess", {
+        provider: result.provider,
+        model: result.model,
+        elapsed: result.elapsed_ms,
+      }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const ready = keyConfigured && consent;
   const usesThreePartCredentials = protocol === "tencent" || protocol === "aliyun" || protocol === "xfyun";
+  const draftCredentialsComplete = usesThreePartCredentials
+    ? Boolean(accountId.trim() && apiKey.trim() && apiSecret.trim())
+    : Boolean(apiKey.trim());
+  const canTest = consent && (keyConfigured || draftCredentialsComplete);
 
   return (
     <Card className="relative overflow-hidden border-brand/20 p-0">
@@ -751,7 +799,7 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
           )}
         </div>
 
-        {(error || saved) && (
+        {(error || testStatus || saved) && (
           <div
             role="status"
             className={`mt-4 rounded-xl border px-3.5 py-2.5 text-sm ${
@@ -760,24 +808,38 @@ export function CloudAsrPanel({ onSaved }: CloudAsrPanelProps) {
                 : "border-success/20 bg-success/10 text-success"
             }`}
           >
-            {error || t("models.cloudSaved")}
+            {error || testStatus || t("models.cloudSaved")}
           </div>
         )}
 
         <div className="mt-5 flex items-center justify-between gap-3">
-          <div className="hidden items-center gap-2 text-xs text-text-tertiary sm:flex">
-            <KeyRound size={14} />
-            {t("models.cloudSecretStorage")}
+          <div className="hidden max-w-xl items-start gap-2 text-xs leading-5 text-text-tertiary sm:flex">
+            <KeyRound size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {t("models.cloudSecretStorage")}
+              <span className="block">{t("models.cloudTestHint")}</span>
+            </span>
           </div>
-          <Button
-            type="submit"
-            disabled={saving || !settings}
-            variant="primary"
-            className="ml-auto min-w-[10rem]"
-          >
-            <Save size={15} />
-            {saving ? t("models.cloudSaving") : t("models.cloudSave")}
-          </Button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              disabled={testing || saving || !settings || !canTest}
+              variant="secondary"
+              onClick={() => void handleTestConnection()}
+            >
+              <RefreshCw size={15} className={testing ? "animate-spin" : ""} />
+              {testing ? t("models.cloudTesting") : t("models.cloudTest")}
+            </Button>
+            <Button
+              type="submit"
+              disabled={saving || testing || !settings}
+              variant="primary"
+              className="min-w-[10rem]"
+            >
+              <Save size={15} />
+              {saving ? t("models.cloudSaving") : t("models.cloudSave")}
+            </Button>
+          </div>
         </div>
       </form>
     </Card>

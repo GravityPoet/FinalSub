@@ -1482,12 +1482,14 @@ mod tests {
         let config = TempDir::new().unwrap();
         let profile = save_provider(config.path(), request(TtsProviderProtocol::EdgeTts)).unwrap();
         let output = config.path().join("edge-preview.wav");
+        let text =
+            std::env::var("FINALSUB_EDGE_TEXT").unwrap_or_else(|_| "Hello from FinalSub.".into());
         let result = synthesize_cloud(
             config.path(),
             &ffmpeg,
             CloudTtsSynthesisRequest {
                 provider_id: profile.id,
-                text: "Hello from FinalSub.".into(),
+                text,
                 voice: None,
                 speed: Some(1.0),
                 output_path: output.to_string_lossy().to_string(),
@@ -1499,6 +1501,9 @@ mod tests {
         assert_eq!(result.sample_rate, 24_000);
         assert!(result.duration_ms > 0);
         assert!(output.exists());
-        assert!(wav_duration_ms(&std::fs::read(output).unwrap()).is_some());
+        assert!(wav_duration_ms(&std::fs::read(&output).unwrap()).is_some());
+        if let Ok(artifact) = std::env::var("FINALSUB_EDGE_OUTPUT") {
+            std::fs::copy(&output, artifact).unwrap();
+        }
     }
 }

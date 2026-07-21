@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::vad::{detect_speech, SpeechSlice, SAMPLE_RATE};
 use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
@@ -125,6 +125,14 @@ pub struct CloudAsrConfig {
     pub request_interval_ms: u64,
     pub proxy_url: Option<String>,
     pub state_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloudAsrConnectionTestResult {
+    pub provider: String,
+    pub model: String,
+    pub elapsed_ms: u64,
+    pub detected_speech: bool,
 }
 
 pub struct CloudAsrEngine {
@@ -309,6 +317,58 @@ impl CloudAsrEngine {
             aliyun_token: tokio::sync::Mutex::new(None),
             request_gate,
         })
+    }
+
+    pub async fn test_connection(&self) -> Result<CloudAsrConnectionTestResult> {
+        let started = Instant::now();
+        let response = self
+            .transcribe_chunk(&cloud_asr_probe_wav(), None)
+            .await
+            .map_err(|error| {
+                FinalSubError::Validation(format!(
+                    "{} ASR 连接测试失败：{}",
+                    self.config.protocol.display_name(),
+                    self.safe_probe_error(error)
+                ))
+            })?;
+        let detected_speech = !response.text.trim().is_empty()
+            || !response.words.is_empty()
+            || !response.segments.is_empty();
+        Ok(CloudAsrConnectionTestResult {
+            provider: self.config.protocol.display_name().into(),
+            model: self.config.model.clone(),
+            elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            detected_speech,
+        })
+    }
+
+    fn safe_probe_error(&self, error: CloudRequestError) -> String {
+        let raw = match error {
+            CloudRequestError::Http { status, body } if body.is_empty() => {
+                format!("服务返回 HTTP {status}")
+            }
+            CloudRequestError::Http { status, body } => {
+                format!("服务返回 HTTP {status}：{body}")
+            }
+            CloudRequestError::Transport(_) => {
+                "无法连接服务，请检查 endpoint、代理与网络状态".into()
+            }
+            CloudRequestError::InvalidResponse(message) | CloudRequestError::FinalJob(message) => {
+                message
+            }
+        };
+        let secrets = [
+            Some(self.config.api_key.as_str()),
+            self.config.api_secret.as_deref(),
+            self.config.account_id.as_deref(),
+        ];
+        let redacted = secrets
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|secret| !secret.is_empty())
+            .fold(raw, |message, secret| message.replace(secret, "[redacted]"));
+        sanitize_provider_error(&redacted, "")
     }
 
     fn pending_state_path(&self, audio: &[u8]) -> Option<PathBuf> {
@@ -1566,6 +1626,28 @@ impl CloudAsrEngine {
             Err(error) => Err(error),
         }
     }
+}
+
+fn cloud_asr_probe_wav() -> Vec<u8> {
+    const CHANNELS: u16 = 1;
+    const BITS_PER_SAMPLE: u16 = 16;
+    let sample_rate = SAMPLE_RATE as u32;
+    let data_len = sample_rate * u32::from(CHANNELS) * u32::from(BITS_PER_SAMPLE / 8);
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&CHANNELS.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * u32::from(CHANNELS) * 2).to_le_bytes());
+    wav.extend_from_slice(&(CHANNELS * 2).to_le_bytes());
+    wav.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.resize(44 + data_len as usize, 0);
+    wav
 }
 
 fn validate_config(config: &CloudAsrConfig) -> Result<()> {
@@ -3440,6 +3522,46 @@ mod tests {
             aliyun_token: tokio::sync::Mutex::new(None),
             request_gate,
         }
+    }
+
+    #[test]
+    fn connection_probe_is_one_second_pcm_wav() {
+        let wav = cloud_asr_probe_wav();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(wav.len(), 44 + SAMPLE_RATE as usize * 2);
+    }
+
+    #[tokio::test]
+    async fn connection_test_uses_real_transcription_route_without_exposing_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = tokio::spawn(capture_request(listener, r#"{"text":""}"#));
+        let engine = test_engine(CloudAsrConfig {
+            protocol: CloudAsrProtocol::OpenAiCompatible,
+            endpoint: format!("http://{endpoint}/v1"),
+            model: "gpt-4o-transcribe".into(),
+            api_key: "probe-secret".into(),
+            api_secret: None,
+            account_id: None,
+            timeout_seconds: 10,
+            retry_times: 0,
+            request_concurrency: 1,
+            request_interval_ms: 0,
+            proxy_url: None,
+            state_dir: None,
+        });
+
+        let result = engine.test_connection().await.unwrap();
+        let request = server.await.unwrap();
+        assert!(request.windows(4).any(|window| window == b"RIFF"));
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("probe-secret"));
+        assert_eq!(result.provider, "OpenAI Compatible");
+        assert_eq!(result.model, "gpt-4o-transcribe");
+        assert!(!result.detected_speech);
     }
 
     #[test]
