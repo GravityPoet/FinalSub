@@ -39,7 +39,9 @@ try {
         -Password $password)
     $codeSigningOid = "1.3.6.1.5.5.7.3.3"
     $signingCertificates = @($importedCertificates | Where-Object {
-        $_.HasPrivateKey -and $codeSigningOid -in @($_.EnhancedKeyUsageList.ObjectId.Value)
+        $candidate = $_
+        $usageObjectIds = @($candidate.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId })
+        $candidate.HasPrivateKey -and $codeSigningOid -in $usageObjectIds
     })
     if ($signingCertificates.Count -ne 1) {
         throw "The PFX must contain exactly one private code-signing certificate"
