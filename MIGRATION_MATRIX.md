@@ -13,7 +13,7 @@
 
 ## 当前裁决
 
-FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 ASR、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、语言感知的配音时长预控与复测、视频联动与安全写回的可恢复配音会话、可配置 1–3 路独立 TTS worker、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、统一存储根目录与引擎覆盖来源可视化、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；当前主要差距收敛到真实本地模型音质与付费账号 E2E、跨平台真实安装验收，因此仍不笼统宣称所有边界均已全面超越。
+FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 ASR、18 个翻译 provider、术语表、动态结构化输出、AI 回显对齐与定点补翻、服务商感知的思考控制、校对、本地/云端 TTS、语言感知的配音时长预控与复测、视频联动与安全写回的可恢复配音会话、可配置 1–3 路独立 TTS worker、硬/软字幕合成、配音音轨替换/混音/双轨封装、可持久复用的字幕样式预设、目标驱动任务向导、持久阶段编排、双人工闸门、批准后自动续跑、任务配方、模型管理、全局日志中心和配置安全主链路已形成可用闭环；在原生离线 ASR、云 ASR/TTS 协议广度、本地模型原地复用、统一存储根目录与引擎覆盖来源可视化、样式预设重排与输入约束、受管 TTS 工件校验、密钥 endpoint 隔离、加密配置和签名更新架构上具备明确优势。FinalSub 已交付本地录音/文件导入、质量确认、持久音色库、`.svoice` v1 导入导出、ElevenLabs IVC、豆包声音复刻 2.0、训练次数/一键重训、云端音色找回与配音复用，以及字幕选段、参考文本预填和本地降噪兜底；Windows/Linux runner 的原生凭据、构建、安装、启动与卸载已完成 E2E，当前主要差距收敛到正式平台签名/公证、生产 updater 根密钥与远端升级，以及真实本地模型音质和付费账号 E2E，因此仍不笼统宣称所有边界均已全面超越。
 
 架构保持为 React/TypeScript 交互层 + Tauri/Rust 核心层。这是当前产品的目标架构，不计划为了“全 Rust”重写成熟前端。
 
@@ -156,13 +156,13 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 | 能力 | 状态 | 说明 |
 |---|---:|---|
-| 密钥存储 | 🟢 macOS / Windows；🟡 Linux | macOS 使用应用私有 XChaCha20-Poly1305 加密存储与 owner-only 文件权限，不调用系统钥匙串；Windows 使用原生凭据后端，Linux 使用 Secret Service + Keyutils 持久后端；密钥不进普通配置、不通过 IPC 返回前端 |
+| 密钥存储 | 🟢 | macOS 使用应用私有 XChaCha20-Poly1305 加密存储与 owner-only 文件权限，不调用系统钥匙串；Windows Credential Manager 与 Linux Secret Service + Keyutils 均已在原生 runner 完成真实写入/读取/删除回环；密钥不进普通配置、不通过 IPC 返回前端 |
 | Endpoint 绑定 | 🟢 | 导入配置或切换地址不会向新 endpoint 发送旧密钥 |
 | 配置加密 | 🟢 | Argon2id + XChaCha20-Poly1305；错误口令和篡改均拒绝 |
 | 文件边界 | 🟢 | 绝对路径、扩展名、存在性、敏感目录和路径逃逸校验；ZipVoice 参考 WAV 限 64 MB / 30 秒，豆包训练音频限 10 MB、响应限 64 KB，字幕会话限 20 MB / 2,000 行 |
 | 外部命令 | 🟢 | FFmpeg 与自定义 ASR 使用结构化 argv，不经过 shell |
 | 隐私默认值 | 🟢 | 云 ASR 音频、云 TTS 文本、云声音克隆参考音频与遥测均需显式授权；本地 TTS/ZipVoice 参考音频不外发；自动启动更新检查默认关闭 |
-| Linux 系统密钥库 | 🟡 | `linux-native-sync-persistent`、Secret Service 与 Keyutils 依赖已接入 CI；仍需 Linux 桌面会话中的真实存取 E2E |
+| Linux 系统密钥库 | 🟢 | `linux-native-sync-persistent`、Secret Service 与 Keyutils 已在 Ubuntu 22.04 的 D-Bus + GNOME Keyring 会话完成真实写入/读取/删除 E2E |
 
 ## 10. 发布与平台
 
@@ -170,17 +170,18 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 |---|---:|---|
 | macOS 12+ arm64/x86_64/universal | 🟢 | Whisper/FFmpeg sidecar 齐全；Universal `.app` 与 DMG 已真实构建、签名、挂载验证并安装到 `/Applications/FinalSub.app` |
 | macOS Developer ID / notarization / stapling | 🟡 | GitHub Actions 流程已配置；需仓库注入证书、签名身份、Apple ID、app password 与 Team ID 后做真实发布验收 |
-| Windows x86_64 安装包 | 🟡 | 固定摘要的 GPL FFmpeg 与 whisper.cpp 构建脚本、Tauri NSIS release job 已交付；仍需 GitHub Windows runner 真实产物验收与可选代码签名 |
-| Linux x86_64 安装包 | 🟡 | 固定摘要的 GPL FFmpeg 与 whisper.cpp 构建脚本、AppImage/DEB release job、Secret Service 构建依赖已交付；仍需 GitHub Linux runner 真实产物验收 |
+| Windows x86_64 安装包 | 🟢 验证 / 🟡 公签 | 固定摘要 sidecar、Credential Manager、NSIS 构建、静默安装、主程序启动与卸载已在 Windows runner 通过；正式公开下载仍需 Authenticode 与 SmartScreen 验收 |
+| Linux x86_64 安装包 | 🟢 | 固定摘要 sidecar、Secret Service + Keyutils、AppImage/DEB 构建与启动、DEB 安装/卸载已在 Ubuntu 22.04 runner 通过 |
 | 多平台发布编排 | 🟢 配置 | 单一 draft release 预创建，macOS/Windows/Linux 矩阵完成后生成逐资产 SHA-256 再发布，避免并发建 release 与半成品公开 |
 | 签名应用内更新 | 🟡 | Rust updater 固定 HTTPS manifest、限定 FinalSub 官方 GitHub Release asset、签名校验、进度、安装前任务/控制句柄竞态复检与重启已接入；CI 从 Secret 原子生成 git-ignored release 配置并产出 macOS App、Linux AppImage/DEB 与 Windows NSIS 签名包，`latest.json` 缺任一目标即熔断发布；仍需生产根密钥 ceremony 与真实远端升级 E2E |
-| 质量 CI | 🟢 | 前端 build、Rust fmt/test/clippy、macOS sidecar 重编与最低版本检查；工作流 YAML 与 Bash 脚本静态校验通过 |
+| 质量 CI | 🟢 | `b96134f` 的 Quality run `29811668315` 与原生平台验证 run `29812150992` 均通过；覆盖前端 build、Rust fmt/test/clippy、macOS/Linux/Windows sidecar、原生凭据及安装包启动链路 |
 
 ## 11. 新鲜验证（2026-07-21）
 
-- SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设、云声音复刻与 worker 隔离。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC、豆包声音复刻主链路，以及语言感知估时、会话校准、合成前预控、一次本地重合成、云端不重复计费的后处理、1.5× 持久人工闸门、Parakeet/TTS 独立 worker 崩溃隔离和任务内 1–3 路本地 TTS 多进程并行。当前差距项为真实本地模型音质与付费账号 E2E、跨平台真实安装验收。
+- SmartSub 上游审计已更新到 `dd38b8aecd8934b7218b8973131a88fd9826c208`；逐项核对目标驱动任务向导、持久人工闸门、dubbing/compose、配方、阶段产物、AI thinking control、字幕样式预设、云声音复刻与 worker 隔离。FinalSub 已补齐统一阶段编排、双审核闸门、批准后自动续跑、交付目标向导、服务商感知的显式思考控制、可复用样式预设、ElevenLabs IVC、豆包声音复刻主链路，以及语言感知估时、会话校准、合成前预控、一次本地重合成、云端不重复计费的后处理、1.5× 持久人工闸门、Parakeet/TTS 独立 worker 崩溃隔离和任务内 1–3 路本地 TTS 多进程并行。当前差距项为正式平台签名/公证、生产 updater 真实升级、真实本地模型音质与付费账号 E2E。
 - TTS 受管下载：官方 VITS `31,559,701` 字节、ZipVoice `109,162,785` 字节与 `vocos_24khz.onnx` `54,157,409` 字节的 HEAD/Release SHA-256 与固定清单一致；真实 VITS 与 ZipVoice+vocoder 安装布局测试均通过。
-- 全量 `cargo test --lib` 为 328 passed / 0 failed / 8 ignored（336 项）；Parakeet 独立进程集成测试 2/2、TTS 独立进程集成测试 3/3 通过，覆盖协议握手、畸形消息恢复、强杀不带崩父进程与替代进程重启。曾触发 `Add` 广播维度异常并 `SIGABRT` 的真实 496.35 秒 WAV，已由安装后的 Universal worker 在约 55 秒 VAD 分段下完整生成 158 条字幕，最后时间戳 496,320 ms，期间没有新增崩溃报告；真实 sherpa token 的 ASCII 前导空格会保留为英文单词边界，安装后同一素材有 145 条多词字幕包含正常空格，首句恢复为 `I believe the role of financing infrastructure around`。其余覆盖保留统一存储根目录跟随、逐引擎覆盖、Unicode 路径和已有 Parakeet 目录无需下载的扫描闭环。`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check`、`git diff --check` 与 `npm run build` 通过。
+- 全量 `cargo test --lib` 为 329 passed / 0 failed / 7 ignored（336 项）；Parakeet 独立进程集成测试 2/2、TTS 独立进程集成测试 3/3 通过，覆盖协议握手、畸形消息恢复、强杀不带崩父进程与替代进程重启。曾触发 `Add` 广播维度异常并 `SIGABRT` 的真实 496.35 秒 WAV，已由安装后的 Universal worker 在约 55 秒 VAD 分段下完整生成 158 条字幕，最后时间戳 496,320 ms，期间没有新增崩溃报告；真实 sherpa token 的 ASCII 前导空格会保留为英文单词边界，安装后同一素材有 145 条多词字幕包含正常空格，首句恢复为 `I believe the role of financing infrastructure around`。其余覆盖保留统一存储根目录跟随、逐引擎覆盖、Unicode 路径和已有 Parakeet 目录无需下载的扫描闭环。`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check`、`git diff --check` 与 `npm run build` 通过。
+- 原生平台 E2E：`b96134f` 的 Platform Package Validation run `29812150992` 两个 job 均通过。Windows 完成 Credential Manager 回环、NSIS 构建、静默安装、10 秒启动与卸载；Linux 完成 Secret Service + Keyutils 回环、AppImage/DEB 构建、15 秒启动、DEB 安装与卸载。两套安装包及 SHA-256 临时 Artifact 保存至 2026-07-28。
 - Edge TTS 真实在线夹具：固定版本 kothok-edge-tts 通过 Microsoft Edge Read Aloud 真实合成，返回 MP3 经 FinalSub FFmpeg 归一化为 24 kHz PCM WAV；超时、取消、64 MB 上限与断供引导均有代码路径覆盖。该通道仍标为免费试用，不替代有明确商用条款的服务。
 - `npm run build`：TypeScript 与 Vite 8.1.4 production build 通过。
 - 浏览器 QA（本地 Vite + Playwright）：1440×900、1200×700 与 390×844 下来源选择和核心模型控制均保持紧凑层级；首次引导缩为右上角非阻塞卡片且关闭按钮可点击。折叠侧栏的 Logo、展开按钮、任务动态及首尾导航图标共享同一中心线。选择媒体与同名字幕后自动显示 `1 已配对 · 0 将转录`，模型下载提示消失且任务可直接开始；手动选择 ASR 后模型前置条件立即恢复，切换任务类型不丢媒体或配对。配音工作台在 1200×700 与 390×844 下显示估时、首轮/最终速度及自动/人工动作标签，无横向溢出；任务会话 URL 在清空本地最近会话后仍能恢复指定配音会话。控制台 0 error / 0 warning。设置页与模型页均显示统一根目录、四类实际解析路径和来源徽标，切换根目录后 Parakeet 派生路径即时更新；模型页本地/云端分区与“无需下载模型”说明可见。
@@ -208,11 +209,9 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 ## 13. 仍不能宣称完成的事项
 
-1. Windows/Linux 构建脚本与 release job 已交付，但当前 macOS 主机不能替代 GitHub Windows/Linux runner 的真实安装包与启动验收。
-2. Apple Developer ID 正式签名、公证、stapling 尚未用仓库 secrets 跑通；本机交付是可验证的 ad-hoc 签名。
-3. 付费云 ASR/翻译 provider 尚缺真实账号 smoke test；协议边界测试不能替代服务端验收。
-4. Linux Secret Service 后端已配置，但尚缺真实 Linux 桌面会话的密钥存取 E2E。
-5. Windows 安装包代码签名证书尚未配置；不影响生成 NSIS，但会影响公开下载时的 SmartScreen 体验。
-6. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-7. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛、人工红线续跑与可配置 1–3 路独立 worker 已交付；仍缺真实本地 TTS 模型音质 E2E、ElevenLabs/豆包付费账号 smoke test 和 A/B 音色比较。
-8. 统一阶段编排、批准后自动进入配音/compose、provider 感知的显式 AI thinking 控制、可复用字幕样式预设与本地 TTS 崩溃隔离已交付；仍缺付费云服务 E2E 和跨平台 runner 的真实安装验收。
+1. Apple Developer ID 正式签名、公证、stapling 尚未用仓库 secrets 跑通；本机稳定自签名包适合本地覆盖安装，但不能替代客户侧 Gatekeeper 信任。
+2. Windows 安装包代码签名证书尚未配置；NSIS 已完成真实安装/启动/卸载，但公开下载仍可能触发 SmartScreen。
+3. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
+4. 付费云 ASR、翻译、ElevenLabs 与豆包 provider 尚缺真实账号 smoke test；协议边界测试不能替代服务端验收。
+5. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛、人工红线续跑与可配置 1–3 路独立 worker 已交付；仍缺真实本地 TTS 模型音质 E2E 和 A/B 音色比较。
+6. Ubuntu 22.04 runner 已完成 Linux 原生桌面服务 E2E；扩大“支持所有主流发行版”的对外声明前，仍需至少一台目标发行版实体/虚拟桌面做 UI 与桌面集成抽检。
