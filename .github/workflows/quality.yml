@@ -33,6 +33,7 @@ jobs:
             libkeyutils-dev \
             pkg-config
       - run: npm ci
+      - run: npm run test:release-preflight
       - run: npm run test:windows-signing-config
       - name: Build pinned Linux sidecars for Rust checks
         run: |

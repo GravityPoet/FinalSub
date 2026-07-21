@@ -8,10 +8,32 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   prepare-release:
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate tag, versions, and all production release prerequisites
+        env:
+          FINALSUB_UPDATER_PUBLIC_KEY: ${{ secrets.FINALSUB_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: npm run preflight:release -- "${GITHUB_REF_NAME}"
       - name: Create the shared draft release once
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -142,6 +164,15 @@ jobs:
           args: ${{ matrix.args }} --config src-tauri/target/tauri.release.generated.conf.json
           retryAttempts: 3
           releaseAssetNamePattern: "FinalSub-[version]-[platform]-[arch].[ext]"
+      - name: Verify Developer ID, notarization, and the stapled macOS release
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          shopt -s nullglob
+          dmgs=(src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_*_universal.dmg)
+          test "${#dmgs[@]}" -eq 1
+          bash scripts/verify-macos-release-package.sh "$PWD/${dmgs[0]}"
       - name: Verify signed Windows installer and installed binaries
         if: runner.os == 'Windows'
         shell: pwsh

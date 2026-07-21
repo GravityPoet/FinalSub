@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "prepare:tauri-target": "node scripts/prepare-tauri-target.mjs",
     "prepare:release-updater-config": "node scripts/prepare-release-updater-config.mjs",
+    "preflight:release": "node scripts/release-preflight.mjs",
+    "test:release-preflight": "node --test scripts/release-preflight.test.mjs",
     "prepare:windows-signing-config": "node scripts/prepare-windows-signing-config.mjs",
     "test:windows-signing-config": "node --test scripts/windows-signing-config.test.mjs",
     "setup:mac:signing": "bash scripts/ensure-macos-signing-identity.sh",
