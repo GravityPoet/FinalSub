@@ -393,10 +393,10 @@ fn load_or_create_vault_key(root: &Path) -> Result<[u8; 32], String> {
 #[cfg(target_os = "macos")]
 static MACOS_SECRET_STORE: OnceLock<EncryptedFileStore> = OnceLock::new();
 
-pub fn initialize_secret_store(app_config_dir: &Path) -> Result<(), String> {
+pub fn initialize_secret_store(_app_config_dir: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let root = app_config_dir.join("secrets");
+        let root = _app_config_dir.join("secrets");
         if let Some(existing) = MACOS_SECRET_STORE.get() {
             return if existing.root == root {
                 Ok(())
