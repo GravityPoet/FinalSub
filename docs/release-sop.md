@@ -837,23 +837,24 @@ Release workflow tag filter: v*
 - 正式 Developer ID 与临时自签名渠道必须使用不同 Tag 形态、不同验收器和不同发布说明；任何一方都不得静默回退到另一方。
 - 推送自签名 Tag 前先验证正式 workflow 的负向过滤、精确 SHA 的 Quality、资产 checksum 与从公开 Release 重新下载后的签名；缺一项就不公开。
 
-### 2026-07-22：`hdiutil attach` 的旧参数组合已弃用
+### 2026-07-22：`hdiutil attach/detach` 的旧参数组合已弃用
 
 现象：
 
 ```text
 hdiutil: WARNING: 'hdiutil attach -readonly -nobrowse -mountpoint ...' is deprecated.
 Please use 'diskutil image attach --readOnly --mountOptions nobrowse --mountPoint ...' instead.
+hdiutil: WARNING: 'hdiutil detach ...' is deprecated. Please use 'diskutil eject ...' instead.
 ```
 
 原因：
 
-- 第一版自签名 DMG 验收器沿用了旧 `hdiutil attach` 参数；当前 macOS 仍能挂载，但已经明确提示弃用。
+- 第一版自签名 DMG 验收器沿用了旧 `hdiutil attach` 与 `hdiutil detach` 参数；当前 macOS 仍能挂载/弹出，但已经明确提示弃用。
 
 处理与防复发：
 
-- 验收器改用系统提示的 `diskutil image attach --readOnly --mountOptions nobrowse --mountPoint`，退出清理继续按解析出的精确 device 执行 `hdiutil detach`。
-- 新增 macOS DMG 挂载流程不得再复制旧 `hdiutil attach -readonly -nobrowse -mountpoint` 命令。
+- 验收器改用系统提示的 `diskutil image attach --readOnly --mountOptions nobrowse --mountPoint`，退出清理按解析出的精确 device 执行 `diskutil eject`。
+- 新增 macOS DMG 挂载流程不得再复制旧 `hdiutil attach -readonly -nobrowse -mountpoint` 或 `hdiutil detach` 命令。
 
 ### 2026-07-22：系统 Ruby 不支持 `YAML.load_file(..., aliases:)`
 
@@ -905,6 +906,24 @@ privacy guard: docs/release-sop.md: contains labeled address/account/user person
 处理与防复发：
 
 - 保留全局隐私钩子；完成暂存差异敏感模式扫描和命中行人工复核后，只对本次提交使用钩子输出允许的 `git commit --no-verify` reviewed exception。任何命中真实值、凭据或运行时用户数据的提交都不得使用例外。
+
+### 2026-07-22：隔离下载在放行前执行 FFmpeg 被 macOS 杀死
+
+现象：
+
+```text
+quarantined DMG verification exited 137 after deep signature checks
+```
+
+原因：
+
+- 客户隔离模拟给 DMG 写入 `com.apple.quarantine` 后，复用了会执行内嵌 FFmpeg 能力探测的完整验收器；macOS 在用户尚未通过“仍要打开”放行应用前终止了该 sidecar。
+- 退出发生在 Gatekeeper 已按预期拒绝、签名与 designated requirement 已验证之后，不是 FinalSub 正常启动或转录链崩溃。
+
+处理与防复发：
+
+- 完整二进制能力检查只在未隔离的同 SHA-256 发布资产上运行；隔离副本只检查 quarantine 属性、DMG 完整性、签名和 Gatekeeper 拒绝，放行前禁止启动主程序或任一 sidecar。
+- 若隔离测试中断，必须核对临时挂载并用 `diskutil eject` 精确弹出，再清理受控的 `finalsub-self-signed-verify.*` 临时目录。
 
 ### 追加模板
 
