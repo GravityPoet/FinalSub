@@ -621,6 +621,29 @@ error: unused variable: `app_config_dir`
 
 - 修改 `cfg(target_os)` 分支后，至少要求 macOS 与 Linux 的 `cargo clippy --all-targets --all-features -- -D warnings` 都在远端执行；涉及 Windows 专属代码时再由平台验证工作流覆盖 Windows 编译和原生凭据回环。
 
+### 2026-07-21：Linux DEB 冒烟误把 FFmpeg 当成主程序
+
+现象：
+
+```text
+deb exited before the 15 second smoke window (status 1)
+ffmpeg version ...
+```
+
+原因：
+
+- DEB 同时把 `finalsubtauri`、FFmpeg 与 Whisper sidecar 安装到 `/usr/bin`；旧验证脚本取 `dpkg -L` 返回的第一个可执行文件，实际选中了 FFmpeg。
+- AppImage 主程序已连续存活 15 秒，DEB 自身也完成安装；失败发生在测试目标解析，不是应用启动崩溃。
+
+处理：
+
+- DEB 验收改为精确要求包清单包含且文件系统存在 `/usr/bin/finalsubtauri`，不再依赖包内文件顺序。
+- 保留 FFmpeg/Whisper sidecar 在安装包内，禁止为了让冒烟通过而删除产品运行依赖。
+
+防复发：
+
+- 安装包包含多个可执行文件时，主程序验证必须绑定仓库声明的真实 binary name，不能用 `head -n 1` 或模糊 basename 推断。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：

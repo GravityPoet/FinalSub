@@ -82,9 +82,13 @@ if [ -z "${PACKAGE_NAME}" ]; then
   exit 1
 fi
 sudo dpkg --install "${DEB}"
-INSTALLED_BINARY="$(dpkg -L "${PACKAGE_NAME}" | grep -E '^/usr/bin/[^/]+$' | head -n 1)"
-if [ -z "${INSTALLED_BINARY}" ] || [ ! -x "${INSTALLED_BINARY}" ]; then
-  echo "Installed DEB does not expose an executable in /usr/bin." >&2
+INSTALLED_BINARY="/usr/bin/finalsubtauri"
+if [ ! -x "${INSTALLED_BINARY}" ]; then
+  echo "Installed DEB does not expose ${INSTALLED_BINARY}." >&2
+  exit 1
+fi
+if ! dpkg -L "${PACKAGE_NAME}" | grep -Fx "${INSTALLED_BINARY}" >/dev/null; then
+  echo "Installed DEB does not expose ${INSTALLED_BINARY}." >&2
   exit 1
 fi
 run_gui_smoke "${INSTALLED_BINARY}" "deb"
