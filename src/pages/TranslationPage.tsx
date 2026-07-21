@@ -205,6 +205,7 @@ export default function TranslationPage() {
   const [visibleSecrets, setVisibleSecrets] = useState<Record<string, boolean>>({});
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelFetchError, setModelFetchError] = useState("");
   const [testingProxy, setTestingProxy] = useState(false);
   const [proxyStatus, setProxyStatus] = useState("");
   const [runtimeSaved, setRuntimeSaved] = useState(false);
@@ -272,6 +273,7 @@ export default function TranslationPage() {
     setApiUrl(ep);
     setModelName(md);
     setAvailableModels([]);
+    setModelFetchError("");
     setSystemPrompt(settings.translate_system_prompts?.[selectedProvider] || "");
     setUserPrompt(settings.translate_user_prompts?.[selectedProvider] || "");
     setCustomHeadersJson(formatJsonObject(settings.translate_custom_headers?.[selectedProvider]));
@@ -478,11 +480,12 @@ export default function TranslationPage() {
   const handleFetchModels = async () => {
     if (!selectedProviderInfo || !selectedProviderInfo.requires_model) return;
     if (!apiUrl.trim()) {
-      setError(t("translation.endpointMissing").replace("{name}", selectedProviderInfo.name));
+      setModelFetchError(t("translation.endpointMissing").replace("{name}", selectedProviderInfo.name));
       return;
     }
     setFetchingModels(true);
     setError("");
+    setModelFetchError("");
     try {
       const parsedCustomHeaders = selectedProviderInfo.is_ai ? parseCustomHeaders() : {};
       for (const field of selectedProviderInfo.secret_fields || []) {
@@ -496,10 +499,15 @@ export default function TranslationPage() {
         apiUrl.trim(),
         Object.keys(parsedCustomHeaders).length > 0 ? parsedCustomHeaders : undefined,
       );
+      if (models.length === 0) {
+        setAvailableModels([]);
+        setModelFetchError(t("translation.modelsEmpty"));
+        return;
+      }
       setAvailableModels(models);
       if (!modelName.trim() && models[0]) setModelName(models[0]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setModelFetchError(err instanceof Error ? err.message : String(err));
     } finally {
       setFetchingModels(false);
     }
@@ -815,7 +823,11 @@ export default function TranslationPage() {
                 <Input
                   type="text"
                   value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
+                  onChange={(e) => {
+                    setApiUrl(e.target.value);
+                    setAvailableModels([]);
+                    setModelFetchError("");
+                  }}
                   placeholder={
                     selectedProvider === CUSTOM_OPENAI_PROVIDER_ID
                       ? "https://your-gateway.example.com/v1"
@@ -831,9 +843,9 @@ export default function TranslationPage() {
                 <div className="flex gap-2">
                   <Input
                     type="text"
-                    list="translation-model-options"
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
+                    aria-describedby="translation-model-fetch-status"
                     placeholder={
                       selectedProvider === CUSTOM_OPENAI_PROVIDER_ID
                         ? t("translation.modelPlaceholderOp")
@@ -842,13 +854,38 @@ export default function TranslationPage() {
                   />
                   <Button type="button" onClick={handleFetchModels} disabled={fetchingModels} variant="secondary" size="sm">
                     <RefreshCw size={13} className={fetchingModels ? "animate-spin" : ""} />
-                    {t("translation.fetchModels")}
+                    {fetchingModels ? t("translation.fetchingModels") : t("translation.fetchModels")}
                   </Button>
-                  <datalist id="translation-model-options">
-                    {availableModels.map((model) => <option key={model} value={model} />)}
-                  </datalist>
                 </div>
-                {availableModels.length > 0 && <p className="mt-1.5 text-xs text-success">{t("translation.modelsFound", { count: availableModels.length })}</p>}
+                <div id="translation-model-fetch-status" aria-live="polite">
+                  {availableModels.length > 0 && (
+                    <div className="mt-2 rounded-xl border border-success/20 bg-success/10 p-2.5">
+                      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-success">
+                        <CheckCircle size={14} />
+                        {t("translation.modelsFound", { count: availableModels.length })}
+                      </p>
+                      <Select
+                        value={availableModels.includes(modelName) ? modelName : ""}
+                        onChange={(event) => {
+                          if (event.target.value) setModelName(event.target.value);
+                        }}
+                        aria-label={t("translation.selectFetchedModel", { count: availableModels.length })}
+                      >
+                        <option value="">{t("translation.selectFetchedModel", { count: availableModels.length })}</option>
+                        {availableModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                      </Select>
+                    </div>
+                  )}
+                  {!fetchingModels && !modelFetchError && availableModels.length === 0 && (
+                    <p className="mt-1.5 text-xs text-text-tertiary">{t("translation.fetchModelsHint")}</p>
+                  )}
+                  {modelFetchError && (
+                    <p role="alert" className="mt-2 flex items-start gap-1.5 rounded-xl border border-danger/20 bg-danger/10 px-3 py-2.5 text-xs leading-5 text-danger">
+                      <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                      <span>{t("translation.fetchModelsFailed", { error: modelFetchError })}</span>
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 
