@@ -2,11 +2,30 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error as StdError;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::{FinalSubError, Result};
 
 const MAX_PROVIDER_ERROR_BYTES: usize = 16 * 1024;
+const MAX_FREE_TRANSLATION_CHARS: usize = 5_000;
+const BING_FREE_AUTH_URL: &str = "https://edge.microsoft.com/translate/auth";
+const BING_FREE_TRANSLATE_URL: &str =
+    "https://api-edge.cognitive.microsofttranslator.com/translate";
+const GOOGLE_FREE_TRANSLATE_URL: &str = "https://translate.googleapis.com/translate_a/single";
+const BING_FREE_TOKEN_TTL: Duration = Duration::from_secs(8 * 60);
+
+#[derive(Clone)]
+struct BingFreeToken {
+    auth_url: String,
+    value: String,
+    fetched_at: Instant,
+}
+
+static BING_FREE_TOKEN: OnceLock<tokio::sync::Mutex<Option<BingFreeToken>>> = OnceLock::new();
+static BING_FREE_REQUEST_GATE: OnceLock<tokio::sync::Mutex<Option<tokio::time::Instant>>> =
+    OnceLock::new();
+static GOOGLE_FREE_REQUEST_GATE: OnceLock<tokio::sync::Mutex<Option<tokio::time::Instant>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationProvider {
@@ -143,6 +162,18 @@ fn validation_message(err: FinalSubError) -> String {
 
 pub fn builtin_providers() -> Vec<TranslationProvider> {
     vec![
+        TranslationProvider {
+            id: "auto-free".into(),
+            name: "免费翻译 · 自动兜底".into(),
+            provider_type: "api".into(),
+            is_ai: false,
+            implemented: true,
+            requires_api_key: false,
+            requires_endpoint: false,
+            requires_model: false,
+            secret_fields: vec![],
+            default_endpoint: "".into(),
+        },
         TranslationProvider {
             id: "baidu".into(),
             name: "百度翻译".into(),
@@ -730,6 +761,7 @@ async fn translate_text_once(req: &TranslateRequest) -> Result<TranslateResponse
     }
 
     let res = match req.provider.as_str() {
+        "auto-free" => translate_auto_free(req).await,
         "baidu" => translate_baidu(req).await,
         "google" => translate_google(req).await,
         "aliyun" => translate_aliyun(req).await,
@@ -1393,6 +1425,300 @@ async fn translate_google(req: &TranslateRequest) -> Result<TranslateResponse> {
         error: None,
         thinking_enabled: None,
     })
+}
+
+fn validate_free_translation_text(text: &str) -> Result<()> {
+    if text.chars().count() > MAX_FREE_TRANSLATION_CHARS {
+        return Err(FinalSubError::Validation(format!(
+            "免费翻译单次最多支持 {MAX_FREE_TRANSLATION_CHARS} 个字符"
+        )));
+    }
+    Ok(())
+}
+
+fn map_lang_bing_free(language: &str) -> String {
+    match language.trim().to_ascii_lowercase().as_str() {
+        "zh" | "zh-cn" | "zh-hans" => "zh-Hans".into(),
+        "zh-hant" | "zh-tw" | "zh-hk" => "zh-Hant".into(),
+        "jp" => "ja".into(),
+        "kor" => "ko".into(),
+        other => other.to_string(),
+    }
+}
+
+fn map_lang_google_free(language: &str) -> String {
+    match language.trim().to_ascii_lowercase().as_str() {
+        "zh" | "zh-cn" | "zh-hans" => "zh-CN".into(),
+        "zh-hant" | "zh-tw" | "zh-hk" => "zh-TW".into(),
+        "jp" => "ja".into(),
+        "kor" => "ko".into(),
+        other => other.to_string(),
+    }
+}
+
+async fn wait_free_translation_gate(
+    gate: &'static OnceLock<tokio::sync::Mutex<Option<tokio::time::Instant>>>,
+    interval: Duration,
+) {
+    let mut last_started = gate
+        .get_or_init(|| tokio::sync::Mutex::new(None))
+        .lock()
+        .await;
+    if let Some(last) = *last_started {
+        let deadline = last + interval;
+        if deadline > tokio::time::Instant::now() {
+            tokio::time::sleep_until(deadline).await;
+        }
+    }
+    *last_started = Some(tokio::time::Instant::now());
+}
+
+async fn bing_free_token(
+    req: &TranslateRequest,
+    auth_url: &str,
+    force_refresh: bool,
+) -> Result<String> {
+    let mut cached = BING_FREE_TOKEN
+        .get_or_init(|| tokio::sync::Mutex::new(None))
+        .lock()
+        .await;
+    if !force_refresh {
+        if let Some(token) = cached.as_ref() {
+            if token.auth_url == auth_url && token.fetched_at.elapsed() < BING_FREE_TOKEN_TTL {
+                return Ok(token.value.clone());
+            }
+        }
+    }
+
+    let client = translation_http_client(req)?;
+    let response = client.get(auth_url).send().await.map_err(|error| {
+        FinalSubError::Validation(format!(
+            "Bing 免费源鉴权失败：{}",
+            describe_reqwest_error(&error)
+        ))
+    })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = limited_response_text(response).await;
+        return Err(FinalSubError::Validation(format!(
+            "Bing 免费源鉴权返回 {status}：{body}"
+        )));
+    }
+    let token = response
+        .text()
+        .await
+        .map_err(|error| FinalSubError::Validation(format!("Bing 免费源令牌读取失败：{error}")))?;
+    let token = token.trim().trim_matches('"');
+    if token.is_empty() || token.len() > 16 * 1024 || token.chars().any(char::is_control) {
+        return Err(FinalSubError::Validation(
+            "Bing 免费源返回了无效令牌".into(),
+        ));
+    }
+    let token = token.to_string();
+    *cached = Some(BingFreeToken {
+        auth_url: auth_url.to_string(),
+        value: token.clone(),
+        fetched_at: Instant::now(),
+    });
+    Ok(token)
+}
+
+async fn translate_bing_free_at(
+    req: &TranslateRequest,
+    auth_url: &str,
+    translate_url: &str,
+    apply_rate_limit: bool,
+) -> Result<String> {
+    validate_free_translation_text(&req.text)?;
+    if apply_rate_limit {
+        wait_free_translation_gate(&BING_FREE_REQUEST_GATE, Duration::from_millis(200)).await;
+    }
+
+    for refresh in [false, true] {
+        let token = bing_free_token(req, auth_url, refresh).await?;
+        let mut query = vec![
+            ("api-version", "3.0".to_string()),
+            ("to", map_lang_bing_free(&req.target_language)),
+        ];
+        if req.source_language.trim() != "auto" {
+            query.push(("from", map_lang_bing_free(&req.source_language)));
+        }
+        let client = translation_http_client(req)?;
+        let response = client
+            .post(translate_url)
+            .query(&query)
+            .bearer_auth(&token)
+            .json(&serde_json::json!([{ "Text": req.text }]))
+            .send()
+            .await
+            .map_err(|error| {
+                FinalSubError::Validation(format!(
+                    "Bing 免费源请求失败：{}",
+                    describe_reqwest_error(&error)
+                ))
+            })?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) && !refresh
+        {
+            continue;
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = limited_response_text(response).await;
+            return Err(FinalSubError::Validation(format!(
+                "Bing 免费源返回 {status}：{body}"
+            )));
+        }
+        let value: serde_json::Value = response.json().await.map_err(|error| {
+            FinalSubError::Validation(format!("Bing 免费源响应解析失败：{error}"))
+        })?;
+        let translated = value[0]["translations"][0]["text"]
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| FinalSubError::Validation("Bing 免费源没有返回译文".into()))?;
+        return Ok(translated.to_string());
+    }
+    Err(FinalSubError::Validation("Bing 免费源授权已失效".into()))
+}
+
+async fn translate_google_free_at(
+    req: &TranslateRequest,
+    translate_url: &str,
+    apply_rate_limit: bool,
+) -> Result<String> {
+    validate_free_translation_text(&req.text)?;
+    if apply_rate_limit {
+        wait_free_translation_gate(&GOOGLE_FREE_REQUEST_GATE, Duration::from_millis(500)).await;
+    }
+    let query = [
+        ("client", "gtx".to_string()),
+        ("sl", map_lang_google_free(&req.source_language)),
+        ("tl", map_lang_google_free(&req.target_language)),
+        ("dt", "t".to_string()),
+        ("q", req.text.clone()),
+    ];
+    let client = translation_http_client(req)?;
+    let response = client
+        .get(translate_url)
+        .query(&query)
+        .send()
+        .await
+        .map_err(|error| {
+            FinalSubError::Validation(format!(
+                "Google 免费源请求失败：{}",
+                describe_reqwest_error(&error)
+            ))
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = limited_response_text(response).await;
+        return Err(FinalSubError::Validation(format!(
+            "Google 免费源返回 {status}：{body}"
+        )));
+    }
+    let value: serde_json::Value = response.json().await.map_err(|error| {
+        FinalSubError::Validation(format!("Google 免费源响应解析失败：{error}"))
+    })?;
+    let translated = value
+        .get(0)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|segment| segment.get(0).and_then(serde_json::Value::as_str))
+        .collect::<String>();
+    let translated = decode_simple_html(translated.trim());
+    if translated.is_empty() {
+        return Err(FinalSubError::Validation(
+            "Google 免费源没有返回译文".into(),
+        ));
+    }
+    Ok(translated)
+}
+
+fn compact_fallback_error(error: FinalSubError) -> String {
+    validation_message(error).chars().take(512).collect()
+}
+
+async fn translate_auto_free_with_endpoints(
+    req: &TranslateRequest,
+    bing_auth_url: &str,
+    bing_translate_url: &str,
+    google_translate_url: &str,
+    apply_rate_limit: bool,
+) -> Result<TranslateResponse> {
+    if req.text.trim().is_empty() {
+        return Ok(TranslateResponse {
+            translated_text: req.text.clone(),
+            provider: "auto-free".into(),
+            success: true,
+            error: None,
+            thinking_enabled: None,
+        });
+    }
+
+    let mut failures = Vec::with_capacity(3);
+    match translate_bing_free_at(req, bing_auth_url, bing_translate_url, apply_rate_limit).await {
+        Ok(translated_text) => {
+            return Ok(TranslateResponse {
+                translated_text,
+                provider: "auto-free".into(),
+                success: true,
+                error: None,
+                thinking_enabled: None,
+            })
+        }
+        Err(error) => failures.push(format!("Bing：{}", compact_fallback_error(error))),
+    }
+
+    match translate_google_free_at(req, google_translate_url, apply_rate_limit).await {
+        Ok(translated_text) => {
+            return Ok(TranslateResponse {
+                translated_text,
+                provider: "auto-free".into(),
+                success: true,
+                error: None,
+                thinking_enabled: None,
+            })
+        }
+        Err(error) => failures.push(format!("Google：{}", compact_fallback_error(error))),
+    }
+
+    if configured_str(req.api_url.as_deref()).is_some() {
+        let mut deeplx_request = req.clone();
+        deeplx_request.provider = "deeplx".into();
+        match translate_deeplx(&deeplx_request).await {
+            Ok(response) if !response.translated_text.trim().is_empty() => {
+                return Ok(TranslateResponse {
+                    translated_text: response.translated_text,
+                    provider: "auto-free".into(),
+                    success: true,
+                    error: None,
+                    thinking_enabled: None,
+                })
+            }
+            Ok(_) => failures.push("DeepLX：没有返回译文".into()),
+            Err(error) => failures.push(format!("DeepLX：{}", compact_fallback_error(error))),
+        }
+    }
+
+    Err(FinalSubError::Validation(format!(
+        "免费翻译源均不可用（{}）",
+        failures.join("；")
+    )))
+}
+
+async fn translate_auto_free(req: &TranslateRequest) -> Result<TranslateResponse> {
+    translate_auto_free_with_endpoints(
+        req,
+        BING_FREE_AUTH_URL,
+        BING_FREE_TRANSLATE_URL,
+        GOOGLE_FREE_TRANSLATE_URL,
+        true,
+    )
+    .await
 }
 
 async fn translate_deeplx(req: &TranslateRequest) -> Result<TranslateResponse> {
@@ -2556,7 +2882,7 @@ mod tests {
 
     #[test]
     fn builtin_providers_count() {
-        assert_eq!(builtin_providers().len(), 18);
+        assert_eq!(builtin_providers().len(), 19);
     }
 
     #[test]
@@ -2601,9 +2927,80 @@ mod tests {
 
     #[test]
     fn local_providers_do_not_require_api_key() {
+        assert!(!provider_info("auto-free").unwrap().requires_api_key);
         assert!(!provider_info("ollama").unwrap().requires_api_key);
         assert!(!provider_info("deeplx").unwrap().requires_api_key);
         assert!(provider_info("google").unwrap().requires_api_key);
+    }
+
+    #[tokio::test]
+    async fn free_translation_falls_back_from_bing_to_google() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for attempt in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                let (status, body) = match attempt {
+                    0 => {
+                        assert!(request.starts_with("GET /auth "));
+                        ("200 OK", "mock-bing-token")
+                    }
+                    1 => {
+                        assert!(request.starts_with("POST /bing?"));
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer mock-bing-token"));
+                        ("503 Service Unavailable", "temporarily unavailable")
+                    }
+                    _ => {
+                        assert!(request.starts_with("GET /google?"));
+                        ("200 OK", r#"[[["你好","Hello",null,null,1]],null,"en"]"#)
+                    }
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let request = TranslateRequest {
+            text: "Hello".into(),
+            source_language: "en".into(),
+            target_language: "zh".into(),
+            provider: "auto-free".into(),
+            ..TranslateRequest::default()
+        };
+        let response = translate_auto_free_with_endpoints(
+            &request,
+            &format!("http://{endpoint}/auth"),
+            &format!("http://{endpoint}/bing"),
+            &format!("http://{endpoint}/google"),
+            false,
+        )
+        .await
+        .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(response.translated_text, "你好");
+        assert_eq!(response.provider, "auto-free");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live public translation endpoints"]
+    async fn free_translation_live_smoke() {
+        let request = TranslateRequest {
+            text: "FinalSub keeps subtitles readable.".into(),
+            source_language: "en".into(),
+            target_language: "zh".into(),
+            provider: "auto-free".into(),
+            ..TranslateRequest::default()
+        };
+        let response = translate_auto_free(&request).await.unwrap();
+        assert!(!response.translated_text.trim().is_empty());
+        assert_ne!(response.translated_text, request.text);
     }
 
     #[test]

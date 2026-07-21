@@ -2877,6 +2877,77 @@ pub fn list_translation_providers() -> Vec<TranslationProvider> {
 }
 
 #[tauri::command]
+pub async fn test_cloud_asr_connection(
+    app: AppHandle,
+    profile_id: String,
+) -> Result<crate::core::asr::cloud::CloudAsrConnectionTestResult, String> {
+    let profile_id = profile_id.trim();
+    if profile_id.is_empty() || profile_id.len() > 128 || profile_id.chars().any(char::is_control) {
+        return Err("云端 ASR 配置实例 ID 无效".into());
+    }
+    let state = app.state::<AppState>();
+    let settings =
+        settings::load_settings(&state.app_config_dir).map_err(|error| error.to_string())?;
+    let profile = settings
+        .cloud_asr_profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .cloned()
+        .ok_or_else(|| "找不到当前云端 ASR 配置，请先保存后再测试".to_string())?;
+    if !profile.upload_consent {
+        return Err("测试连接需要先允许向当前 endpoint 上传探针音频".into());
+    }
+
+    crate::core::asr::cloud::validate_service_settings(
+        &profile.protocol,
+        &profile.endpoint,
+        &profile.model,
+        profile.timeout_seconds,
+        profile.retry_times,
+        profile.request_concurrency,
+        profile.request_interval_ms,
+    )
+    .map_err(|error| error.to_string())?;
+    let protocol = crate::core::asr::cloud::parse_protocol(&profile.protocol)
+        .map_err(|error| error.to_string())?;
+    let secret_provider = protocol.secret_provider();
+    let api_key =
+        crate::core::secrets::get_provider_secret(secret_provider, &profile.endpoint, "apiKey")?
+            .filter(|secret| !secret.trim().is_empty())
+            .ok_or_else(|| "当前 endpoint 尚未保存 API Key".to_string())?;
+    let api_secret =
+        crate::core::secrets::get_provider_secret(secret_provider, &profile.endpoint, "apiSecret")?;
+    let account_id =
+        crate::core::secrets::get_provider_secret(secret_provider, &profile.endpoint, "accountId")?;
+    let proxy_url = settings
+        .proxy_enabled
+        .then(|| settings.proxy_url.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let engine = crate::core::asr::cloud::CloudAsrEngine::new(
+        crate::core::asr::cloud::CloudAsrConfig {
+            protocol,
+            endpoint: profile.endpoint,
+            model: profile.model,
+            api_key,
+            api_secret,
+            account_id,
+            timeout_seconds: profile.timeout_seconds,
+            retry_times: 0,
+            request_concurrency: 1,
+            request_interval_ms: 0,
+            proxy_url,
+            state_dir: None,
+        },
+        crate::core::task_runner::sherpa_vad_model_path(&app)?,
+    )
+    .map_err(|error| error.to_string())?;
+    engine
+        .test_connection()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn list_translation_models(
     app: AppHandle,
     provider_id: String,
@@ -2945,7 +3016,11 @@ pub async fn test_translation(
     let state = app.state::<AppState>();
     if let Ok(settings) = crate::core::settings::load_settings(&state.app_config_dir) {
         if req.api_url.is_none() || req.api_url.as_deref().unwrap_or("").is_empty() {
-            req.api_url = settings.translate_endpoints.get(&req.provider).cloned();
+            req.api_url = if req.provider == "auto-free" {
+                settings.translate_endpoints.get("deeplx").cloned()
+            } else {
+                settings.translate_endpoints.get(&req.provider).cloned()
+            };
         }
         if req.model_name.is_none() || req.model_name.as_deref().unwrap_or("").is_empty() {
             req.model_name = settings.translate_models.get(&req.provider).cloned();

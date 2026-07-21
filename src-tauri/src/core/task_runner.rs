@@ -954,11 +954,15 @@ async fn run_task_impl(
         let provider_info = builtin_providers()
             .into_iter()
             .find(|item| item.id == provider);
-        let api_url = configured_value(settings.translate_endpoints.get(&provider)).or_else(|| {
-            provider_info
-                .as_ref()
-                .and_then(|item| configured_value(Some(&item.default_endpoint)))
-        });
+        let api_url = if provider == "auto-free" {
+            configured_value(settings.translate_endpoints.get("deeplx"))
+        } else {
+            configured_value(settings.translate_endpoints.get(&provider)).or_else(|| {
+                provider_info
+                    .as_ref()
+                    .and_then(|item| configured_value(Some(&item.default_endpoint)))
+            })
+        };
         let model_name = configured_value(settings.translate_models.get(&provider));
         let retry_times = settings.translate_retry_times;
         let system_prompt = configured_value(settings.translate_system_prompts.get(&provider));

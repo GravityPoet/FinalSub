@@ -164,6 +164,7 @@ pub fn run() {
             commands::transcribe_audio,
             commands::transcribe_parakeet,
             commands::list_translation_providers,
+            commands::test_cloud_asr_connection,
             commands::list_translation_models,
             commands::test_translation,
             commands::test_translation_proxy,

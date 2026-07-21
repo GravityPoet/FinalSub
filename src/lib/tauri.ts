@@ -1293,6 +1293,19 @@ export interface CloudAsrProfile {
   request_interval_ms: number;
 }
 
+export interface CloudAsrConnectionTestResult {
+  provider: string;
+  model: string;
+  elapsed_ms: number;
+  detected_speech: boolean;
+}
+
+export async function testCloudAsrConnection(
+  profileId: string,
+): Promise<CloudAsrConnectionTestResult> {
+  return invoke("test_cloud_asr_connection", { profileId });
+}
+
 export type TranslationStructuredOutputMode = "disabled" | "json_object" | "json_schema";
 
 export interface TranslationGlossaryEntry {
@@ -2022,6 +2035,18 @@ function createMockModels(): AsrModelInfo[] {
 function createMockProviders(): TranslationProvider[] {
   return [
     {
+      id: "auto-free",
+      name: "免费翻译 · 自动兜底",
+      provider_type: "api",
+      is_ai: false,
+      implemented: true,
+      requires_api_key: false,
+      requires_endpoint: false,
+      requires_model: false,
+      secret_fields: [],
+      default_endpoint: "",
+    },
+    {
       id: "ollama",
       name: "Ollama",
       provider_type: "ai",
@@ -2664,6 +2689,13 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
       return createMockProviders();
     case "list_translation_models":
       return ["gpt-4.1-mini", "gpt-4o-mini", "qwen2.5:7b"];
+    case "test_cloud_asr_connection":
+      return {
+        provider: "OpenAI Compatible",
+        model: currentMockSettings().cloud_asr_model,
+        elapsed_ms: 286,
+        detected_speech: false,
+      } satisfies CloudAsrConnectionTestResult;
     case "has_provider_secret":
       return mockProviderSecrets.has(mockSecretIdentity(args));
     case "check_for_update":
