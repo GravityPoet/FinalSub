@@ -17,6 +17,7 @@
 - 当前本机完整验收平台：macOS 12+ Universal（arm64 + x86_64）
 - 当前默认 macOS 构建脚本：`npm run build:universal`
 - `src-tauri/tauri.conf.json` 本地使用稳定自签名身份 `ChordVox Local Code Signing`；仓库只钉扎公开证书，私钥留在本机钥匙串。该身份用于本机覆盖安装与权限连续性验证，不等同于 Apple Developer ID、Gatekeeper 信任或 notarization；GitHub Actions 中的正式 `APPLE_SIGNING_IDENTITY` 会覆盖本地身份。
+- Apple Developer ID 尚未具备期间，允许发布明确标记的 macOS 自签名客户包：只能从持有固定私钥的本机构建，必须使用 `v<version>-self-signed.<revision>` 标签、双语安装说明、DMG SHA-256、公开签名清单和手动更新模式。该渠道不安装根证书、不关闭 Gatekeeper、不声称经过 Apple 审核。
 - Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；`3427b3a` 已在 GitHub-hosted Windows/Linux runner 完成原生凭据、构建、安装、启动和卸载验证，Windows 还完整通过临时 PFX 导入、Tauri Authenticode、RFC 3161 时间戳与同证书验签。
 - Windows Release job 会临时导入 Base64 PFX、自动派生 SHA-1 thumbprint，以 SHA-256 + RFC 3161 时间戳交给 Tauri 签名，并在发布前要求安装包、主程序、FFmpeg 与 Whisper sidecar 均由同一证书签名且带时间戳；PFX 文件会在导入后立即物理删除，runner 证书在 `always()` 清理步骤移除。
 - Release workflow 会在创建 Draft 前验证 Tag、三处版本号和 11 项全平台必需 Secret；macOS 构建后还会挂载最终 DMG，独立验证 Developer ID、Team ID、secure timestamp、Hardened Runtime、stapled notarization ticket、Gatekeeper 与 Universal sidecar。
@@ -25,17 +26,19 @@
 
 | 平台 | 当前状态 | 目标产物 | 备注 |
 | --- | --- | --- | --- |
-| macOS | Universal `.app` / `.dmg` 已验证 | `.dmg` | 正式外发需 Developer ID 签名和 notarization |
+| macOS | Universal 自签名 `.dmg` 客户渠道已验证 | `.dmg` | 当前需首次手动放行；未来正式渠道使用 Developer ID 与 notarization |
 | Windows | NSIS 构建/安装/启动/卸载已验证 | NSIS `.exe` | 正式公开下载仍需代码签名与 SmartScreen 验收 |
 | Linux | AppImage/DEB 构建、启动、安装/卸载及 Secret Service 已验证 | `.AppImage` / `.deb` | 扩大兼容性声明前仍建议目标发行版桌面抽检 |
 
 ## GitHub Release 规则
 
 - Tag 格式：`v<package.json version>`，例如 `v1.0.10`。
+- 无 Apple 证书的 macOS 临时渠道使用 `v<version>-self-signed.<revision>`，例如 `v1.0.10-self-signed.1`；该标签由正式 `release.yml` 明确排除，避免误触 Developer ID / 公证 / 多平台 updater 流程。自签名 Release 必须在标题、正文和资产名中写明 `self-signed`，不得覆盖同版本正式 Tag。
 - `npm run preflight:release -- <tag>` 必须在创建 Draft 前通过；缺 Secret、Tag/版本不一致、updater 公钥误填私钥、Apple Team ID 或 Windows 时间戳地址无效时，不得创建半成品 Release。
 - Release assets 必须同时上传安装包和对应 `.sha256`。
 - 公开创建 tag、推送 tag、创建 GitHub Release、上传资产属于 `[P1]`，执行前必须有回滚路径和熔断条件。
 - 本地打包、校验和生成、草稿说明属于低风险本地写入，不推送、不公开分发。
+- 自签名渠道的本地包使用 `npm run package:release:self-signed:macos`；它要求 clean `main` 与 upstream 精确同步、远端标签和 Release 无碰撞，主动移除 updater/Apple 生产环境变量，再构建、挂载、验签并生成发布目录。公开推送 Tag 与 Release 仍是 `[P1]`。
 - Release notes 来源：`CHANGELOG`、上一个 tag 以来的 commits，或本文件记录的验收摘要；禁止声称未执行过的测试通过。
 
 ## 签名应用内更新
@@ -49,6 +52,8 @@
 - 应用只从固定 HTTPS 地址读取 `latest.json`，并只接受 `api.github.com/repos/GravityPoet/FinalSub/releases/assets/<数字 ID>` 下载地址；正式构建存在公钥时，来源或签名检查失败都不会降级到未签名安装。
 - 临时生成的 release 配置权限为 `0600`，位于已忽略的 `src-tauri/target`；不得上传为 artifact 或打印其内容。
 - 安装前后端会阻止运行中/排队中的字幕任务、模型下载/安装和视频合成；下载期间若出现新任务，安装前会再次检查并停止替换。
+
+自签名 macOS 渠道不内置生产 updater 公钥，也不生成 updater artifact 或 `latest.json`。应用仍可读取 GitHub Releases 的公开版本信息，但只能引导客户手动下载新 DMG；不得把手动下载包装成“应用内自动更新”。
 
 生产 updater 根密钥属于 `[P0]` 信任根：一旦旧版本内置公钥，丢失对应私钥会让这些安装无法接受后续更新。生成或更换生产根密钥前，必须先确认离线加密备份、恢复演练、双人保管边界和旧版本迁移方案；不得把测试私钥、空公钥或私钥内容写入仓库。
 
@@ -223,6 +228,62 @@ shasum -a 256 "$DMG" > "$DMG.sha256"
 EOF
 ```
 
+### 无 Apple Developer ID 的自签名客户包
+
+当前临时客户分发使用固定 `ChordVox Local Code Signing` 身份，不使用 ad-hoc 签名。该身份稳定绑定 Bundle ID 与 designated requirement，可减少同一台 Mac 覆盖安装时的身份漂移，但不能获得 Apple Gatekeeper 公信力；每个新下载版本首次打开时仍可能需要按系统界面手动确认。
+
+前置条件：
+
+- `main` 工作树 clean，且 `HEAD == @{upstream}`。
+- 本机钥匙串中已有与仓库公开证书指纹一致的固定私钥；缺失时只允许从加密备份恢复，禁止临时生成替代证书。
+- 精确 commit 的 `Quality` 已完成且成功。
+- 目标 `v<version>-self-signed.<revision>` 在本地、origin 与 GitHub Releases 均不存在。
+- 不配置生产 updater 根密钥，不注入 Apple Developer ID、公证或 Windows 生产签名 Secret。
+
+构建：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
+  FINALSUB_SELF_SIGNED_REVISION=1 npm run package:release:self-signed:macos
+```
+
+脚本生成：
+
+```text
+src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/
+├── FinalSub-<version>-macos-universal-self-signed.dmg
+├── FinalSub-<version>-macos-universal-self-signed.dmg.sha256
+├── INSTALL-macOS-self-signed.md
+├── RELEASE_NOTES.md
+└── release-manifest.json
+```
+
+硬性验收：
+
+- DMG 与内部 App 都由固定自签名证书签名，证书 SHA-256 必须为 `C21E979BC792E4453F46B65B900702C4A3C9A00967273376193A678742B2944F`。
+- `codesign --verify --deep --strict`、Bundle ID、版本、Hardened Runtime、主程序/FFmpeg/Whisper Universal 架构、macOS 12 最低版本、FFmpeg 字幕与 x264 能力、许可证及 DMG 完整性全部通过。
+- `stapler validate` 必须确认没有 notarization ticket；`spctl` 必须表现为自签名来源的 Gatekeeper 拒绝，防止把渠道标错为正式包。
+- `release-manifest.json` 必须记录 commit、资产大小/SHA-256、证书指纹、designated requirement、`notarized: false` 与手动更新模式，不包含私钥或环境变量值。
+- 客户说明必须明确：只从官方 Release 下载、先校验 SHA-256、通过“系统设置 → 隐私与安全性 → 仍要打开”完成每个新下载版本可能需要的首次确认；不安装根证书、不关闭 Gatekeeper、不提供 `xattr` 绕过命令。
+
+发布命令只在目标 commit、Tag、版本和资产已经由上述门禁确定后执行：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
+  git tag -a v<version>-self-signed.<revision> -m "FinalSub <version> macOS self-signed"
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
+  git push origin v<version>-self-signed.<revision>
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
+  gh release create v<version>-self-signed.<revision> \
+    src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/* \
+    --title "FinalSub <version> · macOS Universal Self-Signed" \
+    --notes-file src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/RELEASE_NOTES.md
+```
+
+发布后必须下载公开 DMG 与 `.sha256` 到 `mktemp -d` 目录，执行 checksum 和 `verify-macos-self-signed-package.sh`，再核对 Release 为非 Draft、资产名/大小完整、正式 Developer ID workflow 没有被该 Tag 触发。当前自签名版本可以作为 GitHub latest 供手动更新检查发现，但不能包含 `latest.json` 或 Tauri updater 签名包。
+
+回滚：公开前删除本地 Tag；推送 Tag 后但 Release 创建前，可删除远端 Tag（可由同 commit 重新创建）；Release 已公开后优先把 Release 改为 Draft 并保留资产/校验取证，不直接覆盖同名资产。若发现证书、SHA 或 commit 不符，立即 Draft 化并停止下载指引。
+
 ### 制作覆盖旧版的 PKG
 
 `.pkg` 适合“安装器覆盖旧软件”的场景。安装路径固定为 `/Applications/FinalSub.app`，并通过 `upgrade-bundle` 匹配 `com.gravitypoet.finalsub`。
@@ -356,9 +417,9 @@ EOF
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && test "$(mdfind 'kMDItemCFBundleIdentifier == \"com.gravitypoet.finalsub\"c' | sort)" = "/Applications/FinalSub.app"
 ```
 
-### 正式外发要求
+### Apple Developer ID 正式外发要求
 
-本地 ad-hoc 签名只适合开发和内部测试，不等同于正式分发签名。
+稳定自签名渠道是 Apple Developer ID 暂缺时的透明降级方案，不等同于 Apple 正式信任或 notarization。获得 Apple 证书后，默认客户渠道切换到下述正式流程，自签名 Tag 不得冒充或覆盖正式 Tag。
 
 正式外发前必须具备：
 
@@ -750,6 +811,100 @@ rejected: rm -f style commands are not permitted. Use a safer approach
 防复发：
 
 - 自动验收清理由脚本自身的原子替换/退出清理负责；交互式补清理必须绑定完整已验证路径，若执行器拒绝 `rm -f`，改用精确文件删除，不扩大为递归清理。
+
+### 2026-07-22：无 Apple Developer ID 时没有可公开验收的降级渠道
+
+现象：
+
+```text
+GitHub Actions production secret names: <none>
+Release workflow tag filter: v*
+```
+
+原因：
+
+- 现有 `release.yml` 在任何 `v*` Tag 上都要求 Apple Developer ID、公证、Windows 生产证书和 updater 根密钥；仓库当前没有这些生产 Secret。
+- 固定自签名 DMG 已能构建和覆盖安装，但旧 SOP 只把它定义为内部包，没有独立 Tag、客户首次放行说明、公开清单或发布后下载复验；直接推 Tag 只会制造失败的正式 workflow。
+
+处理：
+
+- 新增 `v<version>-self-signed.<revision>` 渠道，并在正式 workflow 的正向 Tag 规则之后用负向模式排除。
+- 新增可重复打包/挂载验签脚本、双语安装说明、双语 Release notes、DMG SHA-256 和公开 manifest；自签名构建主动移除生产 updater/Apple 环境变量，只保留 GitHub Release 手动更新。
+- 公开说明不要求客户安装根证书或执行 Gatekeeper 绕过命令，只使用 Apple 提供的“隐私与安全性 → 仍要打开”路径。
+
+防复发：
+
+- 正式 Developer ID 与临时自签名渠道必须使用不同 Tag 形态、不同验收器和不同发布说明；任何一方都不得静默回退到另一方。
+- 推送自签名 Tag 前先验证正式 workflow 的负向过滤、精确 SHA 的 Quality、资产 checksum 与从公开 Release 重新下载后的签名；缺一项就不公开。
+
+### 2026-07-22：`hdiutil attach` 的旧参数组合已弃用
+
+现象：
+
+```text
+hdiutil: WARNING: 'hdiutil attach -readonly -nobrowse -mountpoint ...' is deprecated.
+Please use 'diskutil image attach --readOnly --mountOptions nobrowse --mountPoint ...' instead.
+```
+
+原因：
+
+- 第一版自签名 DMG 验收器沿用了旧 `hdiutil attach` 参数；当前 macOS 仍能挂载，但已经明确提示弃用。
+
+处理与防复发：
+
+- 验收器改用系统提示的 `diskutil image attach --readOnly --mountOptions nobrowse --mountPoint`，退出清理继续按解析出的精确 device 执行 `hdiutil detach`。
+- 新增 macOS DMG 挂载流程不得再复制旧 `hdiutil attach -readonly -nobrowse -mountpoint` 命令。
+
+### 2026-07-22：系统 Ruby 不支持 `YAML.load_file(..., aliases:)`
+
+现象：
+
+```text
+psych.rb:576:in `load_file': unknown keyword: aliases (ArgumentError)
+```
+
+原因：
+
+- 本机系统 Ruby 2.6 / Psych 的 `YAML.load_file` 不接受新版 Ruby 的 `aliases:` 关键字；失败发生在临时工作流语法检查命令，不是 Release workflow 本身。
+
+处理与防复发：
+
+- 改用系统 Ruby 支持的 `YAML.load_file(".github/workflows/release.yml")` 完成解析；需要别名控制时使用项目固定版本的 YAML 工具，不能假设系统 Ruby API 与新版一致。
+
+### 2026-07-22：前端构建报告主入口 chunk 超过 500 kB
+
+现象：
+
+```text
+Some chunks are larger than 500 kB after minification.
+dist/assets/index-*.js 571.43 kB (gzip 174.46 kB)
+```
+
+原因：
+
+- Vite 的默认未压缩 chunk 告警阈值为 500 kB；页面已分块，剩余主入口包含共享运行时与通用依赖。构建成功，当前 gzip 体积为 174.46 kB，且本轮没有扩大前端运行时代码。
+
+处理与防复发：
+
+- 本次作为非阻断性能信号记录，不为自签名分发改动扩大到无关代码拆分；若主入口继续增长或启动性能实测回退，再单独做依赖分析与共享 chunk 拆分，不通过调高阈值隐藏告警。
+
+### 2026-07-22：提交隐私钩子把公开发布文档误判为个人数据
+
+现象：
+
+```text
+privacy guard: README_zh.md: contains labeled address personal data
+privacy guard: docs/release-sop.md: contains labeled address/account/user personal data
+```
+
+原因：
+
+- 命中内容逐行核对后均为公开的“API 地址”“时间戳地址”、GitHub Release URL、仓库绝对路径和测试命令；没有姓名、联系方式、账号值、凭据、私钥或用户数据。
+- 钩子按标签词和绝对路径做保守匹配，无法区分发布文档与个人数据。
+
+处理与防复发：
+
+- 保留全局隐私钩子；完成暂存差异敏感模式扫描和命中行人工复核后，只对本次提交使用钩子输出允许的 `git commit --no-verify` reviewed exception。任何命中真实值、凭据或运行时用户数据的提交都不得使用例外。
 
 ### 追加模板
 

@@ -70,6 +70,8 @@
 
 剩下的就交给我们。你可以在队列里实时看到转写和翻译的极速渲染。
 
+Apple Developer ID 分发尚未启用时，macOS 下载包使用 FinalSub 固定自签名证书；每个新下载版本首次启动时，系统可能要求手动确认。请按[自签名 macOS 安装说明](./docs/macos-self-signed-install.md)操作；无需安装根证书，也不要关闭 Gatekeeper。
+
 ---
 
 ### 🎯 谁最需要这个工具？
@@ -86,7 +88,7 @@
 - **桌面框架：** [Tauri 2.0](https://tauri.app/)（基于 Rust 构建，极致省内存，绝不使用臃肿的 Electron）
 - **前端界面：** [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) + [TailwindCSS 4.0](https://tailwindcss.com/)
 - **核心引擎：** [Whisper.cpp](https://github.com/ggerganov/whisper.cpp)（Metal 硬件加速）+ [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) + [FFmpeg 7.x](https://ffmpeg.org/)（已签名多架构静态 sidecar）
-- **密钥安全：** 借助 Rust `keyring` 直接对接 OS 级 Keychain/凭据管理器，安全存储 API Key。
+- **密钥安全：** macOS 使用应用私有的 XChaCha20-Poly1305 加密凭据库，Windows / Linux 使用系统原生凭据服务，安全保存 API Key。
 
 ---
 
@@ -94,7 +96,7 @@
 
 - FinalSub 默认在本地运行。你的音视频、字幕和缓存数据自始至终在本地，绝不上报。
 - 只有当你主动勾选并使用云端 API（如 Cloud ASR/TTS/AI 翻译）时，数据才会以经过本地 VAD 切片的安全形式发送到指定的 API 地址。
-- 密钥存在系统 Keychain 中，前端 IPC 绝不回传，保证密钥绝不泄漏。
+- macOS 密钥保存在仅当前用户可读的应用私有加密凭据库中，前端 IPC 不回传明文；Windows / Linux 使用系统原生凭据服务。
 
 ---
 
@@ -113,6 +115,6 @@
 
 ### ⚖️ 开源协议与鸣谢
 
-- 本项目在早期架构与设计上，从优秀开源项目 [SmartSub](https://github.com/smartsub)（基于 MIT 协议，版权所有 (c) 2024 Lin Xiaodong）中汲取了许多宝贵灵感，特此表达诚挚的谢意！
+- 本项目在早期架构与设计上，从优秀开源项目 [SmartSub](https://github.com/buxuku/SmartSub)（基于 MIT 协议，版权所有 (c) 2024 Lin Xiaodong）中汲取了许多宝贵灵感，特此表达诚挚的谢意！
 - 第三方开源依赖及版权声明见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 - 本项目基于 **MIT 协议** 开放源代码。

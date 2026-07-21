@@ -28,6 +28,7 @@
     "verify:bundle:universal": "bash scripts/verify-finalsub-macos-app.sh \"$PWD/src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app\"",
     "build:universal:bundle": "npm run binaries:universal && npm run tauri:build:universal && npm run verify:bundle:universal",
     "build:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle",
+    "package:release:self-signed:macos": "bash scripts/package-macos-self-signed-release.sh",
     "install:local:universal": "bash scripts/install-finalsub-local-macos.sh",
     "build:install:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle install:local:universal"
   },

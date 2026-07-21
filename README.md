@@ -70,6 +70,8 @@ No Python, no setup. It just works.
 
 That's it. Watch your high-quality, translated subtitles render in real-time.
 
+The current macOS download uses FinalSub's pinned self-signed certificate while Apple Developer ID distribution is pending. macOS therefore requires manual approval when a newly downloaded build is first opened. Follow the [self-signed macOS install guide](./docs/macos-self-signed-install.md); never install a root certificate or disable Gatekeeper.
+
 ---
 
 ### 🎯 Who Needs This?
@@ -114,6 +116,6 @@ Developing and maintaining high-quality universal sidecars, optimizing local eng
 
 ### ⚖️ Credits & Licenses
 
-- Early architectural concepts were inspired by the open-source project [SmartSub](https://github.com/smartsub) (MIT licensed, Copyright (c) 2024 Lin Xiaodong). Our deepest gratitude!
+- Early architectural concepts were inspired by the open-source project [SmartSub](https://github.com/buxuku/SmartSub) (MIT licensed, Copyright (c) 2024 Lin Xiaodong). Our deepest gratitude!
 - Third-party open-source dependency credits can be found in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 - FinalSub is licensed under the **MIT License**.
