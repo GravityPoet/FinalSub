@@ -1,7 +1,7 @@
 //! 火山引擎豆包 TTS 的纯协议工具。
 //!
 //! 该模块不发网络请求、不读写文件，负责把 V3 单向流式 HTTP 的请求和
-//! chunked JSON 响应收敛成可单测的纯函数。凭据只由调用层从系统 Keychain
+//! chunked JSON 响应收敛成可单测的纯函数。凭据只由调用层从本地凭据存储
 //! 读取，绝不进入这里的持久化结构或日志。
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};

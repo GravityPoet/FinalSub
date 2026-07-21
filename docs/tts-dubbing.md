@@ -36,13 +36,13 @@ ZipVoice 额外要求：
 云端 TTS 当前支持 OpenAI-compatible、Azure Speech、ElevenLabs、火山引擎豆包语音与 Edge TTS 免费试用档：
 
 - endpoint 只允许 HTTP(S)，禁用 redirects，拒绝 URL 内嵌账号密码；
-- API Key 使用 `provider id + endpoint + field` 绑定的系统 Keychain 身份；
+- API Key 使用 `provider id + endpoint + field` 绑定；macOS 写入应用私有加密存储，Windows / Linux 使用系统凭据服务；
 - 未勾选文本上传授权时，后端拒绝合成；
 - 音频响应最多 64 MB，错误体最多 16 KB 并移除控制字符；
 - 返回音频统一转换为 24 kHz 单声道 PCM WAV，再进入时间轴层。
 - 火山引擎豆包使用固定官方 V3 单向流式 HTTP Endpoint、`X-Api-Key`、`X-Api-Resource-Id` 与请求 ID；`seed-tts-2.0`、`seed-tts-1.0`、`seed-tts-1.0-concurr` 由实例显式选择，chunked JSON 中的 base64 裸 PCM 直接拼接并写 WAV 头，协议归一化阶段不启动 FFmpeg。语速以 `speech_rate` 原生映射到 `[-50, 100]`；`S_` 开头音色自动路由到 `seed-icl-2.0`。
 - 豆包单行合成采用 1,000 个 Unicode 字符的保守前置上限；超限会在联网前明确要求拆分，避免把长文本请求耗到默认超时。
-- 豆包实例是单例，API Key 仍按固定 Endpoint 绑定系统 Keychain；界面明确区分豆包语音 Key 与火山方舟推理 Key，资源版本/音色错配、鉴权失败和并发限流会给出定向提示。官方接口参考：[单向流式语音合成 HTTP](https://www.volcengine.com/docs/6561/2528925)。
+- 豆包实例是单例，API Key 仍按固定 Endpoint 绑定本地凭据存储；界面明确区分豆包语音 Key 与火山方舟推理 Key，资源版本/音色错配、鉴权失败和并发限流会给出定向提示。官方接口参考：[单向流式语音合成 HTTP](https://www.volcengine.com/docs/6561/2528925)。
 - Edge TTS 不需要 API Key 或模型下载，语言区域可从 voice ID 推断；它使用固定版本的 kothok-edge-tts 访问 Microsoft Edge Read Aloud 非公开 WebSocket，仅作为不承诺稳定性的试用通道。请求同样受超时、取消和 64 MB 音频上限保护，断供错误会引导切换本地模型或 OpenAI 兼容服务。
 - Edge 通道明确标记为在线文本上传；公开或商业发布应优先使用本地模型或 Azure 等服务条款清晰的接口，FinalSub 不把 Edge Read Aloud 当作稳定的商用 API。
 

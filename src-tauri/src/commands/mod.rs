@@ -3038,7 +3038,7 @@ pub fn set_provider_secret(
 }
 
 /// 仅返回「该 provider 字段是否已配置密钥」，绝不把明文密钥经 IPC 回传渲染层。
-/// 翻译时由后端 test_translation 直接从 Keychain 取用，前端无需接触明文。
+/// 翻译时由后端 test_translation 直接从本地凭据存储取用，前端无需接触明文。
 #[tauri::command]
 pub fn has_provider_secret(
     provider_id: String,
@@ -3339,7 +3339,7 @@ fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> 
             ModelStatus::NotReady
         } else {
             let mut ready = true;
-            let mut keychain_error = false;
+            let mut secret_store_error = false;
             for field in protocol.required_secret_fields() {
                 match crate::core::secrets::has_provider_secret(
                     protocol.secret_provider(),
@@ -3347,11 +3347,11 @@ fn scan_models_for_state(state: &AppState) -> Result<Vec<AsrModelInfo>, String> 
                     field,
                 ) {
                     Ok(configured) => ready &= configured,
-                    Err(_) => keychain_error = true,
+                    Err(_) => secret_store_error = true,
                 }
             }
-            if keychain_error {
-                ModelStatus::Error("Unable to read the system Keychain".into())
+            if secret_store_error {
+                ModelStatus::Error("Unable to read local encrypted credentials".into())
             } else if ready {
                 ModelStatus::Downloaded
             } else {
@@ -4274,8 +4274,9 @@ pub fn convert_strings_opencc(texts: Vec<String>, config: String) -> Result<Vec<
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
-    #[ignore = "writes to the user's OS keyring; run manually to validate native keyring backend"]
+    #[ignore = "writes to the user's OS credential store; run manually on Windows or Linux"]
     fn keyring_native_backend_manages_provider_secret() {
         let provider_id = format!("codex-keyring-roundtrip-{}", uuid::Uuid::new_v4());
         let endpoint = "https://api.example.test/v1".to_string();

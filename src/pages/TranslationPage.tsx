@@ -433,7 +433,7 @@ export default function TranslationPage() {
     try {
       const parsedCustomHeaders = selectedProviderInfo?.is_ai ? parseCustomHeaders() : {};
       const parsedCustomBody = selectedProviderInfo?.is_ai ? parseCustomBody() : {};
-      // 仅发送 dirty (用户本次输入) 的密钥，未修改的由 Rust 自动 fallback 去 Keychain 读取，避免暴露
+      // 仅发送 dirty（用户本次输入）的密钥，未修改的由 Rust 从本地凭据存储读取，避免暴露。
       const testSecrets: Record<string, string> = {};
       for (const field of selectedProviderInfo?.secret_fields || []) {
         if (secretDirty[field] && secrets[field] && secrets[field] !== "••••••••") {
@@ -1009,11 +1009,11 @@ export default function TranslationPage() {
                 </div>
                 {secretDirty[field] && secrets[field]?.trim() && secrets[field] !== "••••••••" ? (
                   <p className="mt-1.5 text-[11px] text-warning">
-                    {t("translation.toSaveKeychain")}
+                    {t("translation.toSaveSecretStore")}
                   </p>
                 ) : secretConfigured[field] ? (
                   <p className="mt-1.5 text-[11px] text-success">
-                    {t("translation.savedKeychain")}
+                    {t("translation.savedSecretStore")}
                   </p>
                 ) : null}
               </div>
