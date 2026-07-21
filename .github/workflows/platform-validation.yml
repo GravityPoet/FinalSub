@@ -90,6 +90,7 @@ jobs:
       - name: Verify Windows native credential storage
         run: cargo test --manifest-path src-tauri/Cargo.toml commands::tests::keyring_native_backend_manages_provider_secret -- --ignored --exact
       - name: Create ephemeral Windows signing fixture
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -98,6 +99,7 @@ jobs:
           try {
             $passwordValue = [guid]::NewGuid().ToString("N")
             $password = ConvertTo-SecureString -String $passwordValue -Force -AsPlainText
+            Write-Host "signing-fixture: creating certificate"
             $certificate = New-SelfSignedCertificate `
               -Type CodeSigningCert `
               -Subject "CN=FinalSub CI Signing Fixture" `
@@ -107,11 +109,18 @@ jobs:
               -KeyLength 2048 `
               -HashAlgorithm SHA256 `
               -NotAfter (Get-Date).AddDays(90)
+            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)"
+            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_TEST_ROOT_THUMBPRINT=$($certificate.Thumbprint)"
+            Write-Host "signing-fixture: certificate created"
             $pfxPath = Join-Path $workDir "fixture.pfx"
             $cerPath = Join-Path $workDir "fixture.cer"
+            Write-Host "signing-fixture: exporting PFX"
             Export-PfxCertificate -Cert $certificate -FilePath $pfxPath -Password $password | Out-Null
+            Write-Host "signing-fixture: exporting public certificate"
             Export-Certificate -Cert $certificate -FilePath $cerPath -Type CERT | Out-Null
+            Write-Host "signing-fixture: trusting public certificate"
             Import-Certificate -FilePath $cerPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+            Write-Host "signing-fixture: public certificate trusted"
             Remove-Item -Path "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
             $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfxPath))
             Write-Output "::add-mask::$encoded"
@@ -119,7 +128,7 @@ jobs:
             Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERTIFICATE=$encoded"
             Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERTIFICATE_PASSWORD=$passwordValue"
             Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com"
-            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_TEST_ROOT_THUMBPRINT=$($certificate.Thumbprint)"
+            Write-Host "signing-fixture: fixture exported"
           }
           finally {
             Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue
