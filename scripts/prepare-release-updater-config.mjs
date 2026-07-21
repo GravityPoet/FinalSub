@@ -2,6 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { windowsSigningConfigFromEnvironment } from "./windows-signing-config.mjs";
+
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "..");
 const templatePath = resolve(repositoryRoot, "src-tauri", "tauri.release.conf.json");
@@ -29,8 +31,25 @@ if (!hasEncodedKeyLine) {
 }
 
 const template = JSON.parse(await readFile(templatePath, "utf8"));
+const requireWindowsSigning = ["1", "true"].includes(
+  (process.env.FINALSUB_REQUIRE_WINDOWS_SIGNING ?? "").trim().toLowerCase(),
+);
+const windowsSigning = windowsSigningConfigFromEnvironment({
+  required: requireWindowsSigning,
+});
 const generated = {
   ...template,
+  bundle: {
+    ...(template.bundle ?? {}),
+    ...(windowsSigning
+      ? {
+          windows: {
+            ...(template.bundle?.windows ?? {}),
+            ...windowsSigning,
+          },
+        }
+      : {}),
+  },
   plugins: {
     ...(template.plugins ?? {}),
     updater: {

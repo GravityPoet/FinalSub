@@ -85,6 +85,14 @@ jobs:
         run: |
           ./scripts/install-ffmpeg-sidecar-windows.ps1
           ./scripts/build-whisper-sidecar-windows.ps1
+      - name: Import Windows release signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: ./scripts/import-windows-signing-certificate.ps1
       - name: Validate Apple release prerequisites
         if: runner.os == 'macOS'
         env:
@@ -112,6 +120,7 @@ jobs:
       - name: Prepare updater release config
         env:
           FINALSUB_UPDATER_PUBLIC_KEY: ${{ secrets.FINALSUB_UPDATER_PUBLIC_KEY }}
+          FINALSUB_REQUIRE_WINDOWS_SIGNING: ${{ runner.os == 'Windows' && 'true' || 'false' }}
         run: npm run prepare:release-updater-config
       # Pinned after auditing updater JSON merge behavior; do not expose signing secrets to a moving tag.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
@@ -133,6 +142,14 @@ jobs:
           args: ${{ matrix.args }} --config src-tauri/target/tauri.release.generated.conf.json
           retryAttempts: 3
           releaseAssetNamePattern: "FinalSub-[version]-[platform]-[arch].[ext]"
+      - name: Verify signed Windows installer and installed binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-windows-package.ps1 -RequireAuthenticode
+      - name: Remove Windows release signing certificate
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/remove-windows-signing-certificate.ps1
 
   publish:
     needs: build

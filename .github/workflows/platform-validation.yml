@@ -89,11 +89,55 @@ jobs:
           ./scripts/build-whisper-sidecar-windows.ps1
       - name: Verify Windows native credential storage
         run: cargo test --manifest-path src-tauri/Cargo.toml commands::tests::keyring_native_backend_manages_provider_secret -- --ignored --exact
-      - name: Build unsigned Windows validation installer
-        run: npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Create ephemeral Windows signing fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $workDir = Join-Path $env:RUNNER_TEMP ("finalsub-signing-fixture-" + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $workDir | Out-Null
+          try {
+            $passwordValue = [guid]::NewGuid().ToString("N")
+            $password = ConvertTo-SecureString -String $passwordValue -Force -AsPlainText
+            $certificate = New-SelfSignedCertificate `
+              -Type CodeSigningCert `
+              -Subject "CN=FinalSub CI Signing Fixture" `
+              -CertStoreLocation "Cert:\CurrentUser\My" `
+              -KeyExportPolicy Exportable `
+              -KeyAlgorithm RSA `
+              -KeyLength 2048 `
+              -HashAlgorithm SHA256 `
+              -NotAfter (Get-Date).AddDays(90)
+            $pfxPath = Join-Path $workDir "fixture.pfx"
+            $cerPath = Join-Path $workDir "fixture.cer"
+            Export-PfxCertificate -Cert $certificate -FilePath $pfxPath -Password $password | Out-Null
+            Export-Certificate -Cert $certificate -FilePath $cerPath -Type CERT | Out-Null
+            Import-Certificate -FilePath $cerPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+            Remove-Item -Path "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force
+            $encoded = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfxPath))
+            Write-Output "::add-mask::$encoded"
+            Write-Output "::add-mask::$passwordValue"
+            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERTIFICATE=$encoded"
+            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_CERTIFICATE_PASSWORD=$passwordValue"
+            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com"
+            Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_TEST_ROOT_THUMBPRINT=$($certificate.Thumbprint)"
+          }
+          finally {
+            Remove-Item -Path $workDir -Recurse -Force -ErrorAction SilentlyContinue
+          }
+      - name: Import ephemeral Windows signing certificate
+        shell: pwsh
+        run: ./scripts/import-windows-signing-certificate.ps1
+      - name: Prepare Windows signing config
+        run: npm run prepare:windows-signing-config
+      - name: Build self-signed Windows validation installer
+        run: npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/target/tauri.windows-signing.generated.conf.json
       - name: Install, launch, and remove Windows package
         shell: pwsh
-        run: ./scripts/verify-windows-package.ps1
+        run: ./scripts/verify-windows-package.ps1 -RequireAuthenticode
+      - name: Remove ephemeral Windows signing certificates
+        if: always()
+        shell: pwsh
+        run: ./scripts/remove-windows-signing-certificate.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: finalsub-windows-validation-${{ github.sha }}
