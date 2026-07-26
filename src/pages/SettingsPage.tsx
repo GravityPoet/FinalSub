@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Settings as SettingsIcon, Save, RotateCcw, Download, Upload, FolderOpen, AlertCircle, LockKeyhole, Palette, Sun, Moon, Laptop, RefreshCw, BatteryCharging } from "lucide-react";
 import { type TranslationKey, useI18n } from "../lib/i18n";
 import { type Theme, useTheme } from "../lib/theme";
@@ -164,9 +164,17 @@ export default function SettingsPage() {
     };
   }, []);
 
+  const msgTimerRef = useRef<number | null>(null);
   const showMsg = (type: "ok" | "err", text: string) => {
+    if (msgTimerRef.current !== null) {
+      window.clearTimeout(msgTimerRef.current);
+      msgTimerRef.current = null;
+    }
     setMessage({ type, text });
-    setTimeout(() => setMessage(null), 3000);
+    // 错误信息保留到用户主动关闭或被下一条消息覆盖，避免用户来不及阅读失败原因。
+    if (type === "ok") {
+      msgTimerRef.current = window.setTimeout(() => setMessage(null), 3000);
+    }
   };
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -367,7 +375,9 @@ export default function SettingsPage() {
         <div className="flex items-center gap-3.5">
           {message && (
             <span
-              className={`text-sm font-semibold ${message.type === "ok" ? "text-success" : "text-danger"}`}
+              onClick={() => setMessage(null)}
+              title={t("common.close")}
+              className={`cursor-pointer text-sm font-semibold ${message.type === "ok" ? "text-success" : "text-danger"}`}
             >
               {message.text}
             </span>

@@ -1084,7 +1084,7 @@ export default function HomePage() {
             <div className="flex min-w-0 items-center gap-3">
               <AlertCircle className="shrink-0 text-info" size={18} />
               <div className="min-w-0 text-sm text-text-secondary">
-                <span className="font-semibold text-text-primary">{t("home.newVersionAvailable")}{updateInfo.latest_version}！</span>
+                <span className="font-semibold text-text-primary">{t("home.newVersionAvailable")}{updateInfo.latest_version}</span>
                 {updateInfo.body && (
                   <span className="ml-1 opacity-90">
                     {t("home.updateNotes")}: {updateInfo.body.slice(0, 100)}{updateInfo.body.length > 100 ? "…" : ""}

@@ -86,7 +86,7 @@ function subtitleExtension(subtitlePath: string): string {
 }
 
 export default function DubbingPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedVoiceId = searchParams.get("voice") ?? "";
@@ -500,7 +500,7 @@ export default function DubbingPage() {
     if (cancelRequested.current) {
       setMessage({ type: "warn", text: t("dubbing.batchCancelled") });
     } else if (failures.length > 0) {
-      setMessage({ type: "err", text: t("dubbing.batchPartial", { rows: failures.join("、") }) });
+      setMessage({ type: "err", text: t("dubbing.batchPartial", { rows: failures.join(locale === "zh" ? "、" : ", ") }) });
     } else {
       const overlong = latest.cues.filter((cue) => cue.status === "overlong").length;
       setMessage({
@@ -842,7 +842,7 @@ export default function DubbingPage() {
                 <p className="mt-0.5 text-xs text-text-tertiary">{t("dubbing.persisted", { id: session.id.slice(0, 8) })}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {batchRunning ? (
+                {batchRunning || activeGenerationIds.length > 0 ? (
                   <Button type="button" variant="danger" size="sm" onClick={cancelGeneration}><Pause size={14} /> {t("dubbing.cancelBatch")}</Button>
                 ) : (
                   <Button type="button" variant="primary" size="sm" onClick={generateBatch} disabled={!engineValue || activeGenerationIds.length > 0}><Play size={14} /> {t("dubbing.generatePending")}</Button>
