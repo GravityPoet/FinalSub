@@ -18,6 +18,7 @@ import {
   ScrollText,
   Settings,
   Sparkles,
+  UserRound,
   X,
 } from "lucide-react";
 import { TASK_DELETED_EVENT, TASK_UPDATED_EVENT, listen, listTasks, type Task } from "../lib/tauri";
@@ -35,6 +36,7 @@ const commands: Array<{
   { path: "/tasks", label: "nav.queue", hint: "command.openQueue", icon: ListTodo },
   { path: "/models", label: "nav.models", hint: "command.manageModels", icon: Bot },
   { path: "/translation", label: "nav.translation", hint: "command.configureTranslation", icon: Languages },
+  { path: "/voices", label: "nav.voices", hint: "command.openVoices", icon: UserRound },
   { path: "/logs", label: "nav.logs", hint: "command.openLogs", icon: ScrollText },
   { path: "/dubbing", label: "nav.dubbing", hint: "command.openDubbing", icon: AudioLines },
   { path: "/proofread", label: "nav.proofread", hint: "command.openProofread", icon: Edit3 },

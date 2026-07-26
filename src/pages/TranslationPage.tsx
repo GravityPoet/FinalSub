@@ -54,6 +54,25 @@ import { Card } from "../components/ui/Card";
 import { Input, Select, Textarea } from "../components/ui/Input";
 
 const CUSTOM_OPENAI_PROVIDER_ID = "custom-openai";
+const AUTO_FREE_PROVIDER_ID = "auto-free";
+
+// 后端 builtin_providers 的 name 为中文；英文界面按 id 覆盖显示名，品牌名保持原样。
+const PROVIDER_DISPLAY_NAMES_EN: Record<string, string> = {
+  "auto-free": "Free Translation · Auto Fallback",
+  baidu: "Baidu Translate",
+  google: "Google Translate",
+  aliyun: "Alibaba Cloud Translate",
+  volc: "Volcengine Translate",
+  doubao: "Doubao Translate",
+  niutrans: "NiuTrans",
+  tencent: "Tencent Translate",
+  xunfei: "iFlytek Translate",
+  azure: "Microsoft Translator",
+  deepseek: "DeepSeek",
+  siliconflow: "SiliconFlow",
+  qwen: "Qwen",
+  [CUSTOM_OPENAI_PROVIDER_ID]: "Custom OpenAI-Compatible",
+};
 
 const SECRET_FIELD_LABELS: Record<string, string> = {
   apiKey: "API Key",
@@ -229,11 +248,15 @@ export default function TranslationPage() {
     }).catch(console.error);
   }, []);
 
+  const providerDisplayName = (provider: TranslationProvider): string =>
+    locale === "zh" ? provider.name : PROVIDER_DISPLAY_NAMES_EN[provider.id] ?? provider.name;
+
   const selectedProviderInfo = providers.find((p) => p.id === selectedProvider);
+  const selectedProviderName = selectedProviderInfo ? providerDisplayName(selectedProviderInfo) : "";
   const selectedProviderUnavailable = Boolean(selectedProviderInfo && !selectedProviderInfo.implemented);
   const availableProviderNames = providers
     .filter((provider) => provider.implemented)
-    .map((provider) => provider.name)
+    .map((provider) => providerDisplayName(provider))
     .join(locale === "en" ? ", " : "、");
   const glossaries = useMemo(
     () => normalizeGlossaryOrder(glossaryDrafts),
@@ -351,7 +374,7 @@ export default function TranslationPage() {
   const handleSaveProvider = async () => {
     if (!settings || !selectedProvider) return;
     if (selectedProviderUnavailable) {
-      setError(t("translation.notImplementedSelectError").replace("{name}", selectedProviderInfo?.name ?? selectedProvider));
+      setError(t("translation.notImplementedSelectError").replace("{name}", selectedProviderName || selectedProvider));
       return;
     }
     if (!validateSelectedProviderConfig()) return;
@@ -424,7 +447,7 @@ export default function TranslationPage() {
       return;
     }
     if (selectedProviderUnavailable) {
-      setError(t("translation.notImplementedSelectError").replace("{name}", selectedProviderInfo?.name ?? selectedProvider));
+      setError(t("translation.notImplementedSelectError").replace("{name}", selectedProviderName || selectedProvider));
       return;
     }
     if (!validateSelectedProviderConfig()) return;
@@ -480,7 +503,7 @@ export default function TranslationPage() {
   const handleFetchModels = async () => {
     if (!selectedProviderInfo || !selectedProviderInfo.requires_model) return;
     if (!apiUrl.trim()) {
-      setModelFetchError(t("translation.endpointMissing").replace("{name}", selectedProviderInfo.name));
+      setModelFetchError(t("translation.endpointMissing").replace("{name}", selectedProviderName));
       return;
     }
     setFetchingModels(true);
@@ -714,11 +737,11 @@ export default function TranslationPage() {
   const validateSelectedProviderConfig = () => {
     if (!selectedProviderInfo) return true;
     if (selectedProviderInfo.requires_endpoint && !apiUrl.trim()) {
-      setError(t("translation.endpointMissing").replace("{name}", selectedProviderInfo.name));
+      setError(t("translation.endpointMissing").replace("{name}", providerDisplayName(selectedProviderInfo)));
       return false;
     }
     if (selectedProviderInfo.requires_model && !modelName.trim()) {
-      setError(t("translation.modelMissing").replace("{name}", selectedProviderInfo.name));
+      setError(t("translation.modelMissing").replace("{name}", providerDisplayName(selectedProviderInfo)));
       return false;
     }
 
@@ -729,7 +752,7 @@ export default function TranslationPage() {
     if (missingSecrets.length > 0) {
       setError(
         t("translation.keyMissing")
-          .replace("{name}", selectedProviderInfo.name)
+          .replace("{name}", providerDisplayName(selectedProviderInfo))
           .replace("{secrets}", missingSecrets.map(secretFieldLabel).join(locale === "en" ? ", " : "、"))
       );
       return false;
@@ -750,7 +773,7 @@ export default function TranslationPage() {
             setSecretDirty({});
             setSecrets({});
             setVisibleSecrets({});
-            setError(t("translation.notImplementedSelectError").replace("{name}", provider.name));
+            setError(t("translation.notImplementedSelectError").replace("{name}", providerDisplayName(provider)));
             setTestResult("");
             return;
           }
@@ -773,7 +796,7 @@ export default function TranslationPage() {
         title={provider.implemented ? undefined : t("translation.notImplementedTitle")}
       >
         <span className="flex items-center justify-between w-full gap-2">
-          <span className="truncate">{provider.name}</span>
+          <span className="truncate">{providerDisplayName(provider)}</span>
           {!provider.implemented && (
             <span className="shrink-0 rounded bg-surface-overlay border border-border-subtle px-1.5 py-0.5 text-[9px] text-text-tertiary uppercase font-mono">
               {t("translation.notImplemented")}
@@ -814,7 +837,7 @@ export default function TranslationPage() {
         {selectedProviderInfo && (selectedProviderInfo.requires_endpoint || selectedProviderInfo.requires_model || selectedProviderInfo.secret_fields?.length > 0) && (
           <div className="my-6 border-t border-border-subtle pt-6 space-y-4">
             <h4 className="font-semibold text-sm text-text-primary">
-              {t("translation.configParams").replace("{name}", selectedProviderInfo.name)}
+              {t("translation.configParams").replace("{name}", providerDisplayName(selectedProviderInfo))}
             </h4>
             
             {selectedProviderInfo.requires_endpoint && (
@@ -1058,10 +1081,17 @@ export default function TranslationPage() {
           </div>
         )}
 
+        {selectedProvider === AUTO_FREE_PROVIDER_ID && (
+          <div className="mb-5 flex items-start gap-2 rounded-xl border border-border-default bg-surface-overlay px-3.5 py-3 text-sm text-text-secondary">
+            <ShieldCheck className="mt-0.5 shrink-0" size={14} />
+            <span className="leading-5">{t("translation.autoFreeNotice")}</span>
+          </div>
+        )}
+
         {selectedProviderUnavailable && (
           <div className="mb-5 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning">
             <AlertCircle className="mt-0.5 shrink-0" size={14} />
-            <span className="leading-5">{t("translation.notImplementedSelect").replace("{name}", selectedProviderInfo?.name ?? "").replace("{available}", availableProviderNames)}</span>
+            <span className="leading-5">{t("translation.notImplementedSelect").replace("{name}", selectedProviderName).replace("{available}", availableProviderNames)}</span>
           </div>
         )}
 

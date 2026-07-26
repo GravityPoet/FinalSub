@@ -174,17 +174,21 @@ export default function TasksPage() {
     : [];
 
   const handleOpenFolder = async (outputPath: string) => {
+    setActionError(null);
     try {
       await revealItemInDir(outputPath);
     } catch (e) {
+      setActionError(errorMessage(e));
       console.error("Failed to open directory", e);
     }
   };
 
   const handleOpenFile = async (outputPath: string) => {
+    setActionError(null);
     try {
       await openPath(outputPath);
     } catch (e) {
+      setActionError(errorMessage(e));
       console.error("Failed to open file", e);
     }
   };
@@ -271,37 +275,45 @@ export default function TasksPage() {
   }, [logsText]);
 
   const handleCancel = async (taskId: string) => {
+    setActionError(null);
     try {
       const task = await cancelTask(taskId);
       setTasks((currentTasks) => upsertTask(currentTasks, task));
     } catch (e) {
+      setActionError(errorMessage(e));
       console.error("Failed to cancel task", e);
     }
   };
 
   const handlePause = async (taskId: string) => {
+    setActionError(null);
     try {
       const task = await pauseTask(taskId);
       setTasks((currentTasks) => upsertTask(currentTasks, task));
     } catch (e) {
+      setActionError(errorMessage(e));
       console.error("Failed to pause task", e);
     }
   };
 
   const handleResume = async (taskId: string) => {
+    setActionError(null);
     try {
       const task = await resumeTask(taskId);
       setTasks((currentTasks) => upsertTask(currentTasks, task));
     } catch (e) {
+      setActionError(errorMessage(e));
       console.error("Failed to resume task", e);
     }
   };
 
   const handleRetry = async (taskId: string) => {
+    setActionError(null);
     try {
       const task = await retryTask(taskId);
       setTasks((currentTasks) => upsertTask(currentTasks, task));
     } catch (e) {
+      setActionError(errorMessage(e));
       console.error("Failed to retry task", e);
     }
   };

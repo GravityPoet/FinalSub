@@ -53,8 +53,9 @@ export default function ProofreadImport({
       }
     } catch (error) {
       console.error('Failed to import videos:', error);
+      showToast('error', t('proofread.import.failed', { error: String(error) }));
     }
-  }, [onImportComplete]);
+  }, [onImportComplete, showToast, t]);
 
   // 导入字幕文件
   const handleImportSubtitles = useCallback(async () => {
@@ -84,8 +85,9 @@ export default function ProofreadImport({
       }
     } catch (error) {
       console.error('Failed to import subtitles:', error);
+      showToast('error', t('proofread.import.failed', { error: String(error) }));
     }
-  }, [onImportComplete]);
+  }, [onImportComplete, showToast, t]);
 
   // 导入文件夹（智能检测）
   const handleImportFolder = useCallback(async () => {
@@ -192,8 +194,9 @@ export default function ProofreadImport({
       }
     } catch (error) {
       console.error('Failed to import folder:', error);
+      showToast('error', t('proofread.import.failed', { error: String(error) }));
     }
-  }, [onImportComplete]);
+  }, [onImportComplete, showToast, t]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 py-8">
