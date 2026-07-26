@@ -299,6 +299,7 @@ select {
     max-width: 84rem;
     margin-inline: auto;
     padding-bottom: 3rem;
+    animation: page-enter var(--duration-slow) var(--ease-out) both;
   }
 
   .liquid-shell {
@@ -484,8 +485,8 @@ select {
   }
 
   .status-dot-error {
-    background: var(--color-warning);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 12%, transparent), 0 0 14px color-mix(in srgb, var(--color-warning) 38%, transparent);
+    background: var(--color-danger);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-danger) 12%, transparent), 0 0 14px color-mix(in srgb, var(--color-danger) 38%, transparent);
     animation: none;
   }
 
@@ -561,6 +562,26 @@ select {
     border-radius: 999px;
     background: radial-gradient(circle, color-mix(in srgb, var(--color-brand) 18%, transparent), transparent 68%);
     filter: blur(4px);
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.55rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes progress-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
   }
 }
 

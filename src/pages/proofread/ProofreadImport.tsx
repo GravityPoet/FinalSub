@@ -208,44 +208,47 @@ export default function ProofreadImport({
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        <div
+        <button
+          type="button"
           className="glass-panel group flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-xl p-5 text-center transition-all duration-150 hover:border-brand hover:bg-surface-raised hover:shadow-brand-glow"
           onClick={handleImportVideos}
         >
           <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-subtle transition-transform duration-150 group-hover:scale-105">
             <Video className="h-8 w-8 text-brand" />
           </div>
-          <h3 className="mb-3 font-display text-h2 font-semibold text-text-primary">{t('proofread.import.importVideos')}</h3>
-          <p className="text-sm leading-6 text-text-secondary">
+          <span className="mb-3 font-display text-h2 font-semibold text-text-primary">{t('proofread.import.importVideos')}</span>
+          <span className="text-sm leading-6 text-text-secondary">
             {t('proofread.import.importVideosDesc')}
-          </p>
-        </div>
+          </span>
+        </button>
 
-        <div
+        <button
+          type="button"
           className="glass-panel group flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-xl p-5 text-center transition-all duration-150 hover:border-brand hover:bg-surface-raised hover:shadow-brand-glow"
           onClick={handleImportSubtitles}
         >
           <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success/10 transition-transform duration-150 group-hover:scale-105">
             <FileText className="h-8 w-8 text-success" />
           </div>
-          <h3 className="mb-3 font-display text-h2 font-semibold text-text-primary">{t('proofread.import.importSubtitles')}</h3>
-          <p className="text-sm leading-6 text-text-secondary">
+          <span className="mb-3 font-display text-h2 font-semibold text-text-primary">{t('proofread.import.importSubtitles')}</span>
+          <span className="text-sm leading-6 text-text-secondary">
             {t('proofread.import.importSubtitlesDesc')}
-          </p>
-        </div>
+          </span>
+        </button>
 
-        <div
+        <button
+          type="button"
           className="glass-panel group flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-xl p-5 text-center transition-all duration-150 hover:border-brand hover:bg-surface-raised hover:shadow-brand-glow"
           onClick={handleImportFolder}
         >
           <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-warning/10 transition-transform duration-150 group-hover:scale-105">
             <FolderOpen className="h-8 w-8 text-warning" />
           </div>
-          <h3 className="mb-3 font-display text-h2 font-semibold text-text-primary">{t('proofread.import.importFolder')}</h3>
-          <p className="text-sm leading-6 text-text-secondary">
+          <span className="mb-3 font-display text-h2 font-semibold text-text-primary">{t('proofread.import.importFolder')}</span>
+          <span className="text-sm leading-6 text-text-secondary">
             {t('proofread.import.importFolderDesc')}
-          </p>
-        </div>
+          </span>
+        </button>
       </div>
     </div>
   );

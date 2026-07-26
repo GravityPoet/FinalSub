@@ -68,6 +68,7 @@ export default function SubtitleMergePage() {
 
   // Metadata state
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
+  const [metadataError, setMetadataError] = useState("");
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const requiresMkv = composeRequiresMkv(softSubtitle, audioPath, audioMode);
   const encoderStatus = loadingEncoderInfo
@@ -92,18 +93,21 @@ export default function SubtitleMergePage() {
     if (videoPath) {
       setLoadingMetadata(true);
       setMetadata(null);
+      setMetadataError("");
       getVideoMetadata(videoPath)
         .then((meta) => {
           setMetadata(meta);
         })
         .catch((err) => {
           console.error("Failed to get video metadata:", err);
+          setMetadataError(String(err));
         })
         .finally(() => {
           setLoadingMetadata(false);
         });
     } else {
       setMetadata(null);
+      setMetadataError("");
     }
   }, [videoPath]);
 
@@ -385,6 +389,13 @@ export default function SubtitleMergePage() {
           <div className="flex items-center gap-2 p-2 text-sm text-text-tertiary">
             <Loader2 className="animate-spin h-3.5 w-3.5" />
             <span>{t("merge.analyzingMetadata")}</span>
+          </div>
+        )}
+
+        {metadataError && (
+          <div className="flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning" role="alert">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{t("merge.metadataError", { error: metadataError })}</span>
           </div>
         )}
 

@@ -852,7 +852,14 @@ export default function DubbingPage() {
                 ) : (
                   <Button type="button" variant="primary" size="sm" onClick={generateBatch} disabled={!engineValue || activeGenerationIds.length > 0}><Play size={14} /> {t("dubbing.generatePending")}</Button>
                 )}
-                <Button type="button" variant="secondary" size="sm" onClick={exportAudio} disabled={!canExport || exporting || activeGenerationIds.length > 0}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={exportAudio}
+                  disabled={!canExport || exporting || activeGenerationIds.length > 0}
+                  title={!canExport && session ? t("dubbing.exportNeedsAll", { done: doneCount, total: session.cues.length }) : undefined}
+                >
                   {exporting ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} {t("dubbing.export")}
                 </Button>
                 <Button type="button" variant="secondary" size="sm" onClick={exportSubtitleCopy} disabled={subtitleSaving !== null || activeGenerationIds.length > 0}>
