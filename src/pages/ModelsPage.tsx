@@ -75,8 +75,15 @@ function StatusBadge({
     );
   if (currentStatus === "error" || errorMsg)
     return (
-      <span className="flex items-center gap-1.5 text-sm font-semibold text-danger" title={errorMsg || t("common.error")}>
-        <AlertCircle size={15} /> {t("models.error")}
+      <span className="flex max-w-72 flex-col items-start gap-1 lg:items-end">
+        <span className="flex items-center gap-1.5 text-sm font-semibold text-danger">
+          <AlertCircle size={15} /> {t("models.error")}
+        </span>
+        {errorMsg && (
+          <span className="break-all text-left text-xs leading-4 text-danger/80 lg:text-right" role="alert">
+            {errorMsg}
+          </span>
+        )}
       </span>
     );
   return null;

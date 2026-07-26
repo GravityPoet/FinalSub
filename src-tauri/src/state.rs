@@ -7,10 +7,18 @@ use crate::core::models::AsrModelInfo;
 use crate::core::task_queue::Task;
 use crate::core::tts::VoiceProfile;
 
+/// 单个任务 runner 的控制句柄。
+/// `stale` 在该 runner 被取消/暂停移除或被 retry/resume 的新 runner 取代时置位；
+/// 旧 runner 在检查点看到取消信号后必须先查此标志，过时则静默退出，
+/// 不得再写任务状态、断点或控制表，否则会把新一代任务标成已取消并删掉其控制通道。
+pub struct TaskControl {
+    pub cancel_tx: tokio::sync::watch::Sender<bool>,
+    pub stale: Arc<AtomicBool>,
+}
+
 pub struct AppState {
     pub tasks: Arc<RwLock<std::collections::HashMap<String, Task>>>,
-    pub task_controls:
-        Arc<RwLock<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+    pub task_controls: Arc<RwLock<std::collections::HashMap<String, TaskControl>>>,
     pub model_controls:
         Arc<RwLock<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>>,
     pub tts_model_controls:
@@ -30,8 +38,27 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(app_config_dir: PathBuf) -> Self {
-        let mut loaded_tasks =
-            crate::core::task_queue::load_tasks(&app_config_dir).unwrap_or_default();
+        let mut loaded_tasks = match crate::core::task_queue::load_tasks(&app_config_dir) {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                // tasks.json 损坏时先把原文件改名备份再从空队列启动，
+                // 否则下一次保存会用空表直接覆盖用户的全部任务历史且无法找回。
+                let tasks_file = crate::core::task_queue::tasks_path(&app_config_dir);
+                if tasks_file.exists() {
+                    let backup = tasks_file.with_extension(format!(
+                        "json.corrupt-{}",
+                        chrono::Utc::now().format("%Y%m%d%H%M%S")
+                    ));
+                    let rename_result = std::fs::rename(&tasks_file, &backup);
+                    eprintln!(
+                        "[FinalSub] tasks.json 无法解析（{error}），已备份到 {}（rename: {:?}）",
+                        backup.display(),
+                        rename_result
+                    );
+                }
+                Default::default()
+            }
+        };
         let mut dirty = false;
         for task in loaded_tasks.values_mut() {
             if task.status == crate::core::task_queue::TaskStatus::Pending

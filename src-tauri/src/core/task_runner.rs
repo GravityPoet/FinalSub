@@ -97,6 +97,7 @@ struct PipelineRunContext<'a> {
     task: &'a Task,
     media_path: &'a Path,
     subtitle_path: &'a Path,
+    stale: &'a AtomicBool,
 }
 
 fn pipeline_stage_label(kind: PipelineStageKind) -> &'static str {
@@ -190,10 +191,11 @@ async fn load_subtitle_file(path: &Path, label: &str) -> Result<SubtitleTrack, S
 pub fn start_task(
     app: AppHandle,
     tasks: Arc<RwLock<HashMap<String, Task>>>,
-    task_controls: Arc<RwLock<HashMap<String, watch::Sender<bool>>>>,
+    task_controls: Arc<RwLock<HashMap<String, crate::state::TaskControl>>>,
     app_config_dir: PathBuf,
     task_id: String,
     mut cancel_rx: watch::Receiver<bool>,
+    stale: Arc<AtomicBool>,
 ) {
     tauri::async_runtime::spawn(async move {
         let run_result = run_task_impl(
@@ -202,15 +204,19 @@ pub fn start_task(
             app_config_dir,
             &task_id,
             &mut cancel_rx,
+            &stale,
         )
         .await;
 
-        // 无论成功、失败还是取消，任务结束时都从 task_controls 移除
-        {
+        // 任务结束时移除自己的控制句柄；过时 runner 不得移除，否则会删掉新一代 runner 的通道。
+        if !stale.load(Ordering::Relaxed) {
             let mut controls = task_controls.write().await;
             controls.remove(&task_id);
         }
 
+        if stale.load(Ordering::Relaxed) {
+            return;
+        }
         if let Err(e) = run_result {
             // 检查当前状态是否已经是已取消，如果是，则不做 error 更新
             let is_cancelled = {
@@ -254,6 +260,7 @@ async fn run_task_impl(
     app_config_dir: PathBuf,
     task_id: &str,
     cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+    stale: &AtomicBool,
 ) -> Result<(), String> {
     // 1. 获取任务信息
     let task = {
@@ -272,18 +279,15 @@ async fn run_task_impl(
 
     // 检查取消
     if check_cancelled(cancel_rx) {
-        let current_status = {
-            let task_map = tasks.read().await;
-            task_map
-                .get(task_id)
-                .map(|t| t.status)
-                .unwrap_or(TaskStatus::Cancelled)
-        };
-        if current_status == TaskStatus::Paused {
-            write_task_log(app, &app_config_dir, task_id, "任务启动前已暂停").await;
-            return Ok(());
-        }
-        update_task_cancelled(app, tasks, task_id).await;
+        handle_cancel_signal(
+            app,
+            tasks,
+            &app_config_dir,
+            task_id,
+            stale,
+            "任务启动前已暂停",
+        )
+        .await;
         return Ok(());
     }
 
@@ -318,15 +322,7 @@ async fn run_task_impl(
             }
         }
         _ = cancel_rx.changed() => {
-            let current_status = {
-                let task_map = tasks.read().await;
-                task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-            };
-            if current_status == TaskStatus::Paused {
-                write_task_log(app, &app_config_dir, task_id, "排队已暂停").await;
-                return Ok(());
-            }
-            update_task_cancelled(app, tasks, task_id).await;
+            handle_cancel_signal(app, tasks, &app_config_dir, task_id, stale, "排队已暂停").await;
             return Ok(());
         }
     };
@@ -380,6 +376,7 @@ async fn run_task_impl(
                 task: &task,
                 media_path: &media_path,
                 subtitle_path: &subtitle_path,
+                stale,
             };
             let outcome = continue_pipeline_downstream(&pipeline_context, cancel_rx).await?;
             if outcome != PipelineRunOutcome::Complete {
@@ -583,15 +580,7 @@ async fn run_task_impl(
                         }
                         change_res = cancel_rx.changed() => {
                             if change_res.is_err() || *cancel_rx.borrow() {
-                                let current_status = {
-                                    let task_map = tasks.read().await;
-                                    task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-                                };
-                                if current_status == TaskStatus::Paused {
-                                    write_task_log(app, &app_config_dir, task_id, "音频提取已暂停").await;
-                                    return Ok(());
-                                }
-                                update_task_cancelled(app, tasks, task_id).await;
+                                handle_cancel_signal(app, tasks, &app_config_dir, task_id, stale, "音频提取已暂停").await;
                                 return Ok(());
                             }
                         }
@@ -613,18 +602,15 @@ async fn run_task_impl(
             }
 
             if check_cancelled(cancel_rx) {
-                let current_status = {
-                    let task_map = tasks.read().await;
-                    task_map
-                        .get(task_id)
-                        .map(|t| t.status)
-                        .unwrap_or(TaskStatus::Cancelled)
-                };
-                if current_status == TaskStatus::Paused {
-                    write_task_log(app, &app_config_dir, task_id, "音频提取已暂停").await;
-                    return Ok(());
-                }
-                update_task_cancelled(app, tasks, task_id).await;
+                handle_cancel_signal(
+                    app,
+                    tasks,
+                    &app_config_dir,
+                    task_id,
+                    stale,
+                    "音频提取已暂停",
+                )
+                .await;
                 return Ok(());
             }
 
@@ -804,18 +790,8 @@ async fn run_task_impl(
             .await;
 
             if check_cancelled(cancel_rx) {
-                let current_status = {
-                    let task_map = tasks.read().await;
-                    task_map
-                        .get(task_id)
-                        .map(|t| t.status)
-                        .unwrap_or(TaskStatus::Cancelled)
-                };
-                if current_status == TaskStatus::Paused {
-                    write_task_log(app, &app_config_dir, task_id, "转录已暂停").await;
-                    return Ok(());
-                }
-                update_task_cancelled(app, tasks, task_id).await;
+                handle_cancel_signal(app, tasks, &app_config_dir, task_id, stale, "转录已暂停")
+                    .await;
                 return Ok(());
             }
 
@@ -847,15 +823,7 @@ async fn run_task_impl(
                             }
                             Err(e) => {
                                 if e.to_string().contains("已取消") || check_cancelled(cancel_rx) {
-                                    let current_status = {
-                                        let task_map = tasks.read().await;
-                                        task_map.get(task_id).map(|t| t.status).unwrap_or(TaskStatus::Cancelled)
-                                    };
-                                    if current_status == TaskStatus::Paused {
-                                        write_task_log(app, &app_config_dir, task_id, "转录已暂停").await;
-                                        return Ok(());
-                                    }
-                                    update_task_cancelled(app, tasks, task_id).await;
+                                    handle_cancel_signal(app, tasks, &app_config_dir, task_id, stale, "转录已暂停").await;
                                     return Ok(());
                                 }
                                 break Err(format!("语音转录失败：{}", e));
@@ -865,7 +833,20 @@ async fn run_task_impl(
                 }
             };
 
-            current_track = Some(transcribe_res?);
+            let transcribed = transcribe_res?;
+            // 统一固化转录结果：cloud/sherpa/parakeet 系引擎只返回内存轨道，不落盘的话
+            // 翻译阶段暂停/重试会整段重跑 ASR（云端引擎重复上传计费），且重转录分段
+            // 漂移会让按下标恢复的旧译文贴错行。写失败不阻塞本次任务，仅影响断点恢复。
+            if let Err(error) = std::fs::write(&asr_output_path, transcribed.to_srt()) {
+                write_task_log(
+                    app,
+                    &app_config_dir,
+                    task_id,
+                    &format!("固化转录结果失败（仅影响断点恢复）：{error}"),
+                )
+                .await;
+            }
+            current_track = Some(transcribed);
         }
     } else {
         // TranslateOnly 模式直接读取原字幕文件，按扩展名解析 SRT/VTT/ASS/LRC。
@@ -895,18 +876,15 @@ async fn run_task_impl(
     let source_track = track.clone();
 
     if check_cancelled(cancel_rx) {
-        let current_status = {
-            let task_map = tasks.read().await;
-            task_map
-                .get(task_id)
-                .map(|t| t.status)
-                .unwrap_or(TaskStatus::Cancelled)
-        };
-        if current_status == TaskStatus::Paused {
-            write_task_log(app, &app_config_dir, task_id, "字幕翻译启动前已暂停").await;
-            return Ok(());
-        }
-        update_task_cancelled(app, tasks, task_id).await;
+        handle_cancel_signal(
+            app,
+            tasks,
+            &app_config_dir,
+            task_id,
+            stale,
+            "字幕翻译启动前已暂停",
+        )
+        .await;
         return Ok(());
     }
 
@@ -1093,6 +1071,7 @@ async fn run_task_impl(
                     &temp_translated_path,
                     &track,
                     next_cue_index,
+                    stale,
                 )
                 .await;
                 return Ok(());
@@ -1149,6 +1128,7 @@ async fn run_task_impl(
                                 &temp_translated_path,
                                 &track,
                                 next_cue_index,
+                                stale,
                             )
                             .await;
                             return Ok(());
@@ -1181,6 +1161,7 @@ async fn run_task_impl(
                         &temp_translated_path,
                         &track,
                         next_cue_index,
+                        stale,
                     )
                     .await;
                     return Ok(());
@@ -1272,6 +1253,7 @@ async fn run_task_impl(
                                 &temp_translated_path,
                                 &track,
                                 next_cue_index,
+                                stale,
                             )
                             .await;
                             return Ok(());
@@ -1287,6 +1269,7 @@ async fn run_task_impl(
                             &temp_translated_path,
                             &track,
                             next_cue_index,
+                            stale,
                         )
                         .await;
                         return Ok(());
@@ -1348,6 +1331,7 @@ async fn run_task_impl(
                         &temp_translated_path,
                         &track,
                         next_cue_index,
+                        stale,
                     )
                     .await;
                     return Ok(());
@@ -1377,6 +1361,7 @@ async fn run_task_impl(
                     &temp_translated_path,
                     &track,
                     next_cue_index,
+                    stale,
                 )
                 .await;
                 return Ok(());
@@ -1394,23 +1379,47 @@ async fn run_task_impl(
     }
 
     if check_cancelled(cancel_rx) {
-        let current_status = {
-            let task_map = tasks.read().await;
-            task_map
-                .get(task_id)
-                .map(|t| t.status)
-                .unwrap_or(TaskStatus::Cancelled)
-        };
-        if current_status == TaskStatus::Paused {
-            write_task_log(app, &app_config_dir, task_id, "写出字幕前已暂停").await;
-            return Ok(());
-        }
-        update_task_cancelled(app, tasks, task_id).await;
+        handle_cancel_signal(
+            app,
+            tasks,
+            &app_config_dir,
+            task_id,
+            stale,
+            "写出字幕前已暂停",
+        )
+        .await;
         return Ok(());
     }
 
     // 5. 字幕输出阶段 (0.95 - 1.00)
     update_task_progress(app, tasks.clone(), task_id, 0.95, "正在写出字幕文件...").await;
+
+    // 双语字幕 + 配音：固化一份纯译文轨道供配音阶段使用，
+    // 避免 TTS 把每句的原文和译文各念一遍；合成阶段仍用双语成品。
+    if should_translate
+        && task.translation_content_mode.is_bilingual()
+        && task
+            .pipeline
+            .as_ref()
+            .is_some_and(|pipeline| pipeline.dubbing.is_some())
+    {
+        let mut dubbing_track = track.clone();
+        if task.strip_chinese_punctuation {
+            for cue in &mut dubbing_track.cues {
+                cue.text = strip_chinese_punctuation(&cue.text);
+            }
+        }
+        let dubbing_source_path = work_dir.join("dubbing-source.srt");
+        if let Err(error) = std::fs::write(&dubbing_source_path, dubbing_track.to_srt()) {
+            write_task_log(
+                app,
+                &app_config_dir,
+                task_id,
+                &format!("固化配音用译文轨道失败，配音将退回使用双语字幕：{error}"),
+            )
+            .await;
+        }
+    }
 
     let format_str = task.output_format.clone();
     let mut output_track = if should_translate {
@@ -1445,18 +1454,15 @@ async fn run_task_impl(
 
     if check_cancelled(cancel_rx) {
         let _ = tokio::fs::remove_file(&final_output_path).await;
-        let current_status = {
-            let task_map = tasks.read().await;
-            task_map
-                .get(task_id)
-                .map(|t| t.status)
-                .unwrap_or(TaskStatus::Cancelled)
-        };
-        if current_status == TaskStatus::Paused {
-            write_task_log(app, &app_config_dir, task_id, "写出字幕前已暂停").await;
-            return Ok(());
-        }
-        update_task_cancelled(app, tasks, task_id).await;
+        handle_cancel_signal(
+            app,
+            tasks,
+            &app_config_dir,
+            task_id,
+            stale,
+            "写出字幕前已暂停",
+        )
+        .await;
         return Ok(());
     }
 
@@ -1519,7 +1525,14 @@ async fn run_task_impl(
                 "等待字幕校对",
             )
             .await;
-            set_task_review_state(app, tasks.clone(), task_id, "字幕已写出，等待校对后继续").await;
+            set_task_review_state(
+                app,
+                tasks.clone(),
+                task_id,
+                "字幕已写出，等待校对后继续",
+                stale,
+            )
+            .await;
             return Ok(());
         }
 
@@ -1531,6 +1544,7 @@ async fn run_task_impl(
             task: &task,
             media_path: &media_path,
             subtitle_path: &final_output_path,
+            stale,
         };
         let outcome = continue_pipeline_downstream(&pipeline_context, cancel_rx).await?;
         if outcome != PipelineRunOutcome::Complete {
@@ -1744,7 +1758,11 @@ async fn set_task_review_state(
     tasks: Arc<RwLock<HashMap<String, Task>>>,
     task_id: &str,
     message: &str,
+    stale: &AtomicBool,
 ) {
+    if stale.load(Ordering::Relaxed) {
+        return;
+    }
     let mut task_map = tasks.write().await;
     if let Some(task) = task_map.get_mut(task_id) {
         if matches!(task.status, TaskStatus::Cancelled | TaskStatus::Paused) {
@@ -1765,7 +1783,11 @@ async fn set_task_done(
     tasks: Arc<RwLock<HashMap<String, Task>>>,
     task_id: &str,
     message: &str,
+    stale: &AtomicBool,
 ) {
+    if stale.load(Ordering::Relaxed) {
+        return;
+    }
     let mut task_map = tasks.write().await;
     if let Some(task) = task_map.get_mut(task_id) {
         if matches!(task.status, TaskStatus::Cancelled | TaskStatus::Paused) {
@@ -1817,7 +1839,12 @@ async fn handle_pipeline_stop(
     task_id: &str,
     stage: PipelineStageKind,
     cancel_rx: &mut watch::Receiver<bool>,
+    stale: &AtomicBool,
 ) -> PipelineRunOutcome {
+    if stale.load(Ordering::Relaxed) {
+        // 过时 runner：任务已由新一代 runner 接管，静默退出，不写状态与日志。
+        return PipelineRunOutcome::Paused;
+    }
     let current_status = {
         let task_map = tasks.read().await;
         task_map
@@ -1865,7 +1892,18 @@ async fn run_dubbing_stage(
     let task_id = context.task_id;
     let task = context.task;
     let media_path = context.media_path;
-    let subtitle_path = context.subtitle_path;
+    // 双语字幕任务会额外固化一份纯译文轨道：配音必须用它，
+    // 否则 TTS 会把每句的原文和译文各念一遍；合成阶段仍使用双语字幕。
+    let dubbing_source_override = app_config_dir
+        .join("tasks")
+        .join(task_id)
+        .join("dubbing-source.srt");
+    let subtitle_path: &Path = if dubbing_source_override.is_file() {
+        &dubbing_source_override
+    } else {
+        context.subtitle_path
+    };
+    let stale = context.stale;
     let dubbing = pipeline
         .dubbing
         .as_ref()
@@ -1937,6 +1975,7 @@ async fn run_dubbing_stage(
                 task_id,
                 PipelineStageKind::Dub,
                 cancel_rx,
+                stale,
             )
             .await);
         }
@@ -2033,6 +2072,7 @@ async fn run_dubbing_stage(
                 task_id,
                 PipelineStageKind::Dub,
                 cancel_rx,
+                stale,
             )
             .await);
         }
@@ -2069,7 +2109,7 @@ async fn run_dubbing_stage(
             &message,
         )
         .await;
-        set_task_review_state(app, tasks, task_id, &message).await;
+        set_task_review_state(app, tasks, task_id, &message, stale).await;
         write_task_log(app, app_config_dir, task_id, &message).await;
         return Ok(PipelineRunOutcome::Review);
     }
@@ -2095,6 +2135,7 @@ async fn run_dubbing_stage(
                 task_id,
                 PipelineStageKind::Dub,
                 cancel_rx,
+                stale,
             )
             .await);
         }
@@ -2118,6 +2159,7 @@ async fn run_dubbing_stage(
                     task_id,
                     PipelineStageKind::Dub,
                     cancel_rx,
+                    stale,
                 )
                 .await);
             }
@@ -2205,6 +2247,7 @@ async fn run_compose_stage(
     let task = context.task;
     let media_path = context.media_path;
     let subtitle_path = context.subtitle_path;
+    let stale = context.stale;
     let compose = pipeline
         .compose
         .as_ref()
@@ -2308,6 +2351,7 @@ async fn run_compose_stage(
             task_id,
             PipelineStageKind::Compose,
             cancel_rx,
+            stale,
         )
         .await);
     }
@@ -2354,6 +2398,7 @@ async fn run_compose_stage(
                     task_id,
                     PipelineStageKind::Compose,
                     cancel_rx,
+                    stale,
                 )
                 .await);
             }
@@ -2381,6 +2426,7 @@ async fn continue_pipeline_downstream(
     let tasks = context.tasks.clone();
     let task_id = context.task_id;
     let task = context.task;
+    let stale = context.stale;
     let pipeline = {
         let task_map = tasks.read().await;
         task_map
@@ -2421,7 +2467,7 @@ async fn continue_pipeline_downstream(
                 "等待配音确认",
             )
             .await;
-            set_task_review_state(app, tasks, task_id, "配音已生成，等待确认后继续").await;
+            set_task_review_state(app, tasks, task_id, "配音已生成，等待确认后继续", stale).await;
             return Ok(PipelineRunOutcome::Review);
         }
     }
@@ -2450,7 +2496,7 @@ async fn continue_pipeline_downstream(
         (false, true) => "已完成：字幕与成片均已就绪",
         (false, false) => "已完成：字幕已就绪",
     };
-    set_task_done(app, tasks, task_id, done_message).await;
+    set_task_done(app, tasks, task_id, done_message, stale).await;
     Ok(PipelineRunOutcome::Complete)
 }
 
@@ -2477,6 +2523,34 @@ async fn update_task_progress(
     }
 }
 
+/// 检查点收到取消信号后的统一处理：
+/// 过时 runner（已被取消移除或被新一代 retry/resume 取代）静默退出，不得写任何任务状态；
+/// 当前 runner 按暂停/取消分别记录日志或置为已取消。
+async fn handle_cancel_signal(
+    app: &AppHandle,
+    tasks: Arc<RwLock<HashMap<String, Task>>>,
+    app_config_dir: &Path,
+    task_id: &str,
+    stale: &AtomicBool,
+    paused_log: &str,
+) {
+    if stale.load(Ordering::Relaxed) {
+        return;
+    }
+    let current_status = {
+        let task_map = tasks.read().await;
+        task_map
+            .get(task_id)
+            .map(|t| t.status)
+            .unwrap_or(TaskStatus::Cancelled)
+    };
+    if current_status == TaskStatus::Paused {
+        write_task_log(app, app_config_dir, task_id, paused_log).await;
+        return;
+    }
+    update_task_cancelled(app, tasks, task_id).await;
+}
+
 async fn update_task_cancelled(
     app: &AppHandle,
     tasks: Arc<RwLock<HashMap<String, Task>>>,
@@ -2494,6 +2568,7 @@ async fn update_task_cancelled(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_translation_stop(
     app: &AppHandle,
     tasks: Arc<RwLock<HashMap<String, Task>>>,
@@ -2502,7 +2577,12 @@ async fn handle_translation_stop(
     checkpoint_path: &Path,
     track: &SubtitleTrack,
     completed_cues: usize,
+    stale: &AtomicBool,
 ) {
+    if stale.load(Ordering::Relaxed) {
+        // 过时 runner：不得覆盖新一代 runner 的断点或改写任务状态。
+        return;
+    }
     let current_status = {
         let task_map = tasks.read().await;
         task_map
@@ -3010,6 +3090,21 @@ fn extract_json_object(raw_text: &str) -> Option<&str> {
     (start <= end).then_some(&without_fence[start..=end])
 }
 
+/// 认证/权限类翻译错误重试不会成功；批量+逐句降级双路径下盲目重试会放大为
+/// (retry_times+1)×2 次无效请求，直接判失败让用户先修配置。
+fn is_non_retryable_translation_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("invalid api key")
+        || lower.contains("invalid_api_key")
+        || lower.contains("incorrect api key")
+        || error.contains("缺少必要凭据")
+        || error.contains("尚未保存")
+}
+
 async fn translate_with_retries(
     req: &TranslateRequest,
     retry_times: u32,
@@ -3045,6 +3140,10 @@ async fn translate_with_retries(
             Err(e) => {
                 last_err = e.to_string();
             }
+        }
+
+        if is_non_retryable_translation_error(&last_err) {
+            break;
         }
 
         if attempt < retry_times {
@@ -3398,6 +3497,25 @@ mod tests {
                 .abs()
                 < 0.0001
         );
+    }
+
+    #[test]
+    fn non_retryable_translation_errors_are_classified() {
+        assert!(is_non_retryable_translation_error("HTTP 401 Unauthorized"));
+        assert!(is_non_retryable_translation_error("status 403 Forbidden"));
+        assert!(is_non_retryable_translation_error(
+            "OpenAI: invalid api key provided"
+        ));
+        assert!(is_non_retryable_translation_error(
+            "百度翻译 缺少必要凭据：App ID"
+        ));
+        assert!(!is_non_retryable_translation_error(
+            "HTTP 429 Too Many Requests"
+        ));
+        assert!(!is_non_retryable_translation_error("connection timed out"));
+        assert!(!is_non_retryable_translation_error(
+            "HTTP 500 Internal Server Error"
+        ));
     }
 
     #[test]

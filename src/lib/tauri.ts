@@ -2464,7 +2464,7 @@ function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
     case "write_back_dubbing_subtitle":
       mockDubbingSessionState ??= createMockDubbingSession();
       if (!mockDubbingSessionState.subtitle_dirty) {
-        throw new Error("字幕文本没有变化，无需写回源文件");
+        throw new Error("finalsub:writeback-no-change 字幕文本没有变化，无需写回源文件");
       }
       mockDubbingSessionState = {
         ...mockDubbingSessionState,

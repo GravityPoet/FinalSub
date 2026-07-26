@@ -161,7 +161,12 @@ async fn delete_tasks_by_ids(
     {
         let mut controls = state.task_controls.write().await;
         for task_id in &unique_task_ids {
-            controls.remove(task_id);
+            if let Some(control) = controls.remove(task_id) {
+                // 已取消任务可能仍有未退出的旧 runner，标记过时防止它复写已删除的任务。
+                control
+                    .stale
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 
@@ -1573,15 +1578,24 @@ async fn create_tasks_inner(
         let mut controls = state.task_controls.write().await;
         for task in &new_tasks {
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            controls.insert(task.id.clone(), cancel_tx);
-            starts.push((task.id.clone(), cancel_rx));
+            let stale = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if let Some(old) = controls.insert(
+                task.id.clone(),
+                crate::state::TaskControl {
+                    cancel_tx,
+                    stale: stale.clone(),
+                },
+            ) {
+                old.stale.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            starts.push((task.id.clone(), cancel_rx, stale));
         }
     }
 
     for task in &new_tasks {
         emit_task_update(&app, task);
     }
-    for (task_id, cancel_rx) in starts {
+    for (task_id, cancel_rx, stale) in starts {
         crate::core::task_runner::start_task(
             app.clone(),
             state.tasks.clone(),
@@ -1589,6 +1603,7 @@ async fn create_tasks_inner(
             state.app_config_dir.clone(),
             task_id,
             cancel_rx,
+            stale,
         );
     }
 
@@ -1750,11 +1765,20 @@ async fn approve_tasks_by_ids(
                 continue;
             }
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            controls.insert(task.id.clone(), cancel_tx);
-            starts.push((task.id.clone(), cancel_rx));
+            let stale = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if let Some(old) = controls.insert(
+                task.id.clone(),
+                crate::state::TaskControl {
+                    cancel_tx,
+                    stale: stale.clone(),
+                },
+            ) {
+                old.stale.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            starts.push((task.id.clone(), cancel_rx, stale));
         }
     }
-    for (task_id, cancel_rx) in starts {
+    for (task_id, cancel_rx, stale) in starts {
         crate::core::task_runner::start_task(
             app.clone(),
             state.tasks.clone(),
@@ -1762,6 +1786,7 @@ async fn approve_tasks_by_ids(
             state.app_config_dir.clone(),
             task_id,
             cancel_rx,
+            stale,
         );
     }
     Ok(approved)
@@ -1934,9 +1959,12 @@ pub async fn cancel_task(
     let task_clone = task.clone();
     drop(tasks);
 
-    // 向 cancel_sender 发送取消信号并移除
-    if let Some(sender) = state.task_controls.write().await.remove(&task_id) {
-        sender.send(true).ok();
+    // 向 cancel_sender 发送取消信号并移除；置 stale 使旧 runner 不再写任务状态或控制表。
+    if let Some(control) = state.task_controls.write().await.remove(&task_id) {
+        control
+            .stale
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        control.cancel_tx.send(true).ok();
     }
 
     persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
@@ -1967,9 +1995,15 @@ pub async fn pause_task(
     let task_clone = task.clone();
     drop(tasks);
 
-    // Send signal to runner watch channel and remove control handle
-    if let Some(sender) = state.task_controls.write().await.remove(&task_id) {
-        let _ = sender.send(true);
+    // Signal the runner to stop at its next checkpoint, but keep the control entry:
+    // the runner still needs to persist its checkpoint (non-stale pause path) and will
+    // remove its own entry on exit. A quick resume replaces the entry and marks the
+    // old runner stale so it can no longer touch task state.
+    {
+        let controls = state.task_controls.read().await;
+        if let Some(control) = controls.get(&task_id) {
+            let _ = control.cancel_tx.send(true);
+        }
     }
 
     persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
@@ -2013,11 +2047,17 @@ pub async fn resume_task(
 
     persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    state
-        .task_controls
-        .write()
-        .await
-        .insert(task_id.clone(), cancel_tx);
+    let stale = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(old) = state.task_controls.write().await.insert(
+        task_id.clone(),
+        crate::state::TaskControl {
+            cancel_tx,
+            stale: stale.clone(),
+        },
+    ) {
+        // 旧 runner 可能仍在收尾：标记过时，禁止它再写任务状态或移除新控制句柄。
+        old.stale.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     emit_task_update(&app, &task_clone);
 
     let app_config_dir = state.app_config_dir.clone();
@@ -2043,6 +2083,7 @@ pub async fn resume_task(
         app_config_dir_clone,
         task_clone.id.clone(),
         cancel_rx,
+        stale,
     );
 
     Ok(task_clone)
@@ -2069,11 +2110,17 @@ pub async fn retry_task(
 
     persist_tasks_snapshot(&state.app_config_dir, &state.tasks).await?;
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    state
-        .task_controls
-        .write()
-        .await
-        .insert(task_id.clone(), cancel_tx);
+    let stale = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(old) = state.task_controls.write().await.insert(
+        task_id.clone(),
+        crate::state::TaskControl {
+            cancel_tx,
+            stale: stale.clone(),
+        },
+    ) {
+        // 旧 runner 可能仍在收尾：标记过时，禁止它把重试后的任务改回已取消或删除新控制句柄。
+        old.stale.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     emit_task_update(&app, &task_clone);
 
     let app_config_dir = state.app_config_dir.clone();
@@ -2099,6 +2146,7 @@ pub async fn retry_task(
         app_config_dir_clone,
         task_clone.id.clone(),
         cancel_rx,
+        stale,
     );
 
     Ok(task_clone)
@@ -2380,7 +2428,10 @@ pub async fn burn_subtitle(
         .await
         {
             Ok(path) => break Ok(path),
-            Err(BurnAttemptError::Cancelled) => break Err("Subtitle burning cancelled".into()),
+            // 稳定哨兵：前端据此把用户取消与真实失败区分开，不依赖本地化文案子串。
+            Err(BurnAttemptError::Cancelled) => {
+                break Err("finalsub:burn-cancelled Subtitle burning cancelled".into())
+            }
             Err(BurnAttemptError::Failed(_error))
                 if encoding.hardware && encoder_mode != audio::VideoEncoderMode::Cpu =>
             {
@@ -2931,7 +2982,9 @@ pub async fn test_cloud_asr_connection(
             api_key,
             api_secret,
             account_id,
-            timeout_seconds: profile.timeout_seconds,
+            // 探针只上传约 1 秒静音，不需要长转录超时；上限 30 秒，
+            // 防止 endpoint 可连但服务端挂起时测试面板被冻结长达配置超时（最长 15 分钟）。
+            timeout_seconds: profile.timeout_seconds.min(30),
             retry_times: 0,
             request_concurrency: 1,
             request_interval_ms: 0,

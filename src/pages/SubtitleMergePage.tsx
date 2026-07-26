@@ -274,7 +274,7 @@ export default function SubtitleMergePage() {
       setResult(out);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("已取消") || message.includes("cancelled")) {
+      if (message.includes("finalsub:burn-cancelled")) {
         setNotice(t("merge.cancelled"));
       } else {
         setError(message);
