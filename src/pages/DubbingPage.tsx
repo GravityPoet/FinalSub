@@ -599,7 +599,12 @@ export default function DubbingPage() {
       setWriteBackOpen(false);
       setMessage({ type: "ok", text: t("dubbing.writeBackSuccess", { path: result.backup_path }) });
     } catch (error) {
-      setMessage({ type: "err", text: String(error) });
+      const message = String(error);
+      if (message.includes("finalsub:writeback-no-change")) {
+        setMessage({ type: "warn", text: t("dubbing.writeBackNoChange") });
+      } else {
+        setMessage({ type: "err", text: message });
+      }
     } finally {
       setSubtitleSaving(null);
     }

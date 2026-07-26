@@ -787,7 +787,18 @@ async fn translate_text_once(req: &TranslateRequest) -> Result<TranslateResponse
     };
 
     match res {
-        Ok(resp) => Ok(resp),
+        Ok(resp) => {
+            // 拒绝“成功但译文为空”的响应：空文本写入 cue 会生成本仓库解析器
+            // 都无法读取的畸形 SRT，并让下游配音/合成阶段整体失败。
+            if resp.success && !req.text.trim().is_empty() && resp.translated_text.trim().is_empty()
+            {
+                return Err(FinalSubError::Validation(format!(
+                    "翻译服务（{}）返回了空译文，已拒绝使用",
+                    resp.provider
+                )));
+            }
+            Ok(resp)
+        }
         Err(err) => {
             let original_msg = validation_message(err);
             let redacted_msg = redact_secrets(&original_msg, req);

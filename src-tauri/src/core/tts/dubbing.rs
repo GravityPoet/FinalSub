@@ -805,8 +805,9 @@ pub fn write_back_dubbing_subtitle(
     {
         session.subtitle_dirty = false;
         save_session(app_config_dir, &session)?;
+        // 哨兵前缀供前端识别并本地化展示；中文说明保留给日志与非 UI 调用方。
         return Err(FinalSubError::Validation(
-            "字幕文本没有变化，无需写回源文件".into(),
+            "finalsub:writeback-no-change 字幕文本没有变化，无需写回源文件".into(),
         ));
     }
 
