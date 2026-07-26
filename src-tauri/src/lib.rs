@@ -197,6 +197,18 @@ pub fn run() {
             commands::check_for_update,
             commands::download_and_install_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // 兜底：window-state 插件在状态文件记录 visible=false（最小化/隐藏状态下退出）时
+            // 不会 show 初始隐藏的主窗口，且仓库内无其他 show 路径，会导致重启后永远无窗口。
+            if let tauri::RunEvent::Ready = event {
+                if let Some(window) = app.get_webview_window("main") {
+                    if !window.is_visible().unwrap_or(true) {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        });
 }
