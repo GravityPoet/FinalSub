@@ -198,6 +198,7 @@ export default function HomePage() {
   const [updateProgress, setUpdateProgress] = useState<AppUpdateEvent | null>(null);
   const [updateError, setUpdateError] = useState("");
   const [mediaMetadata, setMediaMetadata] = useState<VideoMetadata | null>(null);
+  const [mediaMetadataError, setMediaMetadataError] = useState("");
 
   const [taskType, setTaskType] = useState("generate-only");
   const [engineId, setEngineId] = useState("parakeet-mlx");
@@ -378,17 +379,24 @@ export default function HomePage() {
   useEffect(() => {
     if (selectedPath) {
       if (taskType !== "translate-only") {
+        setMediaMetadataError("");
         getVideoMetadata(selectedPath)
-          .then(setMediaMetadata)
+          .then((meta) => {
+            setMediaMetadata(meta);
+            setMediaMetadataError("");
+          })
           .catch((err) => {
             console.error("加载媒体元数据失败:", err);
             setMediaMetadata(null);
+            setMediaMetadataError(String(err));
           });
       } else {
         setMediaMetadata(null);
+        setMediaMetadataError("");
       }
     } else {
       setMediaMetadata(null);
+      setMediaMetadataError("");
     }
   }, [selectedPath, taskType]);
 
@@ -524,7 +532,10 @@ export default function HomePage() {
     : "";
   const modelPrerequisiteHint = selectedPath && !modelReady ? t("home.prereqModel") : "";
   const pipelinePrerequisiteHint = !composeSourceReady
-    ? t("home.pipelineNeedsVideo")
+    // 元数据探测失败时给出真实原因，而不是误导性的“需要有画面的源”。
+    ? (mediaMetadataError
+      ? t("home.metadataError", { error: mediaMetadataError })
+      : t("home.pipelineNeedsVideo"))
     : (!downstreamInputReady
       ? t("home.pipelineNeedsMedia")
       : (enableDubbing && !dubbingReady

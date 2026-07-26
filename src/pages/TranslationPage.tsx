@@ -238,14 +238,22 @@ export default function TranslationPage() {
   const [glossaryError, setGlossaryError] = useState("");
 
   useEffect(() => {
-    listTranslationProviders().then(setProviders).catch(console.error);
+    listTranslationProviders()
+      .then(setProviders)
+      .catch((err) => {
+        console.error(err);
+        setError(t("translation.loadFailed", { error: String(err) }));
+      });
     getSettings().then((s) => {
       setSettings(s);
       setSelectedProvider(s.translate_provider || "");
       const loadedGlossaries = normalizeGlossaryOrder(s.translation_glossaries ?? []);
       setGlossaryDrafts(loadedGlossaries);
       setActiveGlossaryId(loadedGlossaries[0]?.id ?? "");
-    }).catch(console.error);
+    }).catch((err) => {
+      console.error(err);
+      setError(t("translation.loadFailed", { error: String(err) }));
+    });
   }, []);
 
   const providerDisplayName = (provider: TranslationProvider): string =>
@@ -1470,6 +1478,7 @@ export default function TranslationPage() {
             onChange={(e) => setTestText(e.target.value)}
             rows={3}
           />
+          <p className="mt-1.5 text-xs leading-4 text-text-tertiary">{t("translation.testDirectionHint")}</p>
         </div>
 
         {error && (
