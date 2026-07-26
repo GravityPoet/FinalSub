@@ -33,6 +33,9 @@ use crate::core::tts::{
 };
 
 const MAX_OUTPUT_FILE_NAME_BYTES: usize = 240;
+/// 批量对齐校验与定点补翻均失败时写入 cue 的占位文本。
+/// 出现该占位符的任务不得按成功完成收尾，断点恢复也必须把这些行视为未翻译。
+const TRANSLATION_FAILED_PLACEHOLDER: &str = "[翻译失败：对齐校验与定点补翻均未成功]";
 const AUDIO_PROGRESS_END: f32 = 0.15;
 const ASR_PROGRESS_START: f32 = AUDIO_PROGRESS_END;
 const ASR_PROGRESS_END_WITH_TRANSLATION: f32 = 0.80;
@@ -1079,6 +1082,7 @@ async fn run_task_impl(
 
         let batch_translation_enabled = translation_supports_batch(provider_info.as_ref());
         let mut next_cue_index = start_cue_index;
+        let mut unresolved_total = 0usize;
         while next_cue_index < total_cues {
             if check_cancelled(cancel_rx) {
                 handle_translation_stop(
@@ -1228,6 +1232,7 @@ async fn run_task_impl(
                 .await
                 {
                     AlignedBatchResult::Success(report) => {
+                        unresolved_total += report.unresolved;
                         for (offset, translated_text) in report.translations.into_iter().enumerate()
                         {
                             track.cues[next_cue_index + offset].text = translated_text;
@@ -1378,6 +1383,13 @@ async fn run_task_impl(
             }
         }
 
+        if unresolved_total > 0 {
+            // 保留断点：重试时 restore_translated_checkpoint 会把占位符行视为未翻译并重新翻译。
+            return Err(format!(
+                "有 {} 行字幕在对齐校验与定点补翻后仍未成功，任务未写出成品；重试任务将从失败行继续翻译",
+                unresolved_total
+            ));
+        }
         let _ = std::fs::remove_file(&temp_translated_path);
     }
 
@@ -2534,6 +2546,13 @@ fn restore_translated_checkpoint(track: &mut SubtitleTrack, checkpoint: &Subtitl
     }
 
     for idx in 0..checkpoint_len {
+        if checkpoint.cues[idx]
+            .text
+            .contains(TRANSLATION_FAILED_PLACEHOLDER)
+        {
+            // 占位符表示该行未翻译成功：从此行起重新翻译，不把失败文本当作已完成译文。
+            return idx;
+        }
         track.cues[idx].text = checkpoint.cues[idx].text.clone();
     }
     checkpoint_len
@@ -2961,7 +2980,7 @@ async fn translate_aligned_batch(
                 .accepted
                 .get(key)
                 .cloned()
-                .unwrap_or_else(|| "[翻译失败：对齐校验与定点补翻均未成功]".into())
+                .unwrap_or_else(|| TRANSLATION_FAILED_PLACEHOLDER.into())
         })
         .collect();
     AlignedBatchResult::Success(AlignedBatchReport {
@@ -3379,6 +3398,30 @@ mod tests {
                 .abs()
                 < 0.0001
         );
+    }
+
+    #[test]
+    fn translated_checkpoint_treats_failure_placeholder_as_untranslated() {
+        let mut track = SubtitleTrack::from_srt(
+            "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n\
+             2\n00:00:02,000 --> 00:00:03,000\nWorld\n\n\
+             3\n00:00:03,000 --> 00:00:04,000\nAgain\n\n",
+        )
+        .unwrap();
+        let checkpoint = SubtitleTrack::from_srt(&format!(
+            "1\n00:00:01,000 --> 00:00:02,000\n你好\n\n\
+             2\n00:00:02,000 --> 00:00:03,000\n{TRANSLATION_FAILED_PLACEHOLDER}\n\n\
+             3\n00:00:03,000 --> 00:00:04,000\n再次\n\n",
+        ))
+        .unwrap();
+
+        let restored = restore_translated_checkpoint(&mut track, &checkpoint);
+
+        // 首个占位符行截断恢复：该行及其后全部重新翻译。
+        assert_eq!(restored, 1);
+        assert_eq!(track.cues[0].text, "你好");
+        assert_eq!(track.cues[1].text, "World");
+        assert_eq!(track.cues[2].text, "Again");
     }
 
     #[test]
