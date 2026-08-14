@@ -145,6 +145,39 @@ fn normalize_token(token: &str) -> String {
     token.replace('\u{2581}', " ")
 }
 
+fn is_content_token(token: &str) -> bool {
+    let token = token.trim();
+    !(token.is_empty() || token.starts_with('<') && token.ends_with('>'))
+}
+
+fn token_starts_word(token: &str) -> bool {
+    token
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_whitespace() || character == '\u{2581}')
+}
+
+fn word_finishes_at(tokens: &[String], index: usize) -> bool {
+    match tokens[index + 1..]
+        .iter()
+        .find(|token| is_content_token(token))
+    {
+        Some(next) => token_starts_word(next),
+        None => true,
+    }
+}
+
+fn should_break_for_pause(text: &str, gap_ms: u64) -> bool {
+    const BRIEF_PAUSE_MS: u64 = 800;
+    const LONG_PAUSE_MS: u64 = 1_500;
+    const MIN_CUE_WIDTH: usize = 12;
+
+    gap_ms >= LONG_PAUSE_MS
+        || (gap_ms >= BRIEF_PAUSE_MS
+            && crate::core::subtitle::subtitle_visual_width(&normalize_spaces(text))
+                >= MIN_CUE_WIDTH)
+}
+
 fn normalize_spaces(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -188,14 +221,13 @@ pub(super) fn build_cues(
 
             for (index, token) in tokens.iter().enumerate() {
                 let token_content = token.trim();
-                if token_content.is_empty()
-                    || (token_content.starts_with('<') && token_content.ends_with('>'))
-                {
+                if !is_content_token(token) {
                     continue;
                 }
+                let starts_word = token_starts_word(token);
                 let token_ms = (timestamps[index].max(0.0) * 1_000.0) as u64;
                 let gap_ms = token_ms.saturating_sub(previous_token_ms);
-                if !text.is_empty() && gap_ms >= 800 {
+                if !text.is_empty() && starts_word && should_break_for_pause(&text, gap_ms) {
                     push_cue(&mut cues, &mut text, cue_start, token_ms);
                     cue_start = token_ms;
                 } else if text.is_empty() {
@@ -203,7 +235,7 @@ pub(super) fn build_cues(
                 }
 
                 let normalized_token = normalize_token(token);
-                if !normalize_spaces(&text).is_empty() {
+                if starts_word && !normalize_spaces(&text).is_empty() {
                     let mut candidate = text.clone();
                     candidate.push_str(&normalized_token);
                     if crate::core::subtitle::exceeds_custom_subtitle_width(
@@ -227,7 +259,7 @@ pub(super) fn build_cues(
                         max_subtitle_chars,
                         normalized_text.chars().count() >= 84,
                     );
-                if ends_sentence(token_content) || too_long {
+                if ends_sentence(token_content) || (too_long && word_finishes_at(tokens, index)) {
                     push_cue(&mut cues, &mut text, cue_start, next_ms);
                 }
             }
@@ -374,6 +406,142 @@ mod tests {
 
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].text, "I believe the role.");
+    }
+
+    #[test]
+    fn smart_width_never_splits_an_english_word_between_cues() {
+        let tokens = [
+            " I",
+            " wanted",
+            " to",
+            " start",
+            " out",
+            " by",
+            " asking",
+            " you,",
+            " you",
+            " are",
+            " in",
+            " charge",
+            " of",
+            " a",
+            " lot",
+            " more",
+            " than",
+            " just",
+            " this",
+            " comp",
+            "any,",
+            " but",
+            " how",
+            " important",
+            " is",
+            " memory?",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
+        let timestamps = (0..tokens.len())
+            .map(|index| index as f32 * 0.1)
+            .collect::<Vec<_>>();
+
+        let cues = build_cues(
+            "I wanted to start out by asking you, you are in charge of a lot more than just this company, but how important is memory?",
+            &tokens,
+            Some(&timestamps),
+            3_000,
+            0,
+        );
+        let text = cues.iter().map(|cue| cue.text.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "I wanted to start out by asking you, you are in charge of a lot more than just this company,",
+                "but how important is memory?",
+            ]
+        );
+    }
+
+    #[test]
+    fn duration_limit_waits_for_the_end_of_a_word() {
+        let tokens = [
+            " We",
+            " keep",
+            " every",
+            " word",
+            " together",
+            " while",
+            " the",
+            " subtitle",
+            " reaches",
+            " comp",
+            "any",
+            " here.",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
+        let timestamps = [0.0, 0.7, 1.4, 2.1, 2.8, 3.5, 4.2, 4.9, 5.6, 6.0, 6.2, 6.4];
+
+        let cues = build_cues(
+            "We keep every word together while the subtitle reaches company here.",
+            &tokens,
+            Some(&timestamps),
+            7_000,
+            -1,
+        );
+        let text = cues.iter().map(|cue| cue.text.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "We keep every word together while the subtitle reaches company",
+                "here.",
+            ]
+        );
+    }
+
+    #[test]
+    fn timestamp_gap_inside_a_word_does_not_split_it() {
+        let tokens = [" The", " comp", "any", " grows."]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let timestamps = [0.0, 0.1, 1.2, 1.3];
+
+        let cues = build_cues("The company grows.", &tokens, Some(&timestamps), 2_000, -1);
+
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].text, "The company grows.");
+    }
+
+    #[test]
+    fn short_lead_in_is_kept_with_the_following_phrase_across_a_brief_pause() {
+        let tokens = [" So", " we", " continue."]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let timestamps = [0.0, 1.0, 1.2];
+
+        let cues = build_cues("So we continue.", &tokens, Some(&timestamps), 2_000, 0);
+
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].text, "So we continue.");
+    }
+
+    #[test]
+    fn long_pause_still_separates_a_short_lead_in() {
+        let tokens = [" So", " we", " continue."]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let timestamps = [0.0, 2.0, 2.2];
+
+        let cues = build_cues("So we continue.", &tokens, Some(&timestamps), 3_000, 0);
+        let text = cues.iter().map(|cue| cue.text.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(text, vec!["So", "we continue."]);
     }
 
     #[test]
