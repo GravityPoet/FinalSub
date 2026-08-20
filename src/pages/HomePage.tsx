@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   CheckCircle,
+  ChevronDown,
   ChevronRight,
   Cloud,
   Cpu,
@@ -29,7 +31,6 @@ import {
   createPreviewTask,
   discoverMixedBatchInputs,
   downloadAndInstallUpdate,
-  getAppInfo,
   getFfmpegVersion,
   listAsrModels,
   listTtsModels,
@@ -44,7 +45,6 @@ import {
   openDialog,
   openPath,
   saveTaskRecipe,
-  type AppInfo,
   type AppUpdateEvent,
   type AsrModelInfo,
   type TranslationContentMode,
@@ -178,7 +178,6 @@ function sourceInputKindForTaskType(taskType: string): SourceInputKind {
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [ffmpegVersion, setFfmpegVersion] = useState<string>("detecting");
   const [models, setModels] = useState<AsrModelInfo[]>([]);
   const [ttsModels, setTtsModels] = useState<TtsModelInfo[]>([]);
@@ -245,6 +244,16 @@ export default function HomePage() {
     const nextKind = sourceInputKindForPath(paths[0]);
     setSelectedPaths(paths);
     setSelectedInputKind(nextKind);
+    setTaskType((current) => (
+      nextKind === "subtitle"
+        ? "translate-only"
+        : (current === "translate-only" ? "generate-only" : current)
+    ));
+    if (nextKind === "subtitle") {
+      setEnableDubbing(false);
+      setEnableCompose(false);
+      setDubbingReview(false);
+    }
     setPairedSubtitlePaths(nextKind === "media" ? subtitles : []);
     setManualSubtitlePairs({});
   }, []);
@@ -286,6 +295,11 @@ export default function HomePage() {
     // can be inspected against another workflow and remains available when
     // the user switches back.
     setTaskType(nextTaskType);
+    if (nextTaskType === "translate-only") {
+      setEnableDubbing(false);
+      setEnableCompose(false);
+      setDubbingReview(false);
+    }
     setError("");
   }, []);
 
@@ -371,7 +385,6 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    getAppInfo().then(setAppInfo).catch(console.error);
     getFfmpegVersion().then(setFfmpegVersion).catch(() => setFfmpegVersion("unavailable"));
     void loadWorkspace();
   }, [loadWorkspace]);
@@ -499,17 +512,6 @@ export default function HomePage() {
     && pipelineReady
     && !inputTypeMismatch;
 
-  const plannedStages = [
-    ...(taskType === "translate-only"
-      ? []
-      : [allSelectedMediaPaired ? t("home.stageUseExistingSubtitles") : t("home.stageTranscribe")]),
-    ...(taskType === "generate-only" ? [] : [t("home.stageTranslate")]),
-    ...(reviewRequired ? [t("home.stageSubtitleReview")] : []),
-    ...(enableDubbing ? [t("home.stageDub")] : []),
-    ...(enableDubbing && dubbingReview ? [t("home.stageDubbingReview")] : []),
-    ...(enableCompose ? [t("home.stageCompose")] : []),
-    t("home.stageDeliver"),
-  ];
   const deliveryTargets = [
     t("home.targetSubtitle"),
     ...(enableDubbing ? [t("home.targetDubbing")] : []),
@@ -625,17 +627,30 @@ export default function HomePage() {
     setManualSubtitlePairs({});
   };
 
+  const revealTaskIssue = (targetId: string) => {
+    requestAnimationFrame(() => {
+      const target = document.getElementById(targetId);
+      if (!target) return;
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+      target.focus({ preventScroll: true });
+    });
+  };
+
   const handleCreate = async () => {
     if (!selectedPath) {
       setError(missingFileHint || (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia")));
+      revealTaskIssue("task-source-input");
       return;
     }
     if (inputTypeMismatch) {
       setError(inputTypeMismatchHint);
+      revealTaskIssue("task-source-input");
       return;
     }
     if (!canStartTask) {
       setError(modelPrerequisiteHint || pipelinePrerequisiteHint || t("home.prereqModel"));
+      revealTaskIssue(modelPrerequisiteHint ? "task-recognition-core" : "task-delivery-options");
       return;
     }
     setCreating(true);
@@ -932,9 +947,10 @@ export default function HomePage() {
     setOutputName(snapshot.output_name);
     setStripChinesePunctuation(snapshot.strip_chinese_punctuation);
     const recipePipeline = snapshot.pipeline;
-    setEnableDubbing(Boolean(recipePipeline?.enable_dubbing));
-    setEnableCompose(Boolean(recipePipeline?.enable_compose));
-    setDubbingReview(Boolean(recipePipeline?.enable_dubbing && recipePipeline.dubbing_review));
+    const recipeAllowsMediaPipeline = nextTaskType !== "translate-only";
+    setEnableDubbing(recipeAllowsMediaPipeline && Boolean(recipePipeline?.enable_dubbing));
+    setEnableCompose(recipeAllowsMediaPipeline && Boolean(recipePipeline?.enable_compose));
+    setDubbingReview(recipeAllowsMediaPipeline && Boolean(recipePipeline?.enable_dubbing && recipePipeline.dubbing_review));
     setReviewRequired(recipePipeline?.subtitle_review ?? snapshot.review_required);
     if (recipePipeline) {
       const exactLocal = ttsModels.find(
@@ -1048,6 +1064,29 @@ export default function HomePage() {
   const workspaceStatusLabel = workspaceStatus === "ready"
     ? t("home.readyStatus")
     : (workspaceStatus === "loading" ? t("home.loadingWorkspace") : t("home.workspaceNeedsAttention"));
+  const compactActionBar = (
+    <div className="liquid-control flex items-center gap-3 rounded-[1rem] border border-border-default px-3 py-2.5 shadow-lg backdrop-blur-xl">
+      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${taskReady ? "bg-success" : "bg-warning"}`} aria-hidden="true" />
+      <span className={`min-w-0 flex-1 truncate text-xs font-semibold ${taskReady ? "text-success" : "text-text-secondary"}`} title={readinessHint}>
+        {readinessHint}
+      </span>
+      <Button
+        type="button"
+        onClick={handleCreate}
+        disabled={creating}
+        variant="primary"
+        size="sm"
+        className="shrink-0"
+      >
+        <Play size={14} />
+        {creating
+          ? t("home.creating")
+          : (selectedPaths.length > 1
+            ? t("home.batchCreateTask", { count: selectedPaths.length })
+            : t("home.createTask"))}
+      </Button>
+    </div>
+  );
 
   return (
     <div className="page-shell space-y-5">
@@ -1082,10 +1121,6 @@ export default function HomePage() {
               {t("home.retrySetup")}
             </button>
           )}
-          <span className="status-chip max-w-full text-xs font-semibold">
-            <Cpu size={13} className="shrink-0 text-brand" />
-            <span className="truncate">{engineId}</span>
-          </span>
         </div>
       </section>
 
@@ -1138,13 +1173,56 @@ export default function HomePage() {
         </div>
       )}
 
-      <div className="grid items-start gap-5 min-[1440px]:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="space-y-5">
-          <Card className="p-6 sm:p-7">
-            <div className="grid gap-5 min-[1180px]:grid-cols-[minmax(0,1fr)_minmax(17rem,0.54fr)]">
+      <div className="grid items-start gap-5 min-[1100px]:grid-cols-[minmax(0,1fr)_19rem]">
+        <div className="min-w-0 space-y-5">
+          <Card className="p-5 sm:p-6">
+            <fieldset className="mb-5">
+              <legend className="mb-2.5 text-xs font-semibold text-text-tertiary">{t("home.taskType")}</legend>
+              <div className="grid gap-2 sm:grid-cols-3" role="radiogroup">
+                {taskTypes.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = taskType === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={isActive}
+                      tabIndex={isActive ? 0 : -1}
+                      onKeyDown={(event) => {
+                        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                        event.preventDefault();
+                        const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+                        const currentIndex = taskTypes.findIndex(({ value }) => value === taskType);
+                        const nextIndex = (currentIndex + direction + taskTypes.length) % taskTypes.length;
+                        handleTaskTypeChange(taskTypes[nextIndex].value);
+                        const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
+                        requestAnimationFrame(() => radios?.[nextIndex]?.focus());
+                      }}
+                      onClick={() => handleTaskTypeChange(item.value)}
+                      className={`flex min-h-14 items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-sm transition ${
+                        isActive
+                          ? "border-brand/35 bg-brand/10 text-text-primary"
+                          : "border-border-subtle bg-surface-overlay/30 text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
+                      }`}
+                    >
+                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isActive ? "bg-brand text-white" : "bg-surface-overlay text-text-tertiary"}`}>
+                        <Icon size={15} />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-text-primary">{t(item.labelKey)}</span>
+                        <span className="mt-0.5 hidden truncate text-[11px] text-text-tertiary lg:block">{t(item.descKey)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            <div className="min-w-0 space-y-4">
               <div className="min-w-0">
                 <div className="mb-5">
-                  <span className="step-label">01 · {t("home.sourceStep")}</span>
+                  <span className="step-label">{t("home.sourceStep")}</span>
                   <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">
                     {taskType === "translate-only" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")}
                   </h3>
@@ -1154,7 +1232,14 @@ export default function HomePage() {
                 </div>
 
                 <div
-                  className={`file-stage rounded-[1.3rem] p-4 transition sm:p-5 ${dragActive ? "ring-2 ring-brand/70 bg-brand/10" : ""}`}
+                  id="task-source-input"
+                  tabIndex={-1}
+                  onClick={(event) => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("button, input, select, a")) return;
+                    void handleSelectMedia();
+                  }}
+                  className={`file-stage cursor-pointer rounded-[1.3rem] p-4 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45 sm:p-5 ${dragActive ? "ring-2 ring-brand/70 bg-brand/10" : ""}`}
                   data-testid="source-asset"
                 >
                   <div className="flex flex-wrap items-center gap-4">
@@ -1347,28 +1432,37 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <section className="core-picker rounded-[1.25rem] border border-brand/15 bg-brand/5 p-4 sm:p-5" aria-labelledby="task-core-title">
-                <div className="flex items-start gap-3">
+              <details id="task-recognition-core" tabIndex={-1} className="core-picker group rounded-[1rem] border border-border-subtle bg-surface-overlay/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45">
+                <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-5">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand">
                     {taskNeedsAsr
                       ? <Cpu size={17} />
                       : (allSelectedMediaPaired ? <Link2 size={17} /> : <Languages size={17} />)}
                   </span>
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-brand">{t("home.coreStep")}</p>
-                    <h3 id="task-core-title" className="mt-1 font-display text-lg font-bold tracking-[-0.02em] text-text-primary">{t("home.coreStep")}</h3>
-                    <p className="mt-1 text-xs leading-5 text-text-secondary">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-text-tertiary">{t("home.coreStep")}</p>
+                    <p className="mt-0.5 truncate text-sm font-semibold text-text-primary">
                       {taskNeedsAsr
-                        ? (pairedSubtitleCount > 0
-                          ? t("home.corePartialPairing", { count: asrFallbackCount })
-                          : t("home.coreHint"))
+                        ? `${engineLabels[engineId] ?? engineId}${activeModel ? ` · ${activeModel.name}` : ""}`
                         : (allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired"))}
                     </p>
                   </div>
-                </div>
+                  {taskNeedsAsr && activeModel && (
+                    <span className={`hidden items-center gap-1 text-xs font-semibold sm:inline-flex ${activeModel.status === "downloaded" || engineId === "custom-command" ? "text-success" : "text-warning"}`}>
+                      {activeModel.status === "downloaded" || engineId === "custom-command" ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                      {activeModel.status === "downloaded" || engineId === "custom-command" ? t("home.coreReady") : t("home.coreNeedsSetup")}
+                    </span>
+                  )}
+                  <ChevronDown size={16} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+                </summary>
 
                 {taskNeedsAsr ? (
-                  <div className="mt-4 space-y-3">
+                  <div className="space-y-3 border-t border-border-subtle px-4 py-4 sm:px-5">
+                    <p className="text-xs leading-5 text-text-secondary">
+                      {pairedSubtitleCount > 0
+                        ? t("home.corePartialPairing", { count: asrFallbackCount })
+                        : t("home.coreHint")}
+                    </p>
                     <div>
                       <label htmlFor="task-asr-engine" className="mb-1.5 block text-xs font-semibold text-text-secondary">{t("home.asrEngine")}</label>
                       <Select
@@ -1415,11 +1509,11 @@ export default function HomePage() {
                     )}
                   </div>
                 ) : (
-                  <div className="mt-4 rounded-xl border border-border-subtle bg-surface-overlay/60 px-3 py-2.5 text-xs leading-5 text-text-secondary">
+                  <div className="border-t border-border-subtle px-4 py-3 text-xs leading-5 text-text-secondary sm:px-5">
                     {allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired")}
                   </div>
                 )}
-              </section>
+              </details>
             </div>
 
             {mediaMetadata && selectedPaths.length === 1 && (
@@ -1450,15 +1544,21 @@ export default function HomePage() {
             )}
           </Card>
 
-          <Card className="p-6 sm:p-7">
-            <div className="mb-6">
-              <span className="step-label">02 · {t("home.workflowStep")}</span>
+          {createPortal(
+            <div className="fixed inset-x-4 bottom-24 z-40 sm:hidden">{compactActionBar}</div>,
+            document.body,
+          )}
+          <div className="sticky bottom-3 z-30 hidden sm:block min-[1100px]:!hidden">{compactActionBar}</div>
+
+          <Card className="p-5 sm:p-6">
+            <div className="mb-5">
+              <span className="step-label">{t("home.workflowStep")}</span>
               <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.taskConfig")}</h3>
               <p className="mt-1.5 text-sm leading-6 text-text-secondary">{t("home.workflowDesc")}</p>
             </div>
 
-            <div className="space-y-6">
-              <fieldset className="rounded-[1.2rem] border border-brand/16 bg-brand/[0.045] p-4 sm:p-5" data-testid="delivery-targets">
+            <div className="space-y-5">
+              <fieldset id="task-delivery-options" tabIndex={-1} className="rounded-[1.2rem] border border-brand/16 bg-brand/[0.045] p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45 sm:p-5" data-testid="delivery-targets">
                 <legend className="sr-only">{t("home.deliveryTargets")}</legend>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
@@ -1471,17 +1571,16 @@ export default function HomePage() {
                   </span>
                 </div>
 
-                <div className="mt-4 grid gap-2.5 sm:grid-cols-3">
+                <div className={`mt-4 grid gap-2.5 ${taskType === "translate-only" ? "" : "sm:grid-cols-3"}`}>
                   <div
-                    className="liquid-selected flex min-h-20 items-start gap-3 rounded-[1rem] border p-3.5 text-left"
+                    className="flex min-h-20 items-start gap-3 rounded-[1rem] border border-border-subtle bg-surface-overlay/45 p-3.5 text-left"
                   >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-brand/15 text-brand"><FileText size={16} /></span>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-success/10 text-success"><CheckCircle size={16} /></span>
                     <span><span className="block text-sm font-semibold text-text-primary">{t("home.targetSubtitle")}</span><span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.targetSubtitleDesc")}</span></span>
                   </div>
-                  <button
+                  {taskType !== "translate-only" && <button
                     type="button"
                     aria-pressed={enableDubbing}
-                    disabled={taskType === "translate-only" && !enableDubbing}
                     onClick={() => {
                       const next = !enableDubbing;
                       setEnableDubbing(next);
@@ -1492,11 +1591,10 @@ export default function HomePage() {
                   >
                     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${enableDubbing ? "bg-brand/15 text-brand" : "bg-surface-overlay text-text-tertiary"}`}><Volume2 size={16} /></span>
                     <span><span className="block text-sm font-semibold text-text-primary">{t("home.targetDubbing")}</span><span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.targetDubbingDesc")}</span></span>
-                  </button>
-                  <button
+                  </button>}
+                  {taskType !== "translate-only" && <button
                     type="button"
                     aria-pressed={enableCompose}
-                    disabled={taskType === "translate-only" && !enableCompose}
                     onClick={() => {
                       const next = !enableCompose;
                       setEnableCompose(next);
@@ -1506,20 +1604,7 @@ export default function HomePage() {
                   >
                     <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${enableCompose ? "bg-brand/15 text-brand" : "bg-surface-overlay text-text-tertiary"}`}><Film size={16} /></span>
                     <span><span className="block text-sm font-semibold text-text-primary">{t("home.targetVideo")}</span><span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.targetVideoDesc")}</span></span>
-                  </button>
-                </div>
-
-                <div className="mt-4 overflow-x-auto pb-1" aria-label={t("home.plannedFlow")}>
-                  <ol className="flex min-w-max items-center gap-1.5">
-                    {plannedStages.map((stage, index) => (
-                      <li key={`${stage}-${index}`} className="flex items-center gap-1.5">
-                        <span className="rounded-full border border-border-subtle bg-surface-overlay px-2.5 py-1.5 text-[11px] font-semibold text-text-secondary">
-                          {index + 1}. {stage}
-                        </span>
-                        {index < plannedStages.length - 1 && <ChevronRight size={12} className="text-text-tertiary" aria-hidden="true" />}
-                      </li>
-                    ))}
-                  </ol>
+                  </button>}
                 </div>
 
                 {(enableDubbing || enableCompose) && (
@@ -1655,68 +1740,37 @@ export default function HomePage() {
                   </div>
                 )}
 
-                <div className="mt-4 grid gap-2.5 border-t border-border-subtle pt-4 sm:grid-cols-2">
-                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-warning/15 bg-warning/5 px-3.5 py-3 text-sm text-text-secondary">
-                    <input type="checkbox" checked={reviewRequired} onChange={(event) => setReviewRequired(event.target.checked)} className="h-4 w-4 rounded border-border-strong accent-brand" />
-                    <ShieldCheck size={17} className="shrink-0 text-warning" />
-                    <span><span className="block font-semibold text-text-primary">{t("home.subtitleReviewGate")}</span><span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.subtitleReviewGateHint")}</span></span>
-                  </label>
-                  <label className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 text-sm text-text-secondary ${enableDubbing ? "cursor-pointer border-border-subtle bg-surface-overlay/45" : "cursor-not-allowed border-border-subtle/50 opacity-50"}`}>
-                    <input type="checkbox" checked={enableDubbing && dubbingReview} disabled={!enableDubbing} onChange={(event) => setDubbingReview(event.target.checked)} className="h-4 w-4 rounded border-border-strong accent-brand" />
-                    <Volume2 size={17} className="shrink-0 text-brand" />
-                    <span><span className="block font-semibold text-text-primary">{t("home.dubbingReviewGate")}</span><span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.dubbingReviewGateHint")}</span></span>
-                  </label>
-                </div>
               </fieldset>
 
-              <fieldset>
-                <legend className="mb-2.5 text-xs font-bold uppercase tracking-[0.1em] text-text-tertiary">{t("home.taskType")}</legend>
-                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3" role="radiogroup">
-                  {taskTypes.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = taskType === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={isActive}
-                        tabIndex={isActive ? 0 : -1}
-                        onKeyDown={(event) => {
-                          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-                          event.preventDefault();
-                          const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-                          const currentIndex = taskTypes.findIndex(({ value }) => value === taskType);
-                          const nextIndex = (currentIndex + direction + taskTypes.length) % taskTypes.length;
-                          const nextTaskType = taskTypes[nextIndex].value;
-                          handleTaskTypeChange(nextTaskType);
-                          const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
-                          requestAnimationFrame(() => radios?.[nextIndex]?.focus());
-                        }}
-                        onClick={() => {
-                          handleTaskTypeChange(item.value);
-                        }}
-                        className={`flex min-h-24 items-start gap-3 rounded-[1.15rem] border p-3.5 text-left text-sm transition-all duration-200 ${
-                          isActive
-                            ? "liquid-selected text-text-primary"
-                            : "border-border-default bg-surface-overlay/35 text-text-secondary hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
-                        }`}
-                      >
-                        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${isActive ? "bg-brand/15 text-brand" : "bg-surface-overlay text-text-tertiary"}`}>
-                          <Icon size={16} />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block font-semibold text-text-primary">{t(item.labelKey)}</span>
-                          <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t(item.descKey)}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
+              {taskType !== "generate-only" && (
+                <div className="rounded-[1rem] border border-border-subtle bg-surface-overlay/35 p-4">
+                  <label htmlFor="task-target-language" className="mb-2 block text-sm font-semibold text-text-primary">{t("home.targetLang")}</label>
+                  <Select id="task-target-language" value={targetLanguage} onChange={(event) => setTargetLanguage(event.target.value)}>
+                    {targetLanguageOptions.map(({ value, labelKey }) => (
+                      <option key={value} value={value}>{t(labelKey)} ({value})</option>
+                    ))}
+                  </Select>
                 </div>
-              </fieldset>
+              )}
+
+              <details className="group rounded-[1rem] border border-border-subtle bg-surface-overlay/25">
+                <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-5">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface-overlay text-text-secondary">
+                    <Sparkles size={16} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-text-primary">{t("home.moreSettings")}</span>
+                    <span className="mt-0.5 block truncate text-xs text-text-tertiary">{t("home.moreSettingsHint")}</span>
+                  </span>
+                  <span className="hidden text-xs font-semibold text-text-tertiary md:block">
+                    {outputFormat.toUpperCase()} · {maxSubtitleChars === 0 ? t("home.subtitleBreakSmart") : maxSubtitleChars === -1 ? t("home.subtitleBreakUnlimited") : maxSubtitleChars}
+                  </span>
+                  <ChevronDown size={16} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+                </summary>
+                <div className="space-y-5 border-t border-border-subtle px-4 py-5 sm:px-5">
 
               {taskNeedsAsr && (
-                <div className="border-t border-border-subtle pt-5">
+                <div>
                   {engineId === "parakeet-mlx" && (
                     <div className="flex items-start gap-2 rounded-xl border border-info/15 bg-info/8 px-3.5 py-3 text-xs leading-5 text-text-secondary">
                       <Cpu size={14} className="mt-0.5 shrink-0 text-info" />
@@ -1744,7 +1798,7 @@ export default function HomePage() {
                 </div>
               )}
 
-              <div className={`grid grid-cols-1 gap-4 border-t border-border-subtle pt-6 ${taskType !== "generate-only" ? "sm:grid-cols-2" : ""}`}>
+              <div className="border-t border-border-subtle pt-5">
                 <div>
                   <label htmlFor="task-source-language" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.sourceLang")}</label>
                   <Select id="task-source-language" value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value)}>
@@ -1753,18 +1807,6 @@ export default function HomePage() {
                     ))}
                   </Select>
                 </div>
-                {taskType !== "generate-only" && (
-                  <div>
-                    <label htmlFor="task-target-language" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.targetLang")}</label>
-                    <Select id="task-target-language" value={targetLanguage} onChange={(event) => setTargetLanguage(event.target.value)}>
-                      <option value="zh">{t("language.zh")} (zh)</option>
-                      <option value="en">{t("language.en")} (en)</option>
-                      <option value="ja">{t("language.ja")} (ja)</option>
-                      <option value="ko">{t("language.ko")} (ko)</option>
-                      <option value="yue">{t("language.yue")} (yue)</option>
-                    </Select>
-                  </div>
-                )}
               </div>
 
               {taskType !== "generate-only" && (
@@ -1927,6 +1969,23 @@ export default function HomePage() {
                 </label>
               </div>
 
+              <div className={`grid gap-2.5 border-t border-border-subtle pt-5 ${enableDubbing ? "sm:grid-cols-2" : ""}`}>
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-warning/15 bg-warning/5 px-3.5 py-3 text-sm text-text-secondary">
+                  <input type="checkbox" checked={reviewRequired} onChange={(event) => setReviewRequired(event.target.checked)} className="h-4 w-4 rounded border-border-strong accent-brand" />
+                  <ShieldCheck size={17} className="shrink-0 text-warning" />
+                  <span><span className="block font-semibold text-text-primary">{t("home.subtitleReviewGate")}</span><span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.subtitleReviewGateHint")}</span></span>
+                </label>
+                {enableDubbing && (
+                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-border-subtle bg-surface-overlay/45 px-3.5 py-3 text-sm text-text-secondary">
+                    <input type="checkbox" checked={dubbingReview} onChange={(event) => setDubbingReview(event.target.checked)} className="h-4 w-4 rounded border-border-strong accent-brand" />
+                    <Volume2 size={17} className="shrink-0 text-brand" />
+                    <span><span className="block font-semibold text-text-primary">{t("home.dubbingReviewGate")}</span><span className="mt-0.5 block text-xs leading-5 text-text-tertiary">{t("home.dubbingReviewGateHint")}</span></span>
+                  </label>
+                )}
+              </div>
+                </div>
+              </details>
+
               {modelPrerequisiteHint && (
                 <div id="task-prerequisite-hint" className="flex flex-wrap items-center gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-sm text-warning">
                   <AlertCircle size={14} className="shrink-0" />
@@ -1959,11 +2018,11 @@ export default function HomePage() {
           </Card>
         </div>
 
-        <aside className="space-y-5 min-[1440px]:sticky min-[1440px]:top-0">
+        <aside className="hidden space-y-5 min-[1100px]:sticky min-[1100px]:top-0 min-[1100px]:block">
           <Card className="relative overflow-hidden p-5">
             <span className="pipeline-glow" />
             <div className="relative z-10">
-              <span className="step-label">03 · {t("home.summaryStep")}</span>
+              <span className="step-label">{t("home.summaryStep")}</span>
               <h3 className="mt-2.5 font-display text-h2 font-bold text-text-primary">{t("home.summaryTitle")}</h3>
 
               <dl className="mt-4">
@@ -2039,63 +2098,35 @@ export default function HomePage() {
             </div>
           </Card>
 
-          <Card className="h-fit p-5 sm:p-6">
-            <span className="step-label">{t("home.systemStep")}</span>
-            <h3 className="mt-3 font-display text-h2 font-bold text-text-primary">{t("home.appInfo")}</h3>
-            <dl className="mt-4">
-              <div className="system-row">
-                <dt className="text-xs text-text-tertiary">{t("home.appName")}</dt>
-                <dd className="min-w-0 break-all text-right font-mono text-xs font-semibold text-text-primary">{appInfo?.name ?? t("home.loading")}</dd>
-              </div>
-              <div className="system-row">
-                <dt className="text-xs text-text-tertiary">{t("home.version")}</dt>
-                <dd className="min-w-0 text-right font-mono text-xs font-semibold text-text-primary">{appInfo?.version ?? t("home.loading")}</dd>
-              </div>
-              <div className="system-row">
-                <dt className="text-xs text-text-tertiary">FFmpeg</dt>
-                <dd className="min-w-0 text-right text-xs text-text-primary">
-                  {ffmpegVersion === "detecting" ? (
-                    <span className="text-text-tertiary">{t("home.detecting")}</span>
-                  ) : ffmpegVersion === "unavailable" ? (
-                    <span className="inline-flex items-center gap-1 font-semibold text-danger">
-                      <AlertCircle size={12} />
-                      {t("home.unavailable")}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 font-semibold text-success" title={ffmpegVersion}>
-                      <CheckCircle className="shrink-0" size={12} />
-                      {t("home.available")}
-                    </span>
-                  )}
-                </dd>
-              </div>
-            </dl>
-          </Card>
         </aside>
       </div>
 
       <Card className="overflow-hidden p-5 sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <span className="step-label">{t("home.recipeEyebrow")}</span>
-            <h3 className="mt-3 font-display text-[1.35rem] font-bold tracking-[-0.025em] text-text-primary">
-              {t("home.recipeTitle")}
-            </h3>
-            <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
-              {t("home.recipeDesc")}
-            </p>
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center gap-4 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-overlay text-brand"><Save size={17} /></span>
+            <span className="min-w-0 flex-1">
+              <span className="step-label">{t("home.recipeEyebrow")}</span>
+              <span className="mt-1 block font-display text-[1.1rem] font-bold tracking-[-0.02em] text-text-primary">{t("home.recipeTitle")}</span>
+              <span className="mt-0.5 block truncate text-xs text-text-tertiary">{t("home.recipeDesc")}</span>
+            </span>
+            <span className="hidden rounded-full border border-border-subtle bg-surface-overlay px-2.5 py-1 text-xs font-semibold text-text-tertiary sm:block">
+              {builtInRecipes.length + recipes.length}
+            </span>
+            <ChevronDown size={17} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+          </summary>
+
+          <div className="mt-5 flex justify-end border-t border-border-subtle pt-5">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => openRecipeDialog("create")}
+            >
+              <Save size={14} />
+              {t("home.saveCurrentRecipe")}
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => openRecipeDialog("create")}
-            className="shrink-0"
-          >
-            <Save size={14} />
-            {t("home.saveCurrentRecipe")}
-          </Button>
-        </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {builtInRecipes.map((recipe) => (
@@ -2175,6 +2206,7 @@ export default function HomePage() {
             {recipeNotice}
           </p>
         )}
+        </details>
       </Card>
 
       {recipeDialog && (

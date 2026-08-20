@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { AudioLines, Bot, Edit3, FileVideo2, Film, Languages, ListTodo, ScrollText, Settings, PanelLeftClose, PanelLeftOpen, UserRound } from "lucide-react";
+import { AudioLines, Bot, ChevronDown, Edit3, FileVideo2, Film, Languages, ListTodo, ScrollText, Settings, PanelLeftClose, PanelLeftOpen, UserRound, Wrench } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { ActivityCenter, CommandPalette, WorkspaceOverlays } from "./WorkspaceOverlays";
 import brandIcon from "../../src-tauri/icons/icon.png";
@@ -18,17 +18,23 @@ const navItems = [
   { to: "/settings", key: "nav.settings", icon: Settings },
 ] as const;
 
+const primaryNavItems = [navItems[0], navItems[1], navItems[7]] as const;
+const toolNavItems = [navItems[6], navItems[8], navItems[2], navItems[3], navItems[4], navItems[5]] as const;
+const settingsNavItem = navItems[9];
+
 const Logo = () => <img className="brand-logo" src={brandIcon} alt="" aria-hidden="true" />;
 
 export default function Layout() {
   const location = useLocation();
   const { t } = useI18n();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finalsub:nav-collapsed") === "true");
+  const [toolsOpen, setToolsOpen] = useState(() => toolNavItems.some(({ to }) => location.pathname === to));
   const mobileNavRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const activeItem = mobileNavRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
     activeItem?.scrollIntoView({ block: "nearest", inline: "center" });
+    if (toolNavItems.some(({ to }) => location.pathname === to)) setToolsOpen(true);
   }, [location.pathname]);
 
   const toggleCollapsed = () => {
@@ -37,6 +43,28 @@ export default function Layout() {
       localStorage.setItem("finalsub:nav-collapsed", String(next));
       return next;
     });
+  };
+
+  const renderNavLink = ({ to, key, icon: Icon }: (typeof navItems)[number], compact = false) => {
+    const isActive = location.pathname === to;
+    return (
+      <Link
+        key={to}
+        to={to}
+        aria-current={isActive ? "page" : undefined}
+        className={`nav-item group relative flex shrink-0 items-center rounded-[0.9rem] text-[13px] font-semibold transition-all duration-200 ${collapsed ? "mx-auto h-11 min-h-11 w-11 justify-center p-0" : `${compact ? "min-h-9" : "min-h-11"} gap-3 px-2.5 py-2`} ${
+          isActive
+            ? "liquid-selected text-text-primary"
+            : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+        }`}
+      >
+        <span className={`nav-icon ${isActive ? "nav-icon-active" : ""}`}>
+          <Icon size={16} />
+        </span>
+        <span className={collapsed ? "sr-only" : ""}>{t(key)}</span>
+        {isActive && <span className="nav-active-rail" aria-hidden="true" />}
+      </Link>
+    );
   };
 
   return (
@@ -76,28 +104,27 @@ export default function Layout() {
         <div className={`absolute right-4 top-[1.1rem] z-[55] sm:static sm:block sm:border-b sm:border-border-subtle ${collapsed ? "sm:px-0 sm:py-2.5" : "sm:p-3"}`}>
           <ActivityCenter compact={collapsed} />
         </div>
-        <nav className={`hidden gap-1 overflow-x-hidden overflow-y-auto p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sidebar-nav-collapsed sm:px-0 sm:py-3" : "sm:p-3"}`}>
-          {navItems.map(({ to, key, icon: Icon }) => {
-            const isActive = location.pathname === to;
-            return (
-              <Link
-                key={to}
-                to={to}
-                aria-current={isActive ? "page" : undefined}
-                className={`nav-item group relative flex min-h-11 shrink-0 items-center rounded-[0.9rem] text-[13px] font-semibold transition-all duration-200 ${collapsed ? "mx-auto h-11 w-11 justify-center p-0" : "gap-3 px-2.5 py-2"} ${
-                  isActive
-                    ? "liquid-selected text-text-primary"
-                    : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
-                }`}
+        <nav className={`hidden gap-1 overflow-x-hidden p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sidebar-nav-collapsed overflow-y-auto sm:px-0 sm:py-3" : "overflow-hidden sm:p-3"}`}>
+          {collapsed ? navItems.map((item) => renderNavLink(item)) : (
+            <>
+              {primaryNavItems.map((item) => renderNavLink(item))}
+              <details
+                open={toolsOpen}
+                onToggle={(event) => setToolsOpen(event.currentTarget.open)}
+                className="group/tools pt-1"
               >
-                <span className={`nav-icon ${isActive ? "nav-icon-active" : ""}`}>
-                  <Icon size={16} />
-                </span>
-                <span className={collapsed ? "sr-only" : ""}>{t(key)}</span>
-                {isActive && <span className="nav-active-rail" aria-hidden="true" />}
-              </Link>
-            );
-          })}
+                <summary className={`flex min-h-10 cursor-pointer list-none items-center gap-3 rounded-[0.9rem] px-2.5 py-2 text-[13px] font-semibold transition hover:bg-surface-overlay hover:text-text-primary ${toolNavItems.some(({ to }) => location.pathname === to) ? "text-brand" : "text-text-secondary"}`}>
+                  <span className="nav-icon"><Wrench size={16} /></span>
+                  <span className="flex-1">{t("nav.tools")}</span>
+                  <ChevronDown size={14} className="text-text-tertiary transition-transform group-open/tools:rotate-180" aria-hidden="true" />
+                </summary>
+                <div className="mt-1 space-y-0.5 border-l border-border-subtle pl-2">
+                  {toolNavItems.map((item) => renderNavLink(item, true))}
+                </div>
+              </details>
+              <div className="pt-1">{renderNavLink(settingsNavItem)}</div>
+            </>
+          )}
         </nav>
         <div className={`relative z-10 mt-auto hidden border-t border-border-subtle bg-surface-card sm:block ${collapsed ? "sm:px-0 sm:py-3.5" : "sm:p-3.5"}`}>
           <CommandPalette compact={collapsed} />
