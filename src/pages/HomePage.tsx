@@ -92,8 +92,8 @@ const sourceLanguageOptions = [
 ] as const;
 
 const taskTypes = [
-  { value: "generate-only", labelKey: "home.genOnlyLabel", descKey: "home.genOnlyDesc", icon: FileText },
   { value: "generate-and-translate", labelKey: "home.genTransLabel", descKey: "home.genTransDesc", icon: Mic },
+  { value: "generate-only", labelKey: "home.genOnlyLabel", descKey: "home.genOnlyDesc", icon: FileText },
   { value: "translate-only", labelKey: "home.transOnlyLabel", descKey: "home.transOnlyDesc", icon: Languages },
 ] as const;
 
@@ -199,7 +199,7 @@ export default function HomePage() {
   const [mediaMetadata, setMediaMetadata] = useState<VideoMetadata | null>(null);
   const [mediaMetadataError, setMediaMetadataError] = useState("");
 
-  const [taskType, setTaskType] = useState("generate-only");
+  const [taskType, setTaskType] = useState("generate-and-translate");
   const [engineId, setEngineId] = useState("parakeet-mlx");
   const [modelId, setModelId] = useState("parakeet-tdt-0.6b-v2");
   const [sourceLanguage, setSourceLanguage] = useState("auto");
@@ -247,7 +247,7 @@ export default function HomePage() {
     setTaskType((current) => (
       nextKind === "subtitle"
         ? "translate-only"
-        : (current === "translate-only" ? "generate-only" : current)
+        : (current === "translate-only" ? "generate-and-translate" : current)
     ));
     if (nextKind === "subtitle") {
       setEnableDubbing(false);
@@ -893,7 +893,7 @@ export default function HomePage() {
   const applyRecipe = (snapshot: TaskRecipeSnapshot, name: string) => {
     const nextTaskType = ["generate-only", "generate-and-translate", "translate-only"].includes(
       snapshot.task_type,
-    ) ? snapshot.task_type : "generate-only";
+    ) ? snapshot.task_type : "generate-and-translate";
     // A recipe changes processing parameters, not the imported source. Keep
     // the current selection and let the input guard explain any type mismatch.
     handleTaskTypeChange(nextTaskType);
@@ -1200,6 +1200,7 @@ export default function HomePage() {
                         requestAnimationFrame(() => radios?.[nextIndex]?.focus());
                       }}
                       onClick={() => handleTaskTypeChange(item.value)}
+                      data-testid={`task-type-${item.value}`}
                       className={`flex min-h-14 items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-sm transition ${
                         isActive
                           ? "border-brand/35 bg-brand/10 text-text-primary"
@@ -1514,6 +1515,86 @@ export default function HomePage() {
                   </div>
                 )}
               </details>
+
+              {taskType !== "generate-only" && (
+                <section
+                  id="task-translation-options"
+                  tabIndex={-1}
+                  aria-labelledby="task-translation-title"
+                  className="rounded-[1.15rem] border border-brand/20 bg-brand/[0.055] p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45 sm:p-5"
+                  data-testid="translation-setup"
+                >
+                  <div className="flex flex-col gap-3 min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-between">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand">
+                        <Languages size={18} />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.translationSetupStep")}</p>
+                        <h4 id="task-translation-title" className="mt-1 text-base font-bold text-text-primary">{t("home.translationSetupTitle")}</h4>
+                        <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.translationSetupHint")}</p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-brand/15 bg-surface-overlay px-3 py-1.5 text-xs font-semibold text-brand">
+                      {pipelineLanguage}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 min-[1400px]:grid-cols-[minmax(12rem,0.36fr)_minmax(0,1fr)]">
+                    <div>
+                      <label htmlFor="task-target-language" className="mb-2 block text-sm font-semibold text-text-primary">{t("home.targetLang")}</label>
+                      <Select
+                        id="task-target-language"
+                        data-testid="task-target-language"
+                        value={targetLanguage}
+                        onChange={(event) => setTargetLanguage(event.target.value)}
+                      >
+                        {targetLanguageOptions.map(({ value, labelKey }) => (
+                          <option key={value} value={value}>{t(labelKey)} ({value})</option>
+                        ))}
+                      </Select>
+                    </div>
+
+                    <fieldset>
+                      <legend className="mb-2 text-sm font-semibold text-text-primary">{t("home.subtitleContent")}</legend>
+                      <div className="grid grid-cols-[repeat(auto-fit,minmax(10.5rem,1fr))] gap-2.5" role="radiogroup">
+                        {translationContentModes.map((mode) => {
+                          const isActive = translationContentMode === mode.value;
+                          return (
+                            <button
+                              key={mode.value}
+                              type="button"
+                              role="radio"
+                              aria-checked={isActive}
+                              tabIndex={isActive ? 0 : -1}
+                              data-testid={`translation-content-${mode.value}`}
+                              onKeyDown={(event) => {
+                                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                                event.preventDefault();
+                                const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+                                const currentIndex = translationContentModes.findIndex(({ value }) => value === translationContentMode);
+                                const nextIndex = (currentIndex + direction + translationContentModes.length) % translationContentModes.length;
+                                setTranslationContentMode(translationContentModes[nextIndex].value);
+                                const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
+                                requestAnimationFrame(() => radios?.[nextIndex]?.focus());
+                              }}
+                              onClick={() => setTranslationContentMode(mode.value)}
+                              className={`min-h-[4.75rem] rounded-[1rem] border px-3 py-2.5 text-left text-sm transition-all duration-200 ${
+                                isActive
+                                  ? "liquid-selected text-text-primary"
+                                  : "border-border-default bg-surface-overlay/35 text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
+                              }`}
+                            >
+                              <span className="block font-semibold">{t(mode.labelKey)}</span>
+                              <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t(mode.descKey)}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                  </div>
+                </section>
+              )}
             </div>
 
             {mediaMetadata && selectedPaths.length === 1 && (
@@ -1742,17 +1823,6 @@ export default function HomePage() {
 
               </fieldset>
 
-              {taskType !== "generate-only" && (
-                <div className="rounded-[1rem] border border-border-subtle bg-surface-overlay/35 p-4">
-                  <label htmlFor="task-target-language" className="mb-2 block text-sm font-semibold text-text-primary">{t("home.targetLang")}</label>
-                  <Select id="task-target-language" value={targetLanguage} onChange={(event) => setTargetLanguage(event.target.value)}>
-                    {targetLanguageOptions.map(({ value, labelKey }) => (
-                      <option key={value} value={value}>{t(labelKey)} ({value})</option>
-                    ))}
-                  </Select>
-                </div>
-              )}
-
               <details className="group rounded-[1rem] border border-border-subtle bg-surface-overlay/25">
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-5">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface-overlay text-text-secondary">
@@ -1808,45 +1878,6 @@ export default function HomePage() {
                   </Select>
                 </div>
               </div>
-
-              {taskType !== "generate-only" && (
-                <fieldset>
-                  <legend className="mb-2.5 text-sm font-medium text-text-secondary">{t("home.subtitleContent")}</legend>
-                  <div className="grid gap-2.5 sm:grid-cols-3" role="radiogroup">
-                    {translationContentModes.map((mode) => {
-                      const isActive = translationContentMode === mode.value;
-                      return (
-                        <button
-                          key={mode.value}
-                          type="button"
-                          role="radio"
-                          aria-checked={isActive}
-                          tabIndex={isActive ? 0 : -1}
-                          onKeyDown={(event) => {
-                            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-                            event.preventDefault();
-                            const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-                            const currentIndex = translationContentModes.findIndex(({ value }) => value === translationContentMode);
-                            const nextIndex = (currentIndex + direction + translationContentModes.length) % translationContentModes.length;
-                            setTranslationContentMode(translationContentModes[nextIndex].value);
-                            const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
-                            requestAnimationFrame(() => radios?.[nextIndex]?.focus());
-                          }}
-                          onClick={() => setTranslationContentMode(mode.value)}
-                          className={`min-h-20 rounded-[1.05rem] border px-3.5 py-3 text-left text-sm transition-all duration-200 ${
-                            isActive
-                              ? "liquid-selected text-text-primary"
-                              : "border-border-default bg-surface-overlay/30 text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
-                          }`}
-                        >
-                          <span className="block font-semibold">{t(mode.labelKey)}</span>
-                          <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t(mode.descKey)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </fieldset>
-              )}
 
               <fieldset className="rounded-[1.05rem] border border-border-subtle bg-surface-overlay/35 p-4">
                 <legend className="sr-only">{t("home.subtitleBreakLabel")}</legend>
