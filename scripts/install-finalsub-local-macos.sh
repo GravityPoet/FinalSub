@@ -141,6 +141,13 @@ for arch in arm64 x86_64; do
 done
 "$LSREGISTER" -f "$DEST_APP" >/dev/null 2>&1 || true
 
+# The source bundle may be a read-only DMG or an external staging path. It is
+# an input, not a second installed copy, so remove its LaunchServices record
+# before enforcing the single-install boundary below.
+if [ "$SOURCE_APP" != "$DEST_APP" ]; then
+  unregister_app_bundle "$SOURCE_APP"
+fi
+
 open "$DEST_APP"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   if pgrep -f "$PROCESS_PATTERN" >/dev/null; then
@@ -169,6 +176,9 @@ physical_paths="$(
   done | while IFS= read -r -d '' app; do
     plist="$app/Contents/Info.plist"
     [ -f "$plist" ] || continue
+    if [ "$app" = "$SOURCE_APP" ]; then
+      continue
+    fi
     if [ "$(plutil -extract CFBundleIdentifier raw "$plist" 2>/dev/null || true)" = "$BUNDLE_ID" ]; then
       printf '%s\n' "$app"
     fi
@@ -202,7 +212,11 @@ fi
 "$LSREGISTER" -f "$DEST_APP" >/dev/null 2>&1 || true
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  spotlight_matches="$(mdfind 'kMDItemCFBundleIdentifier == "com.gravitypoet.finalsub"c' | sort)"
+  spotlight_matches="$(
+    mdfind 'kMDItemCFBundleIdentifier == "com.gravitypoet.finalsub"c' | sort | while IFS= read -r match; do
+      [ "$match" = "$SOURCE_APP" ] || printf '%s\n' "$match"
+    done
+  )"
   if [ "$spotlight_matches" = "$DEST_APP" ]; then
     break
   fi
@@ -221,7 +235,9 @@ remaining_launchservices_paths="$(
     let identifier = ProcessInfo.processInfo.environment["FINAL_APP_BUNDLE_ID"]! as CFString
     let urls = (LSCopyApplicationURLsForBundleIdentifier(identifier, nil)?.takeRetainedValue() as? [URL]) ?? []
     for url in urls.sorted(by: { $0.path < $1.path }) { print(url.path) }
-  ' | sort -u
+  ' | sort -u | while IFS= read -r registered_path; do
+    [ "$registered_path" = "$SOURCE_APP" ] || printf '%s\n' "$registered_path"
+  done
 )"
 if [ "$remaining_launchservices_paths" != "$DEST_APP" ]; then
   echo "FinalSub still has duplicate LaunchServices records:" >&2

@@ -1080,6 +1080,59 @@ zsh: command not found: head
 - 变量改名为 `target_path`，必要的系统命令使用绝对路径；重跑后目标存在性与 iCloud 配额探测成功。
 - zsh 自动化不得把普通标量命名为 `path`。
 
+### 2026-08-24：自签名 DMG 复核要求绝对路径
+
+现象：
+
+```text
+DMG path must be absolute: src-tauri/target/self-signed-release/v1.0.12-self-signed.1/FinalSub-1.0.12-macos-universal-self-signed.dmg
+```
+
+原因：
+
+- `scripts/verify-macos-self-signed-package.sh` 有意拒绝相对路径，避免验收时误用当前目录中的同名残留；第一次手动复核没有把输出目录展开为绝对路径。
+
+处理与防复发：
+
+- 使用 `OUTPUT="$(pwd)/src-tauri/target/self-signed-release/<tag>"` 后重新运行 DMG、签名和 Universal 验收，全部通过。
+- 发布脚本始终传递绝对路径；手工验收也必须先展开 `$(pwd)`，不能把相对路径错误当成包损坏。
+
+### 2026-08-24：外部 DMG 源 App 被本机安装唯一性门禁误判
+
+现象：
+
+```text
+FinalSub still has duplicate app bundles on disk:
+/Applications/FinalSub.app
+/Users/moonlitpoet/Library/Application Support/FinalSub/bridge-input-1.0.12/FinalSub.app
+```
+
+原因：
+
+- `install-finalsub-local-macos.sh` 的唯一性检查在清理外部输入源之前扫描物理文件、Spotlight 和 LaunchServices；从 DMG 或外部 staging 路径安装时，源 App 被误当成第二个产品安装。
+
+处理与防复发：
+
+- 安装器现在先注销外部源 App，并在三类唯一性检查中排除精确的 `SOURCE_APP` 输入路径；重跑 1.0.12 桥接安装后 `SIGNING_REQUIREMENT_CHANGED=0`、Spotlight 与 LaunchServices 均只保留 `/Applications/FinalSub.app`。
+- 外部 DMG/staging App 只是输入，不是客户安装副本；安装验收必须在源输入排除后再判定唯一性。
+
+### 2026-08-24：长 Universal 发布构建的观察会话中断
+
+现象：
+
+```text
+write_stdin failed: Unknown process id
+```
+
+原因：
+
+- 聊天观察会话在 Rust Universal 编译期间被中断，子进程随观察通道退出；这不是编译器或签名错误。
+
+处理与防复发：
+
+- 先审计进程、产物、HEAD、远端 Tag 和 Release，确认没有任何外部发布写入；复用同一 commit 上已完成验收的本地产物完成发布后半段。
+- 长构建观察丢失后，必须先做状态审计再重跑，不能把观察器错误当成构建失败或盲目重复创建 Release。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：
