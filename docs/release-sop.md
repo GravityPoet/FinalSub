@@ -240,6 +240,18 @@ EOF
 - 目标 `v<version>-self-signed.<revision>` 在本地、origin 与 GitHub Releases 均不存在。
 - 不配置生产 updater 根密钥，不注入 Apple Developer ID、公证或 Windows 生产签名 Secret。
 
+Tag / Release 碰撞检查必须使用当前 `gh release list` 实际支持的字段；Release URL 只在目标存在时通过 `gh release view` 读取：
+
+```bash
+cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && TAG="v<version>-self-signed.<revision>" && \
+  git tag --list "$TAG" && \
+  git ls-remote --tags origin "refs/tags/$TAG" && \
+  gh release list --limit 100 --json tagName,isDraft,isPrerelease | \
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const tag=process.argv[1];console.log(JSON.stringify(JSON.parse(s).filter(x=>x.tagName===tag)))})' "$TAG"
+```
+
+三段输出必须分别为空、为空、`[]`；任一非空都要停止重复创建并审计既有目标。
+
 构建：
 
 ```bash
@@ -950,6 +962,30 @@ Post "https://api.github.com/graphql": net/http: TLS handshake timeout
 防复发：
 
 - `gh` 出现 TLS timeout 时先区分 API、SSH、DNS 与代理边界，不立即重新登录、替换 Token 或修改 remote；只有独立连接检查恢复后才重试原命令。
+
+### 2026-08-24：`gh release list --json` 不支持 `url` 字段
+
+现象：
+
+```text
+Unknown JSON field: "url"
+Available fields: createdAt, isDraft, isImmutable, isLatest, isPrerelease, name, publishedAt, tagName
+SyntaxError: Unexpected end of JSON input
+```
+
+原因：
+
+- 当前 `gh` 的 `release list` 子命令没有 `url` JSON 字段；上游命令退出后，管道中的 Node 仍尝试解析空输入，产生第二个语法错误。
+- `gh release view` 支持 `url`，但它适合读取已存在的目标，不适合要求“目标必须不存在”的无错误碰撞检查。
+
+处理：
+
+- 碰撞检查改为 `gh release list --json tagName,isDraft,isPrerelease`，再按精确 Tag 过滤；本次目标返回 `[]`。
+- 仅在 Release 创建后使用 `gh release view <tag> --json url,...` 读取公开 URL。
+
+防复发：
+
+- 为不同 `gh` 子命令分别使用其 `--json` 支持字段；写自动化前先以命令返回的字段列表或 `gh help` 核对，碰撞检查不请求 `url`。
 
 ### 追加模板
 
