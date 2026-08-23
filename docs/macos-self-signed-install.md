@@ -15,7 +15,7 @@
 C21E979BC792E4453F46B65B900702C4A3C9A00967273376193A678742B2944F
 ```
 
-这个渠道只提供手动更新：应用会检查 GitHub Release 是否有新版本，但会引导你重新下载 DMG，不会静默替换应用。获得 Apple Developer ID 后，正式签名和公证包会使用独立的正式发布渠道。
+从 1.0.12 开始，这个渠道支持应用内签名更新：FinalSub 会检查新版本，点击“安装并重启”后自动下载、验签、替换并重新打开应用。1.0.11 及更早版本需要最后一次手动安装 1.0.12；以后无需重复下载 DMG。更新失败时仍可从官方 Release 手动覆盖安装。
 
 ## English
 
@@ -32,4 +32,4 @@ Do not install a root certificate, disable Gatekeeper, or run an untrusted “by
 C21E979BC792E4453F46B65B900702C4A3C9A00967273376193A678742B2944F
 ```
 
-This channel uses manual updates. FinalSub can check GitHub Releases for a newer version, but it opens the download page instead of silently replacing the app. A future Apple Developer ID/notarized package will use the separate formal release channel.
+Starting with 1.0.12, this channel supports signed in-app updates. FinalSub checks for a new version and, after you choose “Install & Restart,” downloads, verifies, replaces, and relaunches the app. Versions 1.0.11 and earlier need one final manual installation of 1.0.12. A manual download from the official Release remains available as a fallback.

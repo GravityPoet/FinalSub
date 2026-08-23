@@ -133,6 +133,11 @@ fi
 
 APP_PATH="$MOUNT_PATH/FinalSub.app"
 bash "$REPO_ROOT/scripts/verify-finalsub-macos-app.sh" "$APP_PATH"
+updater_public_key="$(tr -d '\r\n' < "$REPO_ROOT/src-tauri/signing/finalsub-updater-root-v1.pub")"
+if ! strings "$APP_PATH/Contents/MacOS/finalsubtauri" | grep -F "$updater_public_key" >/dev/null; then
+  echo "DMG app does not contain FinalSub's updater public key." >&2
+  exit 1
+fi
 actual_version="$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")"
 actual_bundle_id="$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Contents/Info.plist")"
 if [ "$actual_version" != "$EXPECTED_VERSION" ] || [ "$actual_bundle_id" != "$BUNDLE_ID" ]; then
@@ -181,4 +186,4 @@ printf 'certificate_sha256=%s\n' "$app_fingerprint"
 printf 'requirement=%s\n' "$actual_requirement"
 printf 'notarized=0\n'
 printf 'gatekeeper=manual-first-launch-approval-required\n'
-printf 'updater=manual-release-page\n'
+printf 'updater=tauri-signed-in-app\n'
