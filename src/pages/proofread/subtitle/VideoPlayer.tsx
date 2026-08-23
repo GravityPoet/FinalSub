@@ -1,6 +1,6 @@
 import React from 'react';
-import { convertFileSrc } from '@tauri-apps/api/core';
 import { useI18n } from '../../../lib/i18n';
+import { fileAssetUrl } from '../../../lib/tauri';
 
 interface VideoPlayerProps {
   videoPath: string;
@@ -35,7 +35,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   handleRateChange,
 }) => {
   const { t } = useI18n();
-  const videoUrl = videoPath ? convertFileSrc(videoPath) : '';
+  const videoUrl = videoPath ? fileAssetUrl(videoPath) : '';
 
   return (
     <div className="flex flex-col flex-shrink-0 bg-app-bg rounded-xl overflow-hidden border border-border-default shadow-2xl relative">

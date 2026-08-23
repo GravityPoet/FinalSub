@@ -583,6 +583,7 @@ export default function ModelsPage() {
                             disabled={deleting === model.id}
                             className="rounded-lg p-2 text-text-tertiary transition hover:bg-surface-overlay hover:text-danger disabled:opacity-50"
                             title={t("models.deleteAction")}
+                            aria-label={t("models.deleteAction")}
                           >
                             <Trash2 size={16} />
                           </button>

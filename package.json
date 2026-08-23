@@ -1,7 +1,7 @@
 {
   "name": "finalsub",
   "private": true,
-  "version": "1.0.10",
+  "version": "1.0.11",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,7 +22,7 @@
     "cleanup:bundle-apps:macos": "bash scripts/cleanup-finalsub-bundle-apps-macos.sh",
     "build:local:bundle": "npm run setup:mac:signing && npm run tauri:build && npm run verify:bundle",
     "build:local": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:local:bundle",
-    "binaries:universal": "npm run setup:mac:signing && lipo -create src-tauri/binaries/ffmpeg-aarch64-apple-darwin src-tauri/binaries/ffmpeg-x86_64-apple-darwin -output src-tauri/binaries/ffmpeg-universal-apple-darwin && codesign --force --sign \"ChordVox Local Code Signing\" --timestamp=none src-tauri/binaries/ffmpeg-universal-apple-darwin && lipo -create src-tauri/binaries/whisper-cli-aarch64-apple-darwin src-tauri/binaries/whisper-cli-x86_64-apple-darwin -output src-tauri/binaries/whisper-cli-universal-apple-darwin && codesign --force --sign \"ChordVox Local Code Signing\" --timestamp=none src-tauri/binaries/whisper-cli-universal-apple-darwin",
+    "binaries:universal": "bash scripts/prepare-macos-universal-sidecars.sh",
     "pretauri:build:universal": "npm run prepare:tauri-target",
     "tauri:build:universal": "tauri build --target universal-apple-darwin",
     "verify:bundle:universal": "bash scripts/verify-finalsub-macos-app.sh \"$PWD/src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app\"",
@@ -30,7 +30,8 @@
     "build:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle",
     "package:release:self-signed:macos": "bash scripts/package-macos-self-signed-release.sh",
     "install:local:universal": "bash scripts/install-finalsub-local-macos.sh",
-    "build:install:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle install:local:universal"
+    "build:install:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle install:local:universal",
+    "build:validation:macos-intel": "npm run tauri -- build --target x86_64-apple-darwin --bundles app --config src-tauri/tauri.validation.conf.json && bash scripts/verify-macos-intel-app.sh \"$PWD/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/FinalSub.app\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

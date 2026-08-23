@@ -186,7 +186,7 @@ export default function SubtitleMergePage() {
   const handleSelectSubtitle = async () => {
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: t("merge.subtitleFiles"), extensions: ["srt", "ass", "vtt"] }],
+      filters: [{ name: t("merge.subtitleFiles"), extensions: ["srt", "ass", "vtt", "lrc"] }],
     });
     if (typeof selected === "string") setSubtitlePath(selected);
   };
@@ -479,8 +479,9 @@ export default function SubtitleMergePage() {
           {softSubtitle && (
             <div className="mt-4 grid gap-4 rounded-2xl border border-border-subtle bg-surface-overlay p-4 sm:grid-cols-[minmax(0,0.38fr)_minmax(0,1fr)]">
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackLanguage")}</label>
+                <label htmlFor="merge-subtitle-language" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackLanguage")}</label>
                 <Input
+                  id="merge-subtitle-language"
                   value={subtitleLanguage}
                   maxLength={16}
                   disabled={processing}
@@ -490,8 +491,9 @@ export default function SubtitleMergePage() {
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackTitle")}</label>
+                <label htmlFor="merge-subtitle-title" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackTitle")}</label>
                 <Input
+                  id="merge-subtitle-title"
                   value={subtitleTitle}
                   maxLength={128}
                   disabled={processing}
@@ -547,8 +549,9 @@ export default function SubtitleMergePage() {
                 )}
                 <div className="grid gap-4 sm:grid-cols-[minmax(0,0.38fr)_minmax(0,1fr)]">
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackLanguage")}</label>
+                    <label htmlFor="merge-audio-language" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackLanguage")}</label>
                     <Input
+                      id="merge-audio-language"
                       value={audioLanguage}
                       maxLength={16}
                       disabled={processing}
@@ -558,8 +561,9 @@ export default function SubtitleMergePage() {
                     />
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackTitle")}</label>
+                    <label htmlFor="merge-audio-title" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.trackTitle")}</label>
                     <Input
+                      id="merge-audio-title"
                       value={audioTitle}
                       maxLength={128}
                       disabled={processing}
@@ -610,40 +614,40 @@ export default function SubtitleMergePage() {
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div className="col-span-2">
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontName")}</label>
-              <Input type="text" maxLength={128} value={fontName} disabled={processing || softSubtitle} onChange={(e) => setFontName(e.target.value)} className="h-9" />
+              <label htmlFor="merge-font-name" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontName")}</label>
+              <Input id="merge-font-name" type="text" maxLength={128} value={fontName} disabled={processing || softSubtitle} onChange={(e) => setFontName(e.target.value)} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontSize")}</label>
-              <Input type="number" min={10} max={72} value={fontSize} disabled={processing || softSubtitle} onChange={(e) => setFontSize(Number(e.target.value))} className="h-9" />
+              <label htmlFor="merge-font-size" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontSize")}</label>
+              <Input id="merge-font-size" type="number" min={10} max={72} value={fontSize} disabled={processing || softSubtitle} onChange={(e) => setFontSize(Number(e.target.value))} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontColor")}</label>
-              <Input type="text" value={fontColor} disabled={processing || softSubtitle} onChange={(e) => setFontColor(e.target.value)} className="h-9 font-mono" />
+              <label htmlFor="merge-font-color" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.fontColor")}</label>
+              <Input id="merge-font-color" type="text" value={fontColor} disabled={processing || softSubtitle} onChange={(e) => setFontColor(e.target.value)} className="h-9 font-mono" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.outlineColor")}</label>
-              <Input type="text" value={outlineColor} disabled={processing || softSubtitle} onChange={(e) => setOutlineColor(e.target.value)} className="h-9 font-mono" />
+              <label htmlFor="merge-outline-color" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.outlineColor")}</label>
+              <Input id="merge-outline-color" type="text" value={outlineColor} disabled={processing || softSubtitle} onChange={(e) => setOutlineColor(e.target.value)} className="h-9 font-mono" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.outlineWidth")}</label>
-              <Input type="number" min={0} max={10} step={0.5} value={outlineWidth} disabled={processing || softSubtitle} onChange={(e) => setOutlineWidth(Number(e.target.value))} className="h-9" />
+              <label htmlFor="merge-outline-width" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.outlineWidth")}</label>
+              <Input id="merge-outline-width" type="number" min={0} max={10} step={0.5} value={outlineWidth} disabled={processing || softSubtitle} onChange={(e) => setOutlineWidth(Number(e.target.value))} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.shadow")}</label>
-              <Input type="number" min={0} max={20} step={0.5} value={shadow} disabled={processing || softSubtitle} onChange={(e) => setShadow(Number(e.target.value))} className="h-9" />
+              <label htmlFor="merge-shadow" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.shadow")}</label>
+              <Input id="merge-shadow" type="number" min={0} max={20} step={0.5} value={shadow} disabled={processing || softSubtitle} onChange={(e) => setShadow(Number(e.target.value))} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.marginV")}</label>
-              <Input type="number" min={0} max={100} value={marginV} disabled={processing || softSubtitle} onChange={(e) => setMarginV(Number(e.target.value))} className="h-9" />
+              <label htmlFor="merge-margin-v" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.marginV")}</label>
+              <Input id="merge-margin-v" type="number" min={0} max={100} value={marginV} disabled={processing || softSubtitle} onChange={(e) => setMarginV(Number(e.target.value))} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.quality")}</label>
-              <Input type="number" min={0} max={51} value={crf} disabled={processing || softSubtitle} onChange={(e) => setCrf(Number(e.target.value))} className="h-9" />
+              <label htmlFor="merge-quality" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.quality")}</label>
+              <Input id="merge-quality" type="number" min={0} max={51} value={crf} disabled={processing || softSubtitle} onChange={(e) => setCrf(Number(e.target.value))} className="h-9" />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.encodingPreset")}</label>
-              <Select value={encodingPreset} disabled={processing || softSubtitle || encoderMode === "hardware"} onChange={(e) => setEncodingPreset(e.target.value)} className="h-9">
+              <label htmlFor="merge-encoding-preset" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.encodingPreset")}</label>
+              <Select id="merge-encoding-preset" value={encodingPreset} disabled={processing || softSubtitle || encoderMode === "hardware"} onChange={(e) => setEncodingPreset(e.target.value)} className="h-9">
                 {['ultrafast', 'veryfast', 'fast', 'medium', 'slow', 'veryslow'].map((value) => <option key={value} value={value}>{value}</option>)}
               </Select>
             </div>
@@ -706,14 +710,14 @@ export default function SubtitleMergePage() {
               <span className="font-semibold text-text-primary">{t("merge.opaqueBackground")}</span>
             </label>
             <div className="col-span-2">
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.backgroundColor")}</label>
-              <Input type="text" value={backgroundColor} disabled={processing || softSubtitle || !opaqueBackground} onChange={(e) => setBackgroundColor(e.target.value)} className="h-9 font-mono" />
+              <label htmlFor="merge-background-color" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("merge.backgroundColor")}</label>
+              <Input id="merge-background-color" type="text" value={backgroundColor} disabled={processing || softSubtitle || !opaqueBackground} onChange={(e) => setBackgroundColor(e.target.value)} className="h-9 font-mono" />
             </div>
           </div>
 
           <div className="mt-5">
             <label className="mb-2 block text-sm font-medium text-text-secondary">{t("merge.alignment")}</label>
-            <div className="grid w-44 grid-cols-3 gap-1.5 rounded-xl border border-border-subtle bg-surface-overlay p-2">
+            <div role="group" aria-label={t("merge.alignment")} className="grid w-44 grid-cols-3 gap-1.5 rounded-xl border border-border-subtle bg-surface-overlay p-2">
               {[7, 8, 9, 4, 5, 6, 1, 2, 3].map((value) => (
                 <button
                   key={value}

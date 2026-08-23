@@ -54,6 +54,9 @@ jobs:
     needs: prepare-release
     strategy:
       fail-fast: false
+      # tauri-action merges latest.json by read/delete/re-upload; serialize the
+      # three platform jobs so one matrix leg cannot overwrite another leg.
+      max-parallel: 1
       matrix:
         include:
           - platform: macos-15
@@ -94,6 +97,8 @@ jobs:
       - run: npm ci
       - name: Build pinned macOS sidecars
         if: runner.os == 'macOS'
+        env:
+          FINALSUB_SIDECAR_SIGNING_IDENTITY: "-"
         run: |
           bash scripts/build-whisper-sidecars-macos.sh
           npm run binaries:universal

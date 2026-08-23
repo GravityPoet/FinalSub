@@ -425,6 +425,7 @@ export default function SettingsPage() {
           <div className="px-5">
             <SettingRow label={t("settings.langLabel")} description={t("settings.langDesc")}>
               <Select
+                aria-label={t("settings.langLabel")}
                 value={settings.language_auto ? "system" : settings.language}
                 onChange={(e) => {
                   const value = e.target.value;
@@ -533,6 +534,7 @@ export default function SettingsPage() {
           <div className="px-5">
             <SettingRow label={t("settings.concurrentLabel")} description={t("settings.concurrentDesc")}>
               <Input
+                aria-label={t("settings.concurrentLabel")}
                 type="number"
                 min={1}
                 max={8}
@@ -584,6 +586,7 @@ export default function SettingsPage() {
             </SettingRow>
             <SettingRow label={t("settings.outputLabel")} description={t("settings.outputDesc")}>
               <Select
+                aria-label={t("settings.outputLabel")}
                 value={settings.subtitle_output_format}
                 onChange={(e) => update("subtitle_output_format", e.target.value)}
                 className="w-28 h-9 py-1"
@@ -600,6 +603,7 @@ export default function SettingsPage() {
               description={t("settings.defaultTargetLanguageDesc")}
             >
               <Input
+                aria-label={t("settings.defaultTargetLanguageLabel")}
                 type="text"
                 value={settings.target_language}
                 onChange={(e) => update("target_language", e.target.value)}
@@ -620,6 +624,7 @@ export default function SettingsPage() {
                 <label className="relative inline-flex cursor-pointer items-center">
                   <input
                     type="checkbox"
+                    aria-label={t("settings.useVadLabel")}
                     checked={settings.use_vad}
                     onChange={(e) => update("use_vad", e.target.checked)}
                     className="peer sr-only"
@@ -631,6 +636,7 @@ export default function SettingsPage() {
                 <div className="divide-y divide-border-subtle">
                   <SettingRow label={t("settings.vadThresholdLabel")} description={t("settings.vadThresholdDesc")}>
                     <Input
+                      aria-label={t("settings.vadThresholdLabel")}
                       type="number"
                       min={0}
                       max={1}
@@ -642,6 +648,7 @@ export default function SettingsPage() {
                   </SettingRow>
                   <SettingRow label={t("settings.vadMinSpeechLabel")} description={t("settings.vadMinSpeechDesc")}>
                     <Input
+                      aria-label={t("settings.vadMinSpeechLabel")}
                       type="number"
                       min={0}
                       value={settings.vad_min_speech_duration_ms}
@@ -651,6 +658,7 @@ export default function SettingsPage() {
                   </SettingRow>
                   <SettingRow label={t("settings.vadMinSilenceLabel")} description={t("settings.vadMinSilenceDesc")}>
                     <Input
+                      aria-label={t("settings.vadMinSilenceLabel")}
                       type="number"
                       min={0}
                       value={settings.vad_min_silence_duration_ms}
@@ -660,6 +668,7 @@ export default function SettingsPage() {
                   </SettingRow>
                   <SettingRow label={t("settings.vadMaxSpeechLabel")} description={t("settings.vadMaxSpeechDesc")}>
                     <Input
+                      aria-label={t("settings.vadMaxSpeechLabel")}
                       type="number"
                       min={0}
                       max={3600}
@@ -670,6 +679,7 @@ export default function SettingsPage() {
                   </SettingRow>
                   <SettingRow label={t("settings.vadSpeechPadLabel")} description={t("settings.vadSpeechPadDesc")}>
                     <Input
+                      aria-label={t("settings.vadSpeechPadLabel")}
                       type="number"
                       min={0}
                       max={5000}
@@ -680,6 +690,7 @@ export default function SettingsPage() {
                   </SettingRow>
                   <SettingRow label={t("settings.vadSamplesOverlapLabel")} description={t("settings.vadSamplesOverlapDesc")}>
                     <Input
+                      aria-label={t("settings.vadSamplesOverlapLabel")}
                       type="number"
                       min={0}
                       max={1}
@@ -702,6 +713,7 @@ export default function SettingsPage() {
               <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
+                  aria-label={t("settings.updateLabel")}
                   checked={settings.check_update_on_startup}
                   onChange={(e) => update("check_update_on_startup", e.target.checked)}
                   className="peer sr-only"
@@ -736,6 +748,7 @@ export default function SettingsPage() {
               <label className="relative inline-flex cursor-pointer items-center">
                 <input
                   type="checkbox"
+                  aria-label={t("settings.telemetryLabel")}
                   checked={settings.enable_telemetry}
                   onChange={(e) => update("enable_telemetry", e.target.checked)}
                   className="peer sr-only"
@@ -755,6 +768,7 @@ export default function SettingsPage() {
             >
               <div className="flex w-full flex-col gap-2 sm:w-[400px] sm:flex-row">
                 <Input
+                  aria-label={t("settings.whisperCommandLabel")}
                   type="text"
                   placeholder={t("settings.whisperCommandPlaceholder")}
                   value={settings.whisper_command}
@@ -783,6 +797,7 @@ export default function SettingsPage() {
               description={t("settings.maxContextDesc")}
             >
               <Input
+                aria-label={t("settings.maxContextLabel")}
                 type="number"
                 min={0}
                 max={65536}
@@ -860,14 +875,19 @@ export default function SettingsPage() {
       </div>
 
       {confirmReset && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-reset-title"
+        >
           <Card className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default animate-fade-in">
             <div className="mb-5 flex items-start gap-3">
               <div className="rounded-full bg-danger/10 p-2 text-danger">
                 <AlertCircle size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-text-primary text-h2 mb-1.5">{t("settings.resetConfirmTitle")}</h3>
+                <h3 id="settings-reset-title" className="font-semibold text-text-primary text-h2 mb-1.5">{t("settings.resetConfirmTitle")}</h3>
                 <p className="text-sm leading-6 text-text-secondary">
                   {t("settings.resetConfirmDesc")}
                 </p>
@@ -896,14 +916,19 @@ export default function SettingsPage() {
       )}
 
       {cryptoDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-crypto-title"
+        >
           <Card className="w-full max-w-md border border-border-default bg-surface-overlay p-6 shadow-lg">
             <div className="mb-5 flex items-start gap-3">
               <div className="rounded-full bg-brand/10 p-2 text-brand">
                 <LockKeyhole size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="mb-1.5 font-display text-h2 font-semibold text-text-primary">
+                <h3 id="settings-crypto-title" className="mb-1.5 font-display text-h2 font-semibold text-text-primary">
                   {cryptoDialog.mode === "export"
                     ? t("settings.encryptedExportTitle")
                     : t("settings.encryptedImportTitle")}
