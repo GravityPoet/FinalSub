@@ -1008,6 +1008,27 @@ Release tag must be exactly v1.0.11
 
 - 发布前先按渠道路由预检命令，不把自签名 Tag 送入正式 Release 预检；在 SOP 中明确两条 Tag 形态和各自的 Secret/验收边界。
 
+### 2026-08-24：打包清理临时 App 后直接安装缺少 source app
+
+现象：
+
+```text
+Command: npm run install:local:universal
+Missing source app: /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app
+```
+
+原因：
+
+- `package:release:self-signed:macos` 成功后按设计调用清理器，删除 `target/.../bundle/macos/FinalSub.app`，只保留已验收的 DMG 与发布目录；`install:local:universal` 的默认输入则正是这个临时 bundle 路径。
+
+处理：
+
+- 先运行 `npm run build:universal:bundle` 重新生成并验签临时 `.app`，再运行 `npm run install:local:universal`；安装脚本随后完成固定路径覆盖、回滚 ZIP、启动与唯一索引验收。
+
+防复发：
+
+- 自签名 DMG 打包与本机覆盖安装是两个独立阶段；打包脚本结束后不得假设临时 `.app` 仍存在。需要安装验收时，显式重建 `build:universal:bundle`，或从已验收 DMG 提取到受控临时输入。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：
