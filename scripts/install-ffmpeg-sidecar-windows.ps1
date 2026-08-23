@@ -1,9 +1,9 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$archiveName = "ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip"
-$archiveSha256 = "5fda1017c1d21a7b3de35bee7c8b94fe2da15484094448a1ab77c55a4def098a"
-$archiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-14-13-19/$archiveName"
+$archiveName = "ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip"
+$archiveSha256 = "6d55c3fdb589f75d69d75fb59b90b3ca620e5e7a5c534dc78434310c8288cc6d"
+$archiveUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-14-13-16/$archiveName"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $binDir = Join-Path $repoRoot "src-tauri/binaries"
 $destination = Join-Path $binDir "ffmpeg-x86_64-pc-windows-msvc.exe"

@@ -534,6 +534,7 @@ export default function TasksPage() {
                       <button
                         type="button"
                         title={t("tasks.viewLogs")}
+                        aria-label={t("tasks.viewLogs")}
                         onClick={() => setActiveLogTaskId(task.id)}
                         className="rounded-lg p-2 text-text-secondary transition hover:bg-surface-overlay hover:text-text-primary"
                       >
@@ -545,6 +546,7 @@ export default function TasksPage() {
                         <button
                           type="button"
                           title={t("tasks.pauseTask")}
+                          aria-label={t("tasks.pauseTask")}
                           onClick={() => handlePause(task.id)}
                           className="rounded-lg p-2 text-warning transition hover:bg-warning/10"
                         >
@@ -557,6 +559,7 @@ export default function TasksPage() {
                         <button
                           type="button"
                           title={t("tasks.resumeTask")}
+                          aria-label={t("tasks.resumeTask")}
                           onClick={() => handleResume(task.id)}
                           className="rounded-lg p-2 text-success transition hover:bg-success/10"
                         >
@@ -569,6 +572,7 @@ export default function TasksPage() {
                         <button
                           type="button"
                           title={t("tasks.retryTask")}
+                          aria-label={t("tasks.retryTask")}
                           onClick={() => handleRetry(task.id)}
                           className="rounded-lg p-2 text-brand transition hover:bg-brand-subtle"
                         >
@@ -581,6 +585,7 @@ export default function TasksPage() {
                         <button
                           type="button"
                           title={t("tasks.cancelTask")}
+                          aria-label={t("tasks.cancelTask")}
                           onClick={() => handleCancel(task.id)}
                           className="rounded-lg p-2 text-danger transition hover:bg-danger/10"
                         >
@@ -591,6 +596,7 @@ export default function TasksPage() {
                         <button
                           type="button"
                           title={t("tasks.deleteTaskRecord")}
+                          aria-label={t("tasks.deleteTaskRecord")}
                           onClick={() => openDeleteDialog([task.id])}
                           disabled={deletingTaskIds.includes(task.id)}
                           className="rounded-lg p-2 text-text-tertiary transition hover:bg-danger/10 hover:text-danger disabled:opacity-45"

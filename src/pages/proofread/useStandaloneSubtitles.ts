@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { readTextFilePath, writeTextFilePath } from '../../lib/tauri';
 import {
   detectSubtitleFormat,
   parseSubtitleEntries,
@@ -108,7 +108,7 @@ export const useStandaloneSubtitles = (
 
   // 读取字幕文件并解析为 Subtitle 格式
   const readSubtitleFile = async (filePath: string): Promise<Subtitle[]> => {
-    const content = await readTextFile(filePath);
+    const content = await readTextFilePath(filePath);
     const format = detectSubtitleFormat(filePath);
     const entries = parseSubtitleEntries(content, format);
     if (content.trim() !== '' && entries.length === 0) {
@@ -136,7 +136,7 @@ export const useStandaloneSubtitles = (
   ): Promise<PlayerSubtitleTrack | null> => {
     if (!srtPath) return null;
     try {
-      const content = await readTextFile(srtPath);
+      const content = await readTextFilePath(srtPath);
       const fromFormat = detectSubtitleFormat(srtPath);
       const vttContent = convertSubtitleContent(content, fromFormat, 'vtt');
       const vttBlob = new Blob([vttContent], { type: 'text/vtt' });
@@ -318,7 +318,7 @@ export const useStandaloneSubtitles = (
           text: buildText(sub, 'source'),
         }));
         const content = serializeSubtitleEntries(entries, format);
-        await writeTextFile(config.sourceSubtitlePath, content);
+        await writeTextFilePath(config.sourceSubtitlePath, content);
       }
 
       // 保存翻译字幕
@@ -330,7 +330,7 @@ export const useStandaloneSubtitles = (
           text: buildText(sub, 'onlyTranslate'),
         }));
         const content = serializeSubtitleEntries(entries, format);
-        await writeTextFile(config.targetSubtitlePath, content);
+        await writeTextFilePath(config.targetSubtitlePath, content);
       }
 
       // 保存到目标翻译文件（如双语）
@@ -343,7 +343,7 @@ export const useStandaloneSubtitles = (
           text: buildText(sub, contentType),
         }));
         const content = serializeSubtitleEntries(entries, format);
-        await writeTextFile(config.finalTargetSubtitlePath, content);
+        await writeTextFilePath(config.finalTargetSubtitlePath, content);
       }
 
       setIsDirty(false);
@@ -389,7 +389,7 @@ export const useStandaloneSubtitles = (
       }));
 
       const content = serializeSubtitleEntries(entries, format);
-      await writeTextFile(filePath, content);
+      await writeTextFilePath(filePath, content);
       return true;
     } catch (error) {
       console.error('Error exporting subtitles:', error);

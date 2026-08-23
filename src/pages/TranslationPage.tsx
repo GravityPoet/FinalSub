@@ -850,8 +850,9 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.requires_endpoint && (
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.endpointUrl")}</label>
+                <label htmlFor="translation-endpoint" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.endpointUrl")}</label>
                 <Input
+                  id="translation-endpoint"
                   type="text"
                   value={apiUrl}
                   onChange={(e) => {
@@ -870,9 +871,10 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.requires_model && (
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.modelName")}</label>
+                <label htmlFor="translation-model" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.modelName")}</label>
                 <div className="flex gap-2">
                   <Input
+                    id="translation-model"
                     type="text"
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
@@ -941,8 +943,9 @@ export default function TranslationPage() {
                   </span>
                 </label>
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.systemPrompt")}</label>
+                  <label htmlFor="translation-system-prompt" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.systemPrompt")}</label>
                   <Textarea
+                    id="translation-system-prompt"
                     value={systemPrompt}
                     onChange={(event) => setSystemPrompt(event.target.value)}
                     rows={5}
@@ -951,8 +954,9 @@ export default function TranslationPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.userPrompt")}</label>
+                  <label htmlFor="translation-user-prompt" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.userPrompt")}</label>
                   <Textarea
+                    id="translation-user-prompt"
                     value={userPrompt}
                     onChange={(event) => setUserPrompt(event.target.value)}
                     rows={5}
@@ -978,10 +982,11 @@ export default function TranslationPage() {
                   </div>
                   <div className="grid gap-4 lg:grid-cols-2">
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                      <label htmlFor="translation-structured-output" className="mb-1.5 block text-sm font-medium text-text-secondary">
                         {t("translation.structuredOutput")}
                       </label>
                       <Select
+                        id="translation-structured-output"
                         value={structuredOutput}
                         onChange={(event) => setStructuredOutput(event.target.value as TranslationStructuredOutputMode)}
                       >
@@ -1017,8 +1022,9 @@ export default function TranslationPage() {
                   </div>
                   <div className="grid gap-4 lg:grid-cols-2">
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.customHeaders")}</label>
+                      <label htmlFor="translation-custom-headers" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.customHeaders")}</label>
                       <Textarea
+                        id="translation-custom-headers"
                         value={customHeadersJson}
                         onChange={(event) => {
                           setCustomHeadersJson(event.target.value);
@@ -1031,8 +1037,9 @@ export default function TranslationPage() {
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.customBody")}</label>
+                      <label htmlFor="translation-custom-body" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.customBody")}</label>
                       <Textarea
+                        id="translation-custom-body"
                         value={customBodyJson}
                         onChange={(event) => {
                           setCustomBodyJson(event.target.value);
@@ -1052,14 +1059,15 @@ export default function TranslationPage() {
             
             {selectedProviderInfo.secret_fields?.map((field) => (
               <div key={field}>
-                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+                <label htmlFor={`translation-secret-${field}`} className="mb-1.5 block text-sm font-medium text-text-secondary">
                   {secretFieldLabel(field)}
                 </label>
                 <div className="relative">
                   <Input
-                     type={visibleSecrets[field] ? "text" : "password"}
-                     value={secrets[field] || ""}
-                     onChange={(e) => handleSecretChange(field, e.target.value)}
+                    id={`translation-secret-${field}`}
+                    type={visibleSecrets[field] ? "text" : "password"}
+                    value={secrets[field] || ""}
+                    onChange={(e) => handleSecretChange(field, e.target.value)}
                      onFocus={() => handleSecretFocus(field)}
                      placeholder={t("translation.keyPlaceholder")}
                      className="pr-10"
@@ -1241,16 +1249,18 @@ export default function TranslationPage() {
 
                   <div className="grid gap-4 lg:grid-cols-2">
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.glossaryName")}</label>
+                      <label htmlFor="translation-glossary-name" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.glossaryName")}</label>
                       <Input
+                        id="translation-glossary-name"
                         value={activeGlossary.name}
                         maxLength={120}
                         onChange={(event) => updateActiveGlossary({ name: event.target.value })}
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.glossaryDescription")}</label>
+                      <label htmlFor="translation-glossary-description" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.glossaryDescription")}</label>
                       <Input
+                        id="translation-glossary-description"
                         value={activeGlossary.description}
                         maxLength={500}
                         onChange={(event) => updateActiveGlossary({ description: event.target.value })}
@@ -1387,8 +1397,9 @@ export default function TranslationPage() {
           <p className="mb-5 text-sm leading-6 text-text-tertiary">{t("translation.runtimeDesc")}</p>
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.batchSize")}</label>
+              <label htmlFor="translation-batch-size" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.batchSize")}</label>
               <Input
+                id="translation-batch-size"
                 type="number"
                 min={1}
                 max={50}
@@ -1397,8 +1408,9 @@ export default function TranslationPage() {
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.concurrency")}</label>
+              <label htmlFor="translation-concurrency" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.concurrency")}</label>
               <Input
+                id="translation-concurrency"
                 type="number"
                 min={1}
                 max={8}
@@ -1407,8 +1419,9 @@ export default function TranslationPage() {
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.requestInterval")}</label>
+              <label htmlFor="translation-request-interval" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.requestInterval")}</label>
               <Input
+                id="translation-request-interval"
                 type="number"
                 min={0}
                 max={60000}
@@ -1432,7 +1445,9 @@ export default function TranslationPage() {
               />
               <span className="font-semibold text-text-primary">{t("translation.enableProxy")}</span>
             </label>
+            <label htmlFor="translation-proxy-url" className="sr-only">{t("translation.proxyUrl")}</label>
             <Input
+              id="translation-proxy-url"
               className="mt-3"
               type="url"
               disabled={!settings.proxy_enabled}
@@ -1470,10 +1485,11 @@ export default function TranslationPage() {
         <h3 className="mb-5 font-display text-h2 font-semibold text-text-primary">{t("translation.testTitle")}</h3>
 
         <div className="mb-4">
-          <label className="mb-1.5 block text-sm font-medium text-text-secondary">
+          <label htmlFor="translation-test-text" className="mb-1.5 block text-sm font-medium text-text-secondary">
             {t("translation.testLabel")}
           </label>
           <Textarea
+            id="translation-test-text"
             value={testText}
             onChange={(e) => setTestText(e.target.value)}
             rows={3}

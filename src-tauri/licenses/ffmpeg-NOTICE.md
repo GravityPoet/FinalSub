@@ -36,12 +36,12 @@ lipo-combines them into `ffmpeg-universal-apple-darwin`, bundled as `Contents/Ma
 - SHA-256 values are of the **executable** (matching the values published by osxexperts.net), not the zip.
 
 Windows/Linux release jobs install GPL builds from the immutable BtbN release
-`autobuild-2026-07-14-13-19` and reject any build reporting `--enable-nonfree`.
+`autobuild-2026-08-14-13-16` and reject any build reporting `--enable-nonfree`.
 
 | Target | Archive | Pinned archive SHA-256 |
 |---|---|---|
-| x86_64 Linux | `ffmpeg-n7.1.5-2-g998de74adf-linux64-gpl-7.1.tar.xz` | `7383b376bce89252b00b1196e1d384cbd62c5597e7d42bb6de9a42adcd4fd55b` |
-| x86_64 Windows | `ffmpeg-n7.1.5-2-g998de74adf-win64-gpl-7.1.zip` | `5fda1017c1d21a7b3de35bee7c8b94fe2da15484094448a1ab77c55a4def098a` |
+| x86_64 Linux | `ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz` | `24c50bdf392cc3273f89b28f2ffad43d07037f90460be7ebd1a089f9bc16c0b4` |
+| x86_64 Windows | `ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip` | `6d55c3fdb589f75d69d75fb59b90b3ca620e5e7a5c534dc78434310c8288cc6d` |
 
 The preparation scripts additionally require the `subtitles` filter and `libx264` encoder before
 placing the executable under its Tauri target-triple filename.
@@ -82,8 +82,8 @@ The complete corresponding source for the bundled FFmpeg and its GPL components 
 - FFmpeg 7.1.1 (arm64): `https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz` (git tag `n7.1.1`)
 - FFmpeg 8.0 (x86_64): `https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz` (git tag `n8.0`)
   at `https://git.ffmpeg.org/ffmpeg.git`
-- Windows/Linux: FFmpeg revision `n7.1.5-2-g998de74adf` plus the build scripts and dependency
-  recipes published by BtbN/FFmpeg-Builds for release `autobuild-2026-07-14-13-19`.
+- Windows/Linux: FFmpeg revision `n7.1.5-12-g1fdbca85aa` plus the build scripts and dependency
+  recipes published by BtbN/FFmpeg-Builds for release `autobuild-2026-08-14-13-16`.
 - GPL dependencies' sources (x264, x265, etc.): see the FFmpeg `LICENSE.md` and each library's
   upstream project listed in the build configuration above.
 

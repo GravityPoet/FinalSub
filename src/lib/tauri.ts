@@ -19,8 +19,11 @@ import {
   revealItemInDir as tauriRevealItemInDir,
 } from "@tauri-apps/plugin-opener";
 import {
+  exists as tauriExists,
+  readDir as tauriReadDir,
   readTextFile as tauriReadTextFile,
   writeTextFile as tauriWriteTextFile,
+  type DirEntry,
 } from "@tauri-apps/plugin-fs";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 
@@ -108,6 +111,9 @@ export async function readTextFilePath(path: string): Promise<string> {
   if (isTauriRuntime()) {
     return tauriReadTextFile(path);
   }
+  if (import.meta.env.DEV) {
+    return mockReadTextFile(path);
+  }
   throw new Error(`Browser mock cannot read local file: ${path}`);
 }
 
@@ -120,6 +126,76 @@ export async function writeTextFilePath(path: string, contents: string): Promise
     return;
   }
   throw new Error(`Tauri file runtime is unavailable for path: ${path}`);
+}
+
+export async function readDirPath(path: string): Promise<DirEntry[]> {
+  if (isTauriRuntime()) {
+    return tauriReadDir(path);
+  }
+  if (import.meta.env.DEV) {
+    return mockReadDir(path);
+  }
+  throw new Error(`Tauri file runtime is unavailable for directory: ${path}`);
+}
+
+export async function existsPath(path: string): Promise<boolean> {
+  if (isTauriRuntime()) {
+    return tauriExists(path);
+  }
+  if (import.meta.env.DEV) {
+    return mockPathExists(path);
+  }
+  throw new Error(`Tauri file runtime is unavailable for path: ${path}`);
+}
+
+const MOCK_SUBTITLE_CONTENT = [
+  "1",
+  "00:00:00,000 --> 00:00:02,000",
+  "FinalSub browser fixture",
+  "本地优先字幕工作流",
+  "",
+  "2",
+  "00:00:02,000 --> 00:00:04,000",
+  "Translation and proofreading are ready.",
+  "翻译与校对已准备就绪。",
+  "",
+].join("\n");
+
+function normalizedMockPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function mockReadDir(path: string): DirEntry[] {
+  const directory = normalizedMockPath(path);
+  const file = (name: string): DirEntry => ({
+    name,
+    isDirectory: false,
+    isFile: true,
+    isSymlink: false,
+  });
+
+  if (directory.endsWith("/Movies")) return [file("demo.mp4")];
+  if (directory.endsWith("/Subtitles")) {
+    return [file("demo.srt"), file("demo.en.srt"), file("demo.zh.srt")];
+  }
+  if (directory.endsWith("/FinalSub")) {
+    return [file("demo.mp4"), file("demo.srt")];
+  }
+  return [];
+}
+
+function mockReadTextFile(path: string): string {
+  const extension = normalizedMockPath(path).split(".").pop()?.toLowerCase();
+  if (["srt", "vtt", "ass", "ssa", "lrc"].includes(extension ?? "")) {
+    return MOCK_SUBTITLE_CONTENT;
+  }
+  return "";
+}
+
+function mockPathExists(path: string): boolean {
+  const normalized = normalizedMockPath(path);
+  if (mockReadDir(normalized).length > 0) return true;
+  return /\.(srt|vtt|ass|ssa|lrc|mp4|mov|mkv|wav|mp3)$/i.test(normalized);
 }
 
 export async function openPath(path: string, openWith?: string): Promise<void> {
@@ -2179,7 +2255,7 @@ function savedSettingsFromArgs(args: InvokeArgs): Settings {
 function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
   switch (command) {
     case "get_app_info":
-      return { name: "FinalSub", version: "1.0.10" } satisfies AppInfo;
+      return { name: "FinalSub", version: "1.0.11" } satisfies AppInfo;
     case "get_settings":
       return currentMockSettings();
     case "get_storage_layout":

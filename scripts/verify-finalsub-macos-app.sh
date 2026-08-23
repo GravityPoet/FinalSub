@@ -44,6 +44,12 @@ if [[ "$actual_bundle_id" != "$BUNDLE_ID" ]]; then
   exit 1
 fi
 
+native_execution="$(/usr/bin/plutil -extract LSRequiresNativeExecution raw "$APP_PATH/Contents/Info.plist")"
+if [[ "$native_execution" != "true" ]]; then
+  echo "FinalSub must require native execution on Apple silicon." >&2
+  exit 1
+fi
+
 actual_requirement="$(/usr/bin/codesign -d -r- "$APP_PATH" 2>&1 \
   | /usr/bin/sed -n 's/^designated => //p' \
   | /usr/bin/head -n 1)"
@@ -69,5 +75,6 @@ if ! printf '%s\n' "$signature_details" | /usr/bin/grep -E 'flags=.*\(runtime\)'
 fi
 
 printf 'bundle_id=%s\n' "$actual_bundle_id"
+printf 'native_execution=%s\n' "$native_execution"
 printf 'identity=%s\n' "$IDENTITY"
 printf 'requirement=%s\n' "$actual_requirement"

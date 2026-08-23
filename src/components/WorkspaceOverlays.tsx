@@ -108,6 +108,7 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
                 <input
                   ref={inputRef}
                   value={query}
+                  aria-label={t("command.search")}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder={t("command.search")}
                   className="command-search-input h-full min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm text-text-primary shadow-none outline-none ring-0 placeholder:text-text-tertiary focus:border-0 focus:outline-none focus:ring-0"
