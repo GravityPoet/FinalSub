@@ -888,6 +888,8 @@ dist/assets/index-*.js 571.43 kB (gzip 174.46 kB)
 处理与防复发：
 
 - 本次作为非阻断性能信号记录，不为自签名分发改动扩大到无关代码拆分；若主入口继续增长或启动性能实测回退，再单独做依赖分析与共享 chunk 拆分，不通过调高阈值隐藏告警。
+- 2026-08-23 已按该条件处理：Vite 8 / Rolldown 通过 `build.rolldownOptions.output.codeSplitting` 把 `node_modules` 归入 vendor 分组，并把分组上限设为 450 KiB。主入口从 578.73 kB 降至 318.93 kB，生产构建不再报警；浏览器 10 个路由和“文件夹导入 → 校对 → 修改 → 保存”均为 0 error / 0 warning，最终 Universal Tauri 包已重新构建并原子安装。
+- 仅设置 `maxSize` 而没有 `groups` 会输出 `Manual code splitting options (maxSize) specified without groups`，配置不会生效；不得通过提高 `chunkSizeWarningLimit` 隐藏告警。
 
 ### 2026-07-22：提交隐私钩子把公开发布文档误判为个人数据
 
@@ -924,6 +926,30 @@ quarantined DMG verification exited 137 after deep signature checks
 
 - 完整二进制能力检查只在未隔离的同 SHA-256 发布资产上运行；隔离副本只检查 quarantine 属性、DMG 完整性、签名和 Gatekeeper 拒绝，放行前禁止启动主程序或任一 sidecar。
 - 若隔离测试中断，必须核对临时挂载并用 `diskutil eject` 精确弹出，再清理受控的 `finalsub-self-signed-verify.*` 临时目录。
+
+### 2026-08-23：GitHub API 短暂 TLS 握手超时
+
+现象：
+
+```text
+gh auth status
+X Timeout trying to log in to github.com account GravityPoet (keyring)
+
+gh repo view
+Post "https://api.github.com/graphql": net/http: TLS handshake timeout
+```
+
+原因：
+
+- 同一时刻的仓库状态和 SSH 配置没有漂移；随后 `curl https://api.github.com` 返回 HTTP 200，`git ls-remote origin HEAD` 也成功，证明不是 Token、仓库权限或 SSH Key 损坏，而是一次短暂 API TLS 连接故障。
+
+处理：
+
+- 分别检查 GitHub API HTTPS、主页 HTTPS、SSH `ls-remote`、DNS 与代理环境；边界恢复后只重试一次原始 `gh auth status` / `gh repo view`，鉴权与推送均成功。
+
+防复发：
+
+- `gh` 出现 TLS timeout 时先区分 API、SSH、DNS 与代理边界，不立即重新登录、替换 Token 或修改 remote；只有独立连接检查恢复后才重试原命令。
 
 ### 追加模板
 
