@@ -25,4 +25,5 @@ dist-ssr
 src-tauri/binaries/.bak/
 src-tauri/binaries/ffmpeg-universal-apple-darwin
 src-tauri/binaries/whisper-cli-universal-apple-darwin
-
+src-tauri/signing/*.key
+src-tauri/signing/*.key.pub

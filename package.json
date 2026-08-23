@@ -1,7 +1,7 @@
 {
   "name": "finalsub",
   "private": true,
-  "version": "1.0.11",
+  "version": "1.0.12",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -25,10 +25,15 @@
     "binaries:universal": "bash scripts/prepare-macos-universal-sidecars.sh",
     "pretauri:build:universal": "npm run prepare:tauri-target",
     "tauri:build:universal": "tauri build --target universal-apple-darwin",
+    "pretauri:build:universal:updater": "npm run prepare:tauri-target",
+    "tauri:build:universal:updater": "tauri build --target universal-apple-darwin --config src-tauri/target/tauri.release.generated.conf.json",
     "verify:bundle:universal": "bash scripts/verify-finalsub-macos-app.sh \"$PWD/src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app\"",
     "build:universal:bundle": "npm run binaries:universal && npm run tauri:build:universal && npm run verify:bundle:universal",
+    "build:universal:updater:bundle": "npm run binaries:universal && npm run prepare:release-updater-config && npm run tauri:build:universal:updater && npm run verify:bundle:universal",
     "build:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle",
+    "build:universal:updater": "bash scripts/build-macos-universal-updater.sh",
     "package:release:self-signed:macos": "bash scripts/package-macos-self-signed-release.sh",
+    "release:self-signed:macos": "bash scripts/publish-macos-self-signed-release.sh",
     "install:local:universal": "bash scripts/install-finalsub-local-macos.sh",
     "build:install:universal": "bash scripts/run-with-finalsub-bundle-cleanup-macos.sh build:universal:bundle install:local:universal",
     "build:validation:macos-intel": "npm run tauri -- build --target x86_64-apple-darwin --bundles app --config src-tauri/tauri.validation.conf.json && bash scripts/verify-macos-intel-app.sh \"$PWD/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/FinalSub.app\""

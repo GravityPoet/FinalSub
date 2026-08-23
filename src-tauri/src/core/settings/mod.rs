@@ -216,7 +216,7 @@ impl Default for Settings {
             vad_max_speech_duration_s: 0,
             vad_speech_pad_ms: 30,
             vad_samples_overlap: 0.1,
-            check_update_on_startup: false,
+            check_update_on_startup: true,
             use_custom_temp_dir: false,
             custom_temp_dir: String::new(),
             whisper_command: String::new(),
@@ -419,22 +419,68 @@ pub(crate) fn system_default_settings() -> Settings {
     }
 }
 
+fn signed_updater_is_configured() -> bool {
+    option_env!("FINALSUB_UPDATER_PUBLIC_KEY").is_some_and(|key| !key.trim().is_empty())
+}
+
+fn updater_default_marker_path(app_config_dir: &Path) -> PathBuf {
+    app_config_dir.join("signed-updater-default-v1")
+}
+
+fn write_updater_default_marker(app_config_dir: &Path) -> Result<()> {
+    let marker = updater_default_marker_path(app_config_dir);
+    let temporary = marker.with_extension("tmp");
+    std::fs::write(&temporary, b"enabled\n")?;
+    std::fs::rename(temporary, marker)?;
+    Ok(())
+}
+
+fn apply_signed_updater_default(
+    settings: &mut Settings,
+    signed_updater_configured: bool,
+    marker_exists: bool,
+) -> bool {
+    if signed_updater_configured && !marker_exists && !settings.check_update_on_startup {
+        settings.check_update_on_startup = true;
+        return true;
+    }
+    false
+}
+
 pub fn load_settings(app_config_dir: &Path) -> Result<Settings> {
     let path = settings_path(app_config_dir);
     if !path.exists() {
         let s = system_default_settings();
         save_settings(app_config_dir, &s)?;
+        if signed_updater_is_configured() {
+            write_updater_default_marker(app_config_dir)?;
+        }
         return Ok(s);
     }
     let content = std::fs::read_to_string(&path)?;
     let mut settings: Settings = serde_json::from_str(&content)?;
     validate_settings(&settings)?;
+    let mut changed = false;
+    let signed_updater_configured = signed_updater_is_configured();
+    let updater_marker_exists = updater_default_marker_path(app_config_dir).exists();
+    let enable_updater_by_default = signed_updater_configured && !updater_marker_exists;
+    changed |= apply_signed_updater_default(
+        &mut settings,
+        signed_updater_configured,
+        updater_marker_exists,
+    );
     if settings.language_auto {
         let detected = detect_os_language();
         if settings.language != detected {
             settings.language = detected;
-            save_settings(app_config_dir, &settings)?;
+            changed = true;
         }
+    }
+    if changed {
+        save_settings(app_config_dir, &settings)?;
+    }
+    if enable_updater_by_default {
+        write_updater_default_marker(app_config_dir)?;
     }
     Ok(settings)
 }
@@ -862,6 +908,26 @@ mod tests {
         assert_eq!(loaded.subtitle_output_format, "srt");
         assert!(loaded.use_vad);
         assert!(loaded.cloud_asr_profiles.is_empty());
+    }
+
+    #[test]
+    fn signed_updater_is_enabled_once_for_existing_users() {
+        let mut settings = Settings {
+            check_update_on_startup: false,
+            ..Settings::default()
+        };
+        assert!(apply_signed_updater_default(&mut settings, true, false));
+        assert!(settings.check_update_on_startup);
+    }
+
+    #[test]
+    fn signed_updater_respects_later_user_opt_out() {
+        let mut settings = Settings {
+            check_update_on_startup: false,
+            ..Settings::default()
+        };
+        assert!(!apply_signed_updater_default(&mut settings, true, true));
+        assert!(!settings.check_update_on_startup);
     }
 
     #[test]

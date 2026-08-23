@@ -305,12 +305,23 @@ export default function HomePage() {
 
   const loadWorkspace = useCallback(async () => {
     setBootstrapState("loading");
+    const settingsPromise = getSettings();
+    void settingsPromise
+      .then((settings) => {
+        if (!settings.check_update_on_startup) return;
+        return checkForUpdate().then((update) => {
+          if (update) setUpdateInfo(update);
+        });
+      })
+      .catch((updateError) => {
+        console.error("Failed to check for updates:", updateError);
+      });
     try {
       const [loadedModels, loadedTtsModels, loadedTtsProviders, settings, loadedRecipes, loadedStylePresets] = await Promise.all([
         listAsrModels(),
         listTtsModels(),
         listTtsProviders(),
-        getSettings(),
+        settingsPromise,
         listTaskRecipes().catch((recipeError) => {
           console.error("Failed to load task recipes:", recipeError);
           return [];
@@ -370,14 +381,6 @@ export default function HomePage() {
         setDubbingVoice(readyCloudTts.voice);
       }
       setBootstrapState("ready");
-
-      if (settings.check_update_on_startup) {
-        checkForUpdate()
-          .then((update) => {
-            if (update) setUpdateInfo(update);
-          })
-          .catch(console.error);
-      }
     } catch (workspaceError) {
       console.error("Failed to initialize workspace:", workspaceError);
       setBootstrapState("error");

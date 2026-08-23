@@ -17,7 +17,7 @@
 - 当前本机完整验收平台：macOS 12+ Universal（arm64 + x86_64）
 - 当前默认 macOS 构建脚本：`npm run build:universal`
 - `src-tauri/tauri.conf.json` 本地使用稳定自签名身份 `ChordVox Local Code Signing`；仓库只钉扎公开证书，私钥留在本机钥匙串。该身份用于本机覆盖安装与权限连续性验证，不等同于 Apple Developer ID、Gatekeeper 信任或 notarization；GitHub Actions 中的正式 `APPLE_SIGNING_IDENTITY` 会覆盖本地身份。
-- Apple Developer ID 尚未具备期间，允许发布明确标记的 macOS 自签名客户包：只能从持有固定私钥的本机构建，必须使用 `v<version>-self-signed.<revision>` 标签、双语安装说明、DMG SHA-256、公开签名清单和手动更新模式。该渠道不安装根证书、不关闭 Gatekeeper、不声称经过 Apple 审核。
+- Apple Developer ID 尚未具备期间，允许发布明确标记的 macOS 自签名客户包：只能从持有固定签名材料的本机构建，必须使用 `v<version>-self-signed.<revision>` 标签、双语安装说明、DMG SHA-256、公开签名清单和 Tauri 签名更新包。该渠道不安装根证书、不关闭 Gatekeeper、不声称经过 Apple 审核。
 - Windows/Linux 已有固定来源与摘要的 sidecar 脚本及 GitHub Actions 构建矩阵；`3427b3a` 已在 GitHub-hosted Windows/Linux runner 完成原生凭据、构建、安装、启动和卸载验证，Windows 还完整通过临时 PFX 导入、Tauri Authenticode、RFC 3161 时间戳与同证书验签。
 - Windows Release job 会临时导入 Base64 PFX、自动派生 SHA-1 thumbprint，以 SHA-256 + RFC 3161 时间戳交给 Tauri 签名，并在发布前要求安装包、主程序、FFmpeg 与 Whisper sidecar 均由同一证书签名且带时间戳；PFX 文件会在导入后立即物理删除，runner 证书在 `always()` 清理步骤移除。
 - Release workflow 会在创建 Draft 前验证 Tag、三处版本号和 11 项全平台必需 Secret；macOS 构建后还会挂载最终 DMG，独立验证 Developer ID、Team ID、secure timestamp、Hardened Runtime、stapled notarization ticket、Gatekeeper 与 Universal sidecar。
@@ -38,24 +38,24 @@
 - Release assets 必须同时上传安装包和对应 `.sha256`。
 - 公开创建 tag、推送 tag、创建 GitHub Release、上传资产属于 `[P1]`，执行前必须有回滚路径和熔断条件。
 - 本地打包、校验和生成、草稿说明属于低风险本地写入，不推送、不公开分发。
-- 自签名渠道的本地包使用 `npm run package:release:self-signed:macos`；它要求 clean `main` 与 upstream 精确同步、远端标签和 Release 无碰撞，主动移除 updater/Apple 生产环境变量，再构建、挂载、验签并生成发布目录。公开推送 Tag 与 Release 仍是 `[P1]`。
+- 自签名渠道的本地包使用 `npm run package:release:self-signed:macos`；它要求 clean `main` 与 upstream 精确同步、远端标签和 Release 无碰撞，使用仓库公开 updater 公钥与本机私钥生成签名更新包，同时移除 Apple 生产环境变量，再构建、挂载、验签并生成发布目录。完整发布入口为 `npm run release:self-signed:macos`。公开推送 Tag 与 Release 仍是 `[P1]`。
 - Release notes 来源：`CHANGELOG`、上一个 tag 以来的 commits，或本文件记录的验收摘要；禁止声称未执行过的测试通过。
 
 ## 签名应用内更新
 
-正式 release 使用 Tauri 官方 updater 产物；本地普通构建不生成 updater 包，也不要求持有生产私钥：
+正式 release 与 1.0.12 起的 macOS 自签名渠道都使用 Tauri 官方 updater；本地普通开发构建不生成 updater 包：
 
 - `src-tauri/tauri.release.conf.json` 是不含密钥的 release 模板，启用 `bundle.createUpdaterArtifacts`；workflow 调用 `npm run prepare:release-updater-config`，从 Secret 原子生成 git-ignored 的 `src-tauri/target/tauri.release.generated.conf.json` 后再叠加构建。
-- `FINALSUB_UPDATER_PUBLIC_KEY` 在编译时写入正式分发二进制；没有该值的构建只提供 Releases 页面手动下载。
+- updater 公钥固定在 `src-tauri/signing/finalsub-updater-root-v1.pub` 并编译进分发二进制；公钥不是 Secret。无公钥的普通开发构建只提供 Releases 页面手动下载。
 - `TAURI_SIGNING_PRIVATE_KEY` 只存在于 GitHub Actions secret，用于签名 updater 包；如私钥带密码，再配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 - release job 必须生成并合并 `latest.json`，同时包含 `darwin-aarch64-app`、`darwin-x86_64-app`、`linux-x86_64-appimage`、`linux-x86_64-deb` 与 `windows-x86_64-nsis`。任一 URL 或签名缺失，publish job 必须停止，draft 不得公开。
 - 应用只从固定 HTTPS 地址读取 `latest.json`，并只接受 `api.github.com/repos/GravityPoet/FinalSub/releases/assets/<数字 ID>` 下载地址；正式构建存在公钥时，来源或签名检查失败都不会降级到未签名安装。
 - 临时生成的 release 配置权限为 `0600`，位于已忽略的 `src-tauri/target`；不得上传为 artifact 或打印其内容。
 - 安装前后端会阻止运行中/排队中的字幕任务、模型下载/安装和视频合成；下载期间若出现新任务，安装前会再次检查并停止替换。
 
-自签名 macOS 渠道不内置生产 updater 公钥，也不生成 updater artifact 或 `latest.json`。应用仍可读取 GitHub Releases 的公开版本信息，但只能引导客户手动下载新 DMG；不得把手动下载包装成“应用内自动更新”。
+自签名 macOS 渠道从 1.0.12 起生成 Universal `.app.tar.gz`、`.sig` 与 `latest.json`。`latest.json` 的 Apple silicon 与 Intel 项都指向同一个 Universal 更新包；应用下载后必须通过 updater 签名验证才允许替换并重启。
 
-生产 updater 根密钥属于 `[P0]` 信任根：一旦旧版本内置公钥，丢失对应私钥会让这些安装无法接受后续更新。生成或更换生产根密钥前，必须先确认离线加密备份、恢复演练、双人保管边界和旧版本迁移方案；不得把测试私钥、空公钥或私钥内容写入仓库。
+本项目为个人开发阶段，updater 密钥按一次性本机发布凭据管理，不引入双人保管、企业审批或多层保险库。私钥固定存放于 `~/Library/Application Support/GravityPoet/ReleaseKeys/FinalSub/updater/root-v1/`，权限必须为 `0600`，由 FileVault 与加密 Time Machine 保护；仓库只保存公钥。私钥丢失不会破坏现有 App，恢复方式是手动发布一个内置新公钥的桥接版，因此不得把可恢复的密钥初始化误分级为不可逆 P0。
 
 workflow 所需 updater secrets：
 
@@ -238,7 +238,7 @@ EOF
 - 本机钥匙串中已有与仓库公开证书指纹一致的固定私钥；缺失时只允许从加密备份恢复，禁止临时生成替代证书。
 - 精确 commit 的 `Quality` 已完成且成功。
 - 目标 `v<version>-self-signed.<revision>` 在本地、origin 与 GitHub Releases 均不存在。
-- 不配置生产 updater 根密钥，不注入 Apple Developer ID、公证或 Windows 生产签名 Secret。
+- 本机存在 mode `0600` 的 updater 私钥，且与仓库 `src-tauri/signing/finalsub-updater-root-v1.pub` 匹配；不注入 Apple Developer ID、公证或 Windows 生产签名 Secret。
 
 Tag / Release 碰撞检查必须使用当前 `gh release list` 实际支持的字段；Release URL 只在目标存在时通过 `gh release view` 读取：
 
@@ -265,6 +265,9 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
 src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/
 ├── FinalSub-<version>-macos-universal-self-signed.dmg
 ├── FinalSub-<version>-macos-universal-self-signed.dmg.sha256
+├── FinalSub-<version>-macos-universal-self-signed.app.tar.gz
+├── FinalSub-<version>-macos-universal-self-signed.app.tar.gz.sha256
+├── FinalSub-<version>-macos-universal-self-signed.app.tar.gz.sig
 ├── INSTALL-macOS-self-signed.md
 ├── RELEASE_NOTES.md
 └── release-manifest.json
@@ -275,24 +278,18 @@ src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/
 - DMG 与内部 App 都由固定自签名证书签名，证书 SHA-256 必须为 `C21E979BC792E4453F46B65B900702C4A3C9A00967273376193A678742B2944F`。
 - `codesign --verify --deep --strict`、Bundle ID、版本、Hardened Runtime、主程序/FFmpeg/Whisper Universal 架构、macOS 12 最低版本、FFmpeg 字幕与 x264 能力、许可证及 DMG 完整性全部通过。
 - `stapler validate` 必须确认没有 notarization ticket；`spctl` 必须表现为自签名来源的 Gatekeeper 拒绝，防止把渠道标错为正式包。
-- `release-manifest.json` 必须记录 commit、资产大小/SHA-256、证书指纹、designated requirement、`notarized: false` 与手动更新模式，不包含私钥或环境变量值。
+- updater archive 必须通过根公钥签名验证；解包后的 App 必须再次通过固定自签名证书、designated requirement、Bundle ID、版本和 Universal 架构验收。
+- `release-manifest.json` 必须记录 commit、DMG 与 updater archive 的大小/SHA-256、证书指纹、designated requirement、`notarized: false` 与应用内签名更新模式，不包含私钥或环境变量值。
 - 客户说明必须明确：只从官方 Release 下载、先校验 SHA-256、通过“系统设置 → 隐私与安全性 → 仍要打开”完成每个新下载版本可能需要的首次确认；不安装根证书、不关闭 Gatekeeper、不提供 `xattr` 绕过命令。
 
-发布命令只在目标 commit、Tag、版本和资产已经由上述门禁确定后执行：
+发布命令只在目标 commit、Tag、版本和资产已经由上述门禁确定后执行。脚本会创建 Draft、上传 updater 资产、按 GitHub asset ID 生成 `latest.json`、重新下载验收后再公开：
 
 ```bash
 cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
-  git tag -a v<version>-self-signed.<revision> -m "FinalSub <version> macOS self-signed"
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
-  git push origin v<version>-self-signed.<revision>
-cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && \
-  gh release create v<version>-self-signed.<revision> \
-    src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/* \
-    --title "FinalSub <version> · macOS Universal Self-Signed" \
-    --notes-file src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/RELEASE_NOTES.md
+  FINALSUB_SELF_SIGNED_REVISION=<revision> npm run release:self-signed:macos
 ```
 
-发布后必须下载公开 DMG 与 `.sha256` 到 `mktemp -d` 目录，执行 checksum 和 `verify-macos-self-signed-package.sh`，再核对 Release 为非 Draft、资产名/大小完整、正式 Developer ID workflow 没有被该 Tag 触发。当前自签名版本可以作为 GitHub latest 供手动更新检查发现，但不能包含 `latest.json` 或 Tauri updater 签名包。
+发布后必须匿名下载公开 DMG、updater archive、`.sig`、校验文件与 `latest.json`，执行 checksum、代码签名与 updater 签名验证，再核对 Release 为非 Draft、两个 Darwin 架构键都指向同一个官方 Universal asset API URL，并确认正式 Developer ID workflow 没有被该 Tag 触发。
 
 回滚：公开前删除本地 Tag；推送 Tag 后但 Release 创建前，可删除远端 Tag（可由同 commit 重新创建）；Release 已公开后优先把 Release 改为 Draft 并保留资产/校验取证，不直接覆盖同名资产。若发现证书、SHA 或 commit 不符，立即 Draft 化并停止下载指引。
 
@@ -1028,6 +1025,60 @@ Missing source app: /Users/moonlitpoet/Tools/AI-tools/FinalSub/src-tauri/target/
 防复发：
 
 - 自签名 DMG 打包与本机覆盖安装是两个独立阶段；打包脚本结束后不得假设临时 `.app` 仍存在。需要安装验收时，显式重建 `build:universal:bundle`，或从已验收 DMG 提取到受控临时输入。
+
+### 2026-08-24：个人项目的 updater 密钥管理被过度设计
+
+现象：
+
+```text
+为一次 Tauri updater 初始化追加双人保管、iCloud 保险库、两份离线介质、恢复仪式和额外批准。
+```
+
+原因：
+
+- 把可通过手动桥接版恢复的 updater 私钥误判成永久不可逆变更，没有按 FinalSub 的个人开发与创业初期阶段校准工程负担。
+- 密钥管理讨论偏离了用户真正需要的“应用内安装并重启”。
+
+处理与防复发：
+
+- 收敛为一次生成、公钥入仓、私钥 mode `0600` 留在 FileVault 本机并由加密 Time Machine 备份；不要求客户或开发者参与企业级密钥仪式。
+- 只有真实不可逆数据或权限损失才按 P0 门控；存在手动桥接恢复路径的 updater 根初始化不再升级为 P0。
+- 产品与交付讨论先证明用户路径，再决定与当前阶段相称的后台工程约束。
+
+### 2026-08-24：无密码 updater 私钥在非交互签名时仍尝试读取提示
+
+现象：
+
+```text
+incorrect updater private key password: Device not configured (os error 6)
+```
+
+原因：
+
+- `tauri signer generate --ci` 生成了无密码私钥，但后续非交互 `sign` 在未提供密码变量时仍尝试从终端读取密码。
+
+处理与防复发：
+
+- 构建和签名环境显式设置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""`；正向签名验证与篡改负向验证均通过。
+- 无密码本机密钥必须同时满足 FileVault、目录 `0700`、文件 `0600` 和仓库外存放，不能因“无密码”放宽文件边界。
+
+### 2026-08-24：zsh 的 `path` 特殊变量破坏命令查找
+
+现象：
+
+```text
+zsh: command not found: sed
+zsh: command not found: head
+```
+
+原因：
+
+- 只读目录探测循环把局部变量命名为 `path`；zsh 将 `path` 与 `PATH` 绑定，赋值后覆盖了命令搜索路径。
+
+处理与防复发：
+
+- 变量改名为 `target_path`，必要的系统命令使用绝对路径；重跑后目标存在性与 iCloud 配额探测成功。
+- zsh 自动化不得把普通标量命名为 `path`。
 
 ### 追加模板
 

@@ -1666,7 +1666,7 @@ function createMockSettings(): Settings {
     vad_max_speech_duration_s: 0,
     vad_speech_pad_ms: 30,
     vad_samples_overlap: 0.1,
-    check_update_on_startup: false,
+    check_update_on_startup: true,
     use_custom_temp_dir: false,
     custom_temp_dir: "",
     whisper_command: "",
@@ -2255,7 +2255,7 @@ function savedSettingsFromArgs(args: InvokeArgs): Settings {
 function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
   switch (command) {
     case "get_app_info":
-      return { name: "FinalSub", version: "1.0.11" } satisfies AppInfo;
+      return { name: "FinalSub", version: "1.0.12" } satisfies AppInfo;
     case "get_settings":
       return currentMockSettings();
     case "get_storage_layout":

@@ -7,6 +7,12 @@ import { windowsSigningConfigFromEnvironment } from "./windows-signing-config.mj
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "..");
 const templatePath = resolve(repositoryRoot, "src-tauri", "tauri.release.conf.json");
+const publicKeyPath = resolve(
+  repositoryRoot,
+  "src-tauri",
+  "signing",
+  "finalsub-updater-root-v1.pub",
+);
 const outputPath = resolve(
   repositoryRoot,
   "src-tauri",
@@ -16,7 +22,14 @@ const outputPath = resolve(
 const manifestUrl =
   "https://github.com/GravityPoet/FinalSub/releases/latest/download/latest.json";
 
-const publicKey = process.env.FINALSUB_UPDATER_PUBLIC_KEY?.trim() ?? "";
+const trackedPublicKey = (await readFile(publicKeyPath, "utf8")).trim();
+const suppliedPublicKey = process.env.FINALSUB_UPDATER_PUBLIC_KEY?.trim();
+if (suppliedPublicKey && suppliedPublicKey !== trackedPublicKey) {
+  throw new Error(
+    "FINALSUB_UPDATER_PUBLIC_KEY does not match the tracked FinalSub updater root",
+  );
+}
+const publicKey = trackedPublicKey;
 if (publicKey.length < 40 || publicKey.length > 4096) {
   throw new Error("FINALSUB_UPDATER_PUBLIC_KEY is missing or has an invalid length");
 }

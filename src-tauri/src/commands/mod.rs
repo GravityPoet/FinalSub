@@ -4245,6 +4245,7 @@ fn update_blocker<'a>(
     mut tasks: impl Iterator<Item = &'a Task>,
     task_operation_active: bool,
     model_operation_active: bool,
+    tts_model_operation_active: bool,
     tts_operation_active: bool,
     burn_operation_active: bool,
 ) -> Option<&'static str> {
@@ -4252,7 +4253,7 @@ fn update_blocker<'a>(
         || tasks.any(|task| matches!(task.status, TaskStatus::Pending | TaskStatus::Running))
     {
         Some("有字幕任务正在处理或等待，请先暂停或完成任务后再安装更新。")
-    } else if model_operation_active {
+    } else if model_operation_active || tts_model_operation_active {
         Some("有模型正在下载或安装，请完成或取消模型操作后再安装更新。")
     } else if tts_operation_active {
         Some("有配音正在生成、对齐或导出，请完成或取消配音操作后再安装更新。")
@@ -4267,12 +4268,14 @@ async fn ensure_update_can_start(state: &AppState) -> std::result::Result<(), St
     let tasks = state.tasks.read().await;
     let task_controls = state.task_controls.read().await;
     let model_controls = state.model_controls.read().await;
+    let tts_model_controls = state.tts_model_controls.read().await;
     let tts_controls = state.tts_controls.read().await;
     let burn_controls = state.burn_controls.read().await;
     if let Some(reason) = update_blocker(
         tasks.values(),
         !task_controls.is_empty(),
         !model_controls.is_empty(),
+        !tts_model_controls.is_empty(),
         !tts_controls.is_empty(),
         !burn_controls.is_empty(),
     ) {
@@ -4354,12 +4357,14 @@ pub async fn download_and_install_update(
     let tasks = state.tasks.read().await;
     let task_controls = state.task_controls.read().await;
     let model_controls = state.model_controls.read().await;
+    let tts_model_controls = state.tts_model_controls.read().await;
     let tts_controls = state.tts_controls.read().await;
     let burn_controls = state.burn_controls.read().await;
     if let Some(reason) = update_blocker(
         tasks.values(),
         !task_controls.is_empty(),
         !model_controls.is_empty(),
+        !tts_model_controls.is_empty(),
         !tts_controls.is_empty(),
         !burn_controls.is_empty(),
     ) {
@@ -4375,6 +4380,7 @@ pub async fn download_and_install_update(
         .map_err(|e| format!("更新包安装失败：{e}"))?;
     drop(burn_controls);
     drop(tts_controls);
+    drop(tts_model_controls);
     drop(model_controls);
     drop(task_controls);
     drop(tasks);
@@ -5160,36 +5166,41 @@ mod tests {
 
         task.status = TaskStatus::Paused;
         assert_eq!(
-            update_blocker([&task].into_iter(), false, false, false, false),
+            update_blocker([&task].into_iter(), false, false, false, false, false),
             None
         );
 
         assert!(
-            update_blocker([&task].into_iter(), true, false, false, false)
+            update_blocker([&task].into_iter(), true, false, false, false, false)
                 .unwrap()
                 .contains("字幕任务")
         );
 
         task.status = TaskStatus::Running;
         assert!(
-            update_blocker([&task].into_iter(), false, false, false, false)
+            update_blocker([&task].into_iter(), false, false, false, false, false)
                 .unwrap()
                 .contains("字幕任务")
         );
 
         task.status = TaskStatus::Done;
         assert!(
-            update_blocker([&task].into_iter(), false, true, false, false)
+            update_blocker([&task].into_iter(), false, true, false, false, false)
                 .unwrap()
                 .contains("模型")
         );
         assert!(
-            update_blocker([&task].into_iter(), false, false, true, false)
+            update_blocker([&task].into_iter(), false, false, true, false, false)
+                .unwrap()
+                .contains("模型")
+        );
+        assert!(
+            update_blocker([&task].into_iter(), false, false, false, true, false)
                 .unwrap()
                 .contains("配音")
         );
         assert!(
-            update_blocker([&task].into_iter(), false, false, false, true)
+            update_blocker([&task].into_iter(), false, false, false, false, true)
                 .unwrap()
                 .contains("合成")
         );
