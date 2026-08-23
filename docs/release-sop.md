@@ -34,7 +34,7 @@
 
 - Tag 格式：`v<package.json version>`，例如 `v1.0.10`。
 - 无 Apple 证书的 macOS 临时渠道使用 `v<version>-self-signed.<revision>`，例如 `v1.0.10-self-signed.1`；该标签由正式 `release.yml` 明确排除，避免误触 Developer ID / 公证 / 多平台 updater 流程。自签名 Release 必须在标题、正文和资产名中写明 `self-signed`，不得覆盖同版本正式 Tag。
-- `npm run preflight:release -- <tag>` 必须在创建 Draft 前通过；缺 Secret、Tag/版本不一致、updater 公钥误填私钥、Apple Team ID 或 Windows 时间戳地址无效时，不得创建半成品 Release。
+- 正式 `v<version>` Release 在创建 Draft 前必须通过 `npm run preflight:release -- v<version>`；缺 Secret、Tag/版本不一致、updater 公钥误填私钥、Apple Team ID 或 Windows 时间戳地址无效时，不得创建半成品 Release。自签名 Tag 不是正式 Tag，不能把 `v<version>-self-signed.<revision>` 传给这个严格的正式渠道预检；自签名渠道使用 `npm run test:release-preflight` 的规则测试，加上自签名打包脚本的版本、身份、资产和清单验收。
 - Release assets 必须同时上传安装包和对应 `.sha256`。
 - 公开创建 tag、推送 tag、创建 GitHub Release、上传资产属于 `[P1]`，执行前必须有回滚路径和熔断条件。
 - 本地打包、校验和生成、草稿说明属于低风险本地写入，不推送、不公开分发。
@@ -986,6 +986,27 @@ SyntaxError: Unexpected end of JSON input
 防复发：
 
 - 为不同 `gh` 子命令分别使用其 `--json` 支持字段；写自动化前先以命令返回的字段列表或 `gh help` 核对，碰撞检查不请求 `url`。
+
+### 2026-08-24：正式 Release 预检拒绝自签名 Tag
+
+现象：
+
+```text
+Command: npm run preflight:release -- v1.0.11-self-signed.1
+Release tag must be exactly v1.0.11
+```
+
+原因：
+
+- `scripts/release-preflight.mjs` 是正式多平台 Release 的严格门禁，读取三处版本后把唯一允许的 Tag 固定为 `v${package.version}`；它还要求正式 updater、Apple、Windows Secret。自签名渠道有意使用不同 Tag 且不注入这些生产 Secret。
+
+处理：
+
+- 停止公开写入；自签名渠道改用 `npm run test:release-preflight`（规则测试）和 `npm run package:release:self-signed:macos`（真实版本/证书/资产/清单验收）。正式渠道仍只对 `v<version>` 运行 `npm run preflight:release -- v<version>`。
+
+防复发：
+
+- 发布前先按渠道路由预检命令，不把自签名 Tag 送入正式 Release 预检；在 SOP 中明确两条 Tag 形态和各自的 Secret/验收边界。
 
 ### 追加模板
 
