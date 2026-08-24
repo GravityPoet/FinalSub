@@ -1133,6 +1133,27 @@ write_stdin failed: Unknown process id
 - 先审计进程、产物、HEAD、远端 Tag 和 Release，确认没有任何外部发布写入；复用同一 commit 上已完成验收的本地产物完成发布后半段。
 - 长构建观察丢失后，必须先做状态审计再重跑，不能把观察器错误当成构建失败或盲目重复创建 Release。
 
+### 2026-08-24：Draft 发布阶段观察会话中断后的恢复
+
+现象：
+
+```text
+write_stdin failed: Unknown process id 12760
+```
+
+原因：
+
+- 发布脚本已经创建精确 Tag、Draft Release、9 个资产和 `latest.json`，但外部观察会话在公开 Release 切换前失效；无法把本地会话状态当作 GitHub 发布状态。
+
+处理：
+
+- 先读取 Tag peeled SHA、Draft Release、资产集合和公开 Release body；确认全部资产存在后，从 Draft 下载并验收 DMG、updater、校验和与 `latest.json`，再执行 `gh release edit <tag> --draft=false --latest`。
+- 公开后匿名下载 `latest.json`、DMG、`.sha256`、updater archive 和 `.sig`，重新完成校验和、代码签名、Universal 架构与 updater 签名验证。
+
+防复发：
+
+- 发布观察会话中断后禁止直接重跑创建/上传命令；先审计远端目标，按“缺哪一步补哪一步”恢复，避免重复 Tag、资产或 Release。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：
