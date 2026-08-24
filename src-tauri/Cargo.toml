@@ -1,6 +1,6 @@
 [package]
 name = "finalsubtauri"
-version = "1.0.12"
+version = "1.0.13"
 description = "FinalSub Tauri - Desktop subtitle tool powered by Tauri 2"
 authors = ["Evans"]
 edition = "2021"
