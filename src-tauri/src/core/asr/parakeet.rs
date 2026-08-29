@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::SystemTime;
@@ -125,6 +126,28 @@ pub fn default_uv_bin() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("uv"))
 }
 
+fn prepend_path(directory: &Path, inherited_path: Option<&OsStr>) -> Option<OsString> {
+    let mut paths = vec![directory.to_path_buf()];
+    if let Some(inherited_path) = inherited_path {
+        paths.extend(std::env::split_paths(inherited_path));
+    }
+    std::env::join_paths(paths).ok()
+}
+
+fn path_with_ffmpeg(ffmpeg_path: Option<&Path>) -> Option<OsString> {
+    let inherited_path = std::env::var_os("PATH");
+    let Some(ffmpeg_path) = ffmpeg_path else {
+        return inherited_path;
+    };
+    let Some(directory) = ffmpeg_path
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+    else {
+        return inherited_path;
+    };
+    prepend_path(directory, inherited_path.as_deref())
+}
+
 /// MLX backend that invokes the maintained `parakeet-mlx` package through uv.
 /// The model itself is always passed as a local snapshot, so a complete cache
 /// never triggers a Hugging Face model download.
@@ -132,14 +155,21 @@ pub struct ParakeetMlxEngine {
     uv_bin: PathBuf,
     transcribe_script: PathBuf,
     cache_root: PathBuf,
+    ffmpeg_path: Option<PathBuf>,
 }
 
 impl ParakeetMlxEngine {
-    pub fn new(uv_bin: PathBuf, transcribe_script: PathBuf, cache_root: PathBuf) -> Self {
+    pub fn new(
+        uv_bin: PathBuf,
+        transcribe_script: PathBuf,
+        cache_root: PathBuf,
+        ffmpeg_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             uv_bin,
             transcribe_script,
             cache_root,
+            ffmpeg_path,
         }
     }
 
@@ -195,6 +225,17 @@ impl AsrEngine for ParakeetMlxEngine {
                 "Parakeet MLX 转录脚本未找到：{}",
                 self.transcribe_script.display()
             )));
+        }
+        if self
+            .ffmpeg_path
+            .as_deref()
+            .is_some_and(|path| !path.is_file())
+            || (self.ffmpeg_path.is_none() && !command_available(Path::new("ffmpeg")))
+        {
+            return Err(FinalSubError::Validation(
+                "未找到 FFmpeg，Parakeet MLX 无法读取音频；请重新安装 FinalSub 以恢复内置 FFmpeg"
+                    .into(),
+            ));
         }
         if self
             .model_path(model)
@@ -282,6 +323,12 @@ impl AsrEngine for ParakeetMlxEngine {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(path) = path_with_ffmpeg(self.ffmpeg_path.as_deref()) {
+            // Finder-launched apps receive a minimal PATH. Keep the bundled
+            // sidecar ahead of it so parakeet_mlx.audio can resolve `ffmpeg`
+            // through shutil.which without requiring a Homebrew installation.
+            command.env("PATH", path);
+        }
 
         progress
             .send(ProgressUpdate {
@@ -396,6 +443,7 @@ impl ParakeetEngine {
         models_dir: PathBuf,
         mlx_script: Option<PathBuf>,
         vad_model_path: PathBuf,
+        ffmpeg_path: Option<PathBuf>,
     ) -> Self {
         let native_available =
             ParakeetNativeEngine::is_model_installed_at(&models_dir.join(PARAKEET_MODEL_ID));
@@ -406,6 +454,7 @@ impl ParakeetEngine {
                 mlx_script
                     .unwrap_or_else(|| PathBuf::from("resources/parakeet/parakeet_transcribe.py")),
                 models_dir,
+                ffmpeg_path,
             ));
         }
         Self::Native(ParakeetNativeEngine::new(models_dir, vad_model_path))
@@ -832,8 +881,30 @@ mod tests {
             temp.path().to_path_buf(),
             Some(script),
             temp.path().join("vad.onnx"),
+            None,
         );
         assert_eq!(engine.runtime_name(), "mlx");
+    }
+
+    #[test]
+    fn bundled_ffmpeg_directory_is_prepended_without_dropping_inherited_path() {
+        let inherited =
+            std::env::join_paths([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]).unwrap();
+        let augmented = prepend_path(
+            Path::new("/Applications/FinalSub.app/Contents/MacOS"),
+            Some(&inherited),
+        )
+        .unwrap();
+        let paths = std::env::split_paths(&augmented).collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/Applications/FinalSub.app/Contents/MacOS"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ]
+        );
     }
 
     #[test]
