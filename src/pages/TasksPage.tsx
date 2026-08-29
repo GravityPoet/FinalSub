@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import {
@@ -692,15 +693,20 @@ export default function TasksPage() {
       )}
 
       {/* Delete Confirmation Modal */}
-      {pendingDeleteTaskIds && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <Card className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default">
+      {pendingDeleteTaskIds && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="presentation">
+          <Card
+            className="w-full max-w-md bg-surface-overlay p-6 shadow-lg border border-border-default"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-task-title"
+          >
             <div className="mb-5 flex items-start gap-3">
               <div className="rounded-full bg-danger/10 p-2 text-danger">
                 <AlertCircle size={20} />
               </div>
               <div className="min-w-0">
-                <h3 className="font-semibold text-text-primary text-h2 mb-1.5">
+                <h3 id="delete-task-title" className="font-semibold text-text-primary text-h2 mb-1.5">
                   {t("tasks.deleteModalTitle")}
                 </h3>
                 <p className="text-sm leading-6 text-text-secondary">
@@ -740,17 +746,23 @@ export default function TasksPage() {
               </Button>
             </div>
           </Card>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Logs Modal */}
-      {activeLogTaskId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-surface-overlay rounded-2xl w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl border border-border-default overflow-hidden">
+      {activeLogTaskId && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="presentation">
+          <div
+            className="bg-surface-overlay rounded-2xl w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl border border-border-default overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-log-title"
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle bg-surface">
               <div className="min-w-0">
-                <h3 className="text-base font-bold text-text-primary truncate">
+                <h3 id="task-log-title" className="text-base font-bold text-text-primary truncate">
                   {t("tasks.modal.title")}
                 </h3>
                 <p className="text-[11px] text-text-tertiary font-mono truncate mt-0.5">
@@ -820,7 +832,8 @@ export default function TasksPage() {
               })()}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -2889,6 +2889,7 @@ pub async fn transcribe_parakeet(
         models_dir,
         crate::core::task_runner::parakeet_mlx_script_path(&app),
         crate::core::task_runner::sherpa_vad_model_path(&app)?,
+        resolve_sidecar(&app, "ffmpeg").ok(),
     );
     let model_ref = AsrModelRef {
         engine_id: "parakeet-mlx".into(),

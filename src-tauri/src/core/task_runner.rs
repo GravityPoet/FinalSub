@@ -706,6 +706,7 @@ async fn run_task_impl(
                         models_dir,
                         parakeet_mlx_script_path(app),
                         sherpa_vad_model_path(app)?,
+                        resolve_sidecar(app, "ffmpeg").ok(),
                     ))
                 }
                 "sensevoice" => {
