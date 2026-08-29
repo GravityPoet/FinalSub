@@ -1,6 +1,6 @@
 # FinalSub 功能与发布矩阵
 
-更新时间：2026-07-21
+更新时间：2026-08-30
 对照基线：SmartSub `dd38b8aecd8934b7218b8973131a88fd9826c208`（2026-07-20 当前上游 HEAD）与 FinalSub 当前主线的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
 
 状态定义：
@@ -41,7 +41,7 @@ FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 
 | 引擎 | 状态 | 说明 |
 |---|---:|---|
 | Whisper.cpp | 🟢 | CPU + Metal；arm64/x86_64/universal sidecar 的最低 macOS 均为 12.0；可复现构建脚本和边界检查已存在 |
-| Parakeet TDT 0.6B V2 | 🟣 | `sherpa-onnx 1.13.3` 运行于 FinalSub 自身二进制的私有 worker；Silero VAD 将长音频切为最长 55 秒片段，原生推理异常只终止当前 worker，不再带崩主界面；无 Python、uv 或首次运行安装，独立模型根目录可直接复用现有模型，应用下载仍保留断点续传与固定摘要校验 |
+| Parakeet TDT 0.6B V2 | 🟣 | Apple Silicon 且存在完整 Hugging Face MLX snapshot 时，优先通过 `uv` 调用 `parakeet-mlx` 并直接复用本地权重；无完整 MLX 缓存或非 Apple Silicon 时使用 `sherpa-onnx 1.13.3` 私有 worker 兜底。Native 路径保留 Silero VAD 长音频切分与 worker 崩溃隔离，应用下载仍保留断点续传与固定摘要校验 |
 | SenseVoice Small | 🟢 | Rust 原生推理、Silero VAD 长音频切分；官方 2025 int8 模型真实短 WAV E2E 已通过 |
 | Paraformer | 🟢 | Rust 原生推理、受管下载；官方模型真实短 WAV E2E 已通过 |
 | Qwen3-ASR | 🟢 | Rust 原生运行时、受管下载和完整 tokenizer 清单；官方 2026 int8 模型真实短 WAV E2E 已通过 |
@@ -89,7 +89,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 | 统一本地存储根目录 | 🟣 | ASR、TTS 与字幕预览临时目录统一由可选根目录派生；保留逐引擎/逐 TTS 外部目录覆盖优先级，设置页与模型页同时显示实际解析路径和“跟随根目录 / 单独覆盖 / 系统默认”来源；不自动搬移既有文件，现有 Parakeet 目录可直接复用 |
 | 本地 TTS 发现 | 🟢 | 有限深度扫描配置目录与 `~/Tools/Local-LLM`，按真实必需文件把 Kokoro/VITS/ZipVoice 标为 ready / incomplete / not-installed |
 | TTS 受管下载 | 🟢 | 固定目录清单；镜像 → 官方回退；`.part` 断点续传；主包/独立 vocoder 固定大小与 SHA-256；安全 tar 解包、staging + 原子替换、取消/删除边界均已接入；VITS 与 ZipVoice 官方 Release 布局真实夹具通过 |
-| 外部运行时依赖 | 🟢 | Parakeet/SenseVoice/Paraformer/Qwen/FireRed 均不需要 Python 或 uv |
+| 外部运行时依赖 | 🟢 | SenseVoice/Paraformer/Qwen/FireRed 与 Parakeet Native 路径不需要 Python 或 uv；Apple Silicon 的 Parakeet MLX 路径使用本机 `uv` 准备 Python 运行环境，但不重新下载已有权重缓存 |
 
 ## 4. 翻译
 
