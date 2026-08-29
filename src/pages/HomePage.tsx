@@ -431,8 +431,8 @@ export default function HomePage() {
     }).then((unlisten) => { stop = unlisten; });
 
     const onPaste = (event: ClipboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable='true']")) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.matches("input, textarea, [contenteditable='true']")) return;
       const paths = event.clipboardData?.getData("text/plain")
         .split(/\r?\n/)
         .map((value) => value.trim())
@@ -553,9 +553,10 @@ export default function HomePage() {
       const selectionKind = sourceInputKindForTaskType(taskType);
       const selected = await openDialog({
         multiple: true,
-        filters: selectionKind === "subtitle"
-          ? [{ name: t("home.subFile"), extensions: ["srt", "vtt", "ass", "lrc"] }]
-          : [{ name: t("home.mediaFile"), extensions: mediaExtensions }],
+        filters: [
+          { name: t("home.mediaFile"), extensions: mediaExtensions },
+          { name: t("home.subFile"), extensions: subtitleExtensions },
+        ],
       });
       const paths = typeof selected === "string" ? [selected] : selected;
       if (paths?.length) {
@@ -634,6 +635,12 @@ export default function HomePage() {
     requestAnimationFrame(() => {
       const target = document.getElementById(targetId);
       if (!target) return;
+      if (target instanceof HTMLDetailsElement) target.open = true;
+      let ancestor = target.parentElement;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
       target.focus({ preventScroll: true });
@@ -1052,6 +1059,7 @@ export default function HomePage() {
   };
 
   const activeTaskType = taskTypes.find((item) => item.value === taskType);
+  const activeTranslationMode = translationContentModes.find((item) => item.value === translationContentMode);
   const sourceLanguageLabel = sourceLanguageOptions.find((item) => item.value === sourceLanguage);
   const targetLanguageLabel = sourceLanguageOptions.find((item) => item.value === targetLanguage);
   const pipelineLanguage = taskType === "generate-only"
@@ -1067,6 +1075,11 @@ export default function HomePage() {
   const workspaceStatusLabel = workspaceStatus === "ready"
     ? t("home.readyStatus")
     : (workspaceStatus === "loading" ? t("home.loadingWorkspace") : t("home.workspaceNeedsAttention"));
+  const recognitionSummary = !taskNeedsAsr
+    ? (allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired"))
+    : (modelReady
+      ? (engineId === "cloud-asr" ? t("home.recognitionSummaryCloudReady") : t("home.recognitionSummaryReady"))
+      : t("home.recognitionSummaryNeedsSetup"));
   const compactActionBar = (
     <div className="liquid-control flex items-center gap-3 rounded-[1rem] border border-border-default px-3 py-2.5 shadow-lg backdrop-blur-xl">
       <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${taskReady ? "bg-success" : "bg-warning"}`} aria-hidden="true" />
@@ -1103,7 +1116,7 @@ export default function HomePage() {
             {t("home.newTask")}
           </h2>
           <p className="mt-1.5 max-w-2xl text-sm leading-6 text-text-secondary">
-            {taskType === "translate-only" ? t("home.sourceHintSubtitle") : t("home.sourceHintMedia")}
+            {t("home.quickStartHint")}
           </p>
         </div>
 
@@ -1179,59 +1192,32 @@ export default function HomePage() {
       <div className="grid items-start gap-5 min-[1100px]:grid-cols-[minmax(0,1fr)_19rem]">
         <div className="min-w-0 space-y-5">
           <Card className="p-5 sm:p-6">
-            <fieldset className="mb-5">
-              <legend className="mb-2.5 text-xs font-semibold text-text-tertiary">{t("home.taskType")}</legend>
-              <div className="grid gap-2 sm:grid-cols-3" role="radiogroup">
-                {taskTypes.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = taskType === item.value;
-                  return (
-                    <button
-                      key={item.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={isActive}
-                      tabIndex={isActive ? 0 : -1}
-                      onKeyDown={(event) => {
-                        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-                        event.preventDefault();
-                        const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-                        const currentIndex = taskTypes.findIndex(({ value }) => value === taskType);
-                        const nextIndex = (currentIndex + direction + taskTypes.length) % taskTypes.length;
-                        handleTaskTypeChange(taskTypes[nextIndex].value);
-                        const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
-                        requestAnimationFrame(() => radios?.[nextIndex]?.focus());
-                      }}
-                      onClick={() => handleTaskTypeChange(item.value)}
-                      data-testid={`task-type-${item.value}`}
-                      className={`flex min-h-14 items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-sm transition ${
-                        isActive
-                          ? "border-brand/35 bg-brand/10 text-text-primary"
-                          : "border-border-subtle bg-surface-overlay/30 text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
-                      }`}
-                    >
-                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${isActive ? "bg-brand text-white" : "bg-surface-overlay text-text-tertiary"}`}>
-                        <Icon size={15} />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block font-semibold text-text-primary">{t(item.labelKey)}</span>
-                        <span className="mt-0.5 hidden truncate text-[11px] text-text-tertiary lg:block">{t(item.descKey)}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+            <section className="mb-5 rounded-[1.15rem] border border-brand/15 bg-brand/[0.045] p-4 sm:p-5" aria-labelledby="task-goal-title">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.goalLabel")}</p>
+                  <h3 id="task-goal-title" className="mt-1 text-base font-bold text-text-primary">{t("home.goalTitle")}</h3>
+                  <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.goalHint")}</p>
+                </div>
+                <div className="w-full shrink-0 sm:w-[15rem]">
+                  <label htmlFor="task-goal" className="sr-only">{t("home.goalLabel")}</label>
+                  <Select id="task-goal" data-testid="task-goal" value={taskType} onChange={(event) => handleTaskTypeChange(event.target.value)}>
+                    {taskTypes.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}
+                  </Select>
+                </div>
               </div>
-            </fieldset>
+              {activeTaskType && <p className="mt-3 border-t border-brand/10 pt-3 text-xs leading-5 text-text-secondary">{t(activeTaskType.descKey)}</p>}
+            </section>
 
             <div className="min-w-0 space-y-4">
               <div className="min-w-0">
                 <div className="mb-5">
                   <span className="step-label">{t("home.sourceStep")}</span>
                   <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">
-                    {taskType === "translate-only" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")}
+                    {t("home.importTitle")}
                   </h3>
                   <p className="mt-1.5 text-sm leading-6 text-text-secondary">
-                    {taskType === "translate-only" ? t("home.sourceHintSubtitle") : t("home.sourceHintMedia")}
+                    {t("home.importHint")}
                   </p>
                 </div>
 
@@ -1272,14 +1258,14 @@ export default function HomePage() {
                           {t("home.pairSubtitles")}
                         </Button>
                       )}
-                      <Button type="button" onClick={handleSelectMedia} variant="secondary" size="sm">
+                      <Button type="button" onClick={handleSelectMedia} variant="primary" size="sm">
                         <FolderOpen size={14} />
                         {t("home.selectFile")}
                         <ChevronRight size={14} className="opacity-55" />
                       </Button>
-                      <Button type="button" onClick={handleSelectFolder} variant="secondary" size="sm">
+                      <Button type="button" onClick={handleSelectFolder} variant="ghost" size="sm">
                         <FolderTree size={14} />
-                        {t("home.selectFolder")}
+                        {t("home.importMore")}
                       </Button>
                     </div>
                   </div>
@@ -1436,7 +1422,7 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <details id="task-recognition-core" tabIndex={-1} className="core-picker group rounded-[1rem] border border-border-subtle bg-surface-overlay/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45">
+              {selectedPath && taskNeedsAsr && <details id="task-recognition-core" tabIndex={-1} className="core-picker group/recognition rounded-[1rem] border border-border-subtle bg-surface-overlay/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45">
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-5">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand">
                     {taskNeedsAsr
@@ -1445,19 +1431,14 @@ export default function HomePage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-text-tertiary">{t("home.coreStep")}</p>
-                    <p className="mt-0.5 truncate text-sm font-semibold text-text-primary">
-                      {taskNeedsAsr
-                        ? `${engineLabels[engineId] ?? engineId}${activeModel ? ` · ${activeModel.name}` : ""}`
-                        : (allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired"))}
+                    <p
+                      className="mt-0.5 truncate text-sm font-semibold text-text-primary"
+                      title={taskNeedsAsr ? `${engineLabels[engineId] ?? engineId}${activeModel ? ` · ${activeModel.name}` : ""}` : undefined}
+                    >
+                      {recognitionSummary}
                     </p>
                   </div>
-                  {taskNeedsAsr && activeModel && (
-                    <span className={`hidden items-center gap-1 text-xs font-semibold sm:inline-flex ${activeModel.status === "downloaded" || engineId === "custom-command" ? "text-success" : "text-warning"}`}>
-                      {activeModel.status === "downloaded" || engineId === "custom-command" ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
-                      {activeModel.status === "downloaded" || engineId === "custom-command" ? t("home.coreReady") : t("home.coreNeedsSetup")}
-                    </span>
-                  )}
-                  <ChevronDown size={16} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+                  <ChevronDown size={16} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/recognition:rotate-180" aria-hidden="true" />
                 </summary>
 
                 {taskNeedsAsr ? (
@@ -1517,9 +1498,9 @@ export default function HomePage() {
                     {allSelectedMediaPaired ? t("home.corePairedNotRequired") : t("home.coreNotRequired")}
                   </div>
                 )}
-              </details>
+              </details>}
 
-              {taskType !== "generate-only" && (
+              {selectedPath && taskType !== "generate-only" && (
                 <section
                   id="task-translation-options"
                   tabIndex={-1}
@@ -1545,7 +1526,7 @@ export default function HomePage() {
 
                   <div className="mt-4 grid gap-4 min-[1400px]:grid-cols-[minmax(12rem,0.36fr)_minmax(0,1fr)]">
                     <div>
-                      <label htmlFor="task-target-language" className="mb-2 block text-sm font-semibold text-text-primary">{t("home.targetLang")}</label>
+                      <label htmlFor="task-target-language" className="mb-2 block text-sm font-semibold text-text-primary">{t("home.translationSimpleHint")}</label>
                       <Select
                         id="task-target-language"
                         data-testid="task-target-language"
@@ -1558,66 +1539,78 @@ export default function HomePage() {
                       </Select>
                     </div>
 
-                    <fieldset>
-                      <legend className="mb-2 text-sm font-semibold text-text-primary">{t("home.subtitleContent")}</legend>
-                      <div className="grid grid-cols-[repeat(auto-fit,minmax(10.5rem,1fr))] gap-2.5" role="radiogroup">
-                        {translationContentModes.map((mode) => {
-                          const isActive = translationContentMode === mode.value;
-                          return (
-                            <button
-                              key={mode.value}
-                              type="button"
-                              role="radio"
-                              aria-checked={isActive}
-                              tabIndex={isActive ? 0 : -1}
-                              data-testid={`translation-content-${mode.value}`}
-                              onKeyDown={(event) => {
-                                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-                                event.preventDefault();
-                                const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-                                const currentIndex = translationContentModes.findIndex(({ value }) => value === translationContentMode);
-                                const nextIndex = (currentIndex + direction + translationContentModes.length) % translationContentModes.length;
-                                setTranslationContentMode(translationContentModes[nextIndex].value);
-                                const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
-                                requestAnimationFrame(() => radios?.[nextIndex]?.focus());
-                              }}
-                              onClick={() => setTranslationContentMode(mode.value)}
-                              className={`min-h-[4.75rem] rounded-[1rem] border px-3 py-2.5 text-left text-sm transition-all duration-200 ${
-                                isActive
-                                  ? "liquid-selected text-text-primary"
-                                  : "border-border-default bg-surface-overlay/35 text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
-                              }`}
-                            >
-                              <span className="block font-semibold">{t(mode.labelKey)}</span>
-                              <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t(mode.descKey)}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </fieldset>
+                    <details className="group/subtitle-mode rounded-[1rem] border border-border-subtle bg-surface-overlay/35">
+                      <summary className="flex cursor-pointer list-none items-center gap-3 px-3.5 py-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35">
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-semibold text-text-primary">{t("home.subtitleModeSummary")}</span>
+                          <span className="mt-0.5 block truncate text-xs text-text-tertiary">{activeTranslationMode ? t(activeTranslationMode.labelKey) : t("home.subtitleContentTargetOnly")}</span>
+                        </span>
+                        <ChevronDown size={15} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/subtitle-mode:rotate-180" aria-hidden="true" />
+                      </summary>
+                      <fieldset className="border-t border-border-subtle px-3.5 py-3.5">
+                        <legend className="sr-only">{t("home.subtitleContent")}</legend>
+                        <div className="grid gap-2" role="radiogroup">
+                          {translationContentModes.map((mode) => {
+                            const isActive = translationContentMode === mode.value;
+                            return (
+                              <button
+                                key={mode.value}
+                                type="button"
+                                role="radio"
+                                aria-checked={isActive}
+                                tabIndex={isActive ? 0 : -1}
+                                data-testid={`translation-content-${mode.value}`}
+                                onKeyDown={(event) => {
+                                  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+                                  event.preventDefault();
+                                  const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+                                  const currentIndex = translationContentModes.findIndex(({ value }) => value === translationContentMode);
+                                  const nextIndex = (currentIndex + direction + translationContentModes.length) % translationContentModes.length;
+                                  setTranslationContentMode(translationContentModes[nextIndex].value);
+                                  const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
+                                  requestAnimationFrame(() => radios?.[nextIndex]?.focus());
+                                }}
+                                onClick={() => setTranslationContentMode(mode.value)}
+                                className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all duration-200 ${
+                                  isActive
+                                    ? "liquid-selected text-text-primary"
+                                    : "border-border-default bg-surface-overlay/25 text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
+                                }`}
+                              >
+                                <span className="font-semibold">{t(mode.labelKey)}</span>
+                                <span className="hidden text-xs text-text-tertiary sm:block">{t(mode.descKey)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </fieldset>
+                    </details>
                   </div>
                 </section>
               )}
             </div>
 
             {mediaMetadata && selectedPaths.length === 1 && (
-              <div className="mt-5 border-t border-border-subtle pt-4">
-                <p className="mb-3 text-xs font-bold uppercase tracking-[0.12em] text-text-tertiary">{t("home.mediaInfo")}</p>
-                <div className="grid gap-x-6 gap-y-2 text-xs text-text-secondary sm:grid-cols-2 lg:grid-cols-3">
-                  <div>{t("home.miDuration")}: <span className="font-medium text-text-primary">{mediaMetadata.duration_string}</span></div>
-                  {mediaMetadata.width > 0 && <div>{t("home.miResolution")}: <span className="font-medium text-text-primary">{mediaMetadata.width}×{mediaMetadata.height}</span></div>}
-                  {mediaMetadata.fps > 0 && <div>{t("home.miFps")}: <span className="font-medium text-text-primary">{mediaMetadata.fps.toFixed(2)} fps</span></div>}
-                  {mediaMetadata.codec !== "unknown" && <div>{t("home.miVideoCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.codec}</span></div>}
-                  {mediaMetadata.audio_codec && <div>{t("home.miAudioCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_codec}</span></div>}
-                  {mediaMetadata.audio_sample_rate && (
-                    <div className={mediaMetadata.audio_sample_rate !== 16000 ? "font-semibold text-warning" : ""}>
-                      {t("home.miSampleRate")}: {mediaMetadata.audio_sample_rate} Hz
-                    </div>
-                  )}
-                  {mediaMetadata.audio_channels && <div>{t("home.miChannels")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_channels} ch</span></div>}
-                  <div>{t("home.miAudioTracks")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_tracks}</span></div>
+              <details className="group/metadata mt-5 border-t border-border-subtle pt-4">
+                <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-bold uppercase tracking-[0.12em] text-text-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35">
+                  <span className="flex-1">{t("home.metadataSummary")}</span>
+                  <ChevronDown size={14} className="transition-transform duration-200 group-open/metadata:rotate-180" aria-hidden="true" />
+                </summary>
+                <div className="mt-3 grid gap-x-6 gap-y-2 text-xs text-text-secondary sm:grid-cols-2 lg:grid-cols-3">
+                    <div>{t("home.miDuration")}: <span className="font-medium text-text-primary">{mediaMetadata.duration_string}</span></div>
+                    {mediaMetadata.width > 0 && <div>{t("home.miResolution")}: <span className="font-medium text-text-primary">{mediaMetadata.width}×{mediaMetadata.height}</span></div>}
+                    {mediaMetadata.fps > 0 && <div>{t("home.miFps")}: <span className="font-medium text-text-primary">{mediaMetadata.fps.toFixed(2)} fps</span></div>}
+                    {mediaMetadata.codec !== "unknown" && <div>{t("home.miVideoCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.codec}</span></div>}
+                    {mediaMetadata.audio_codec && <div>{t("home.miAudioCodec")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_codec}</span></div>}
+                    {mediaMetadata.audio_sample_rate && (
+                      <div className={mediaMetadata.audio_sample_rate !== 16000 ? "font-semibold text-warning" : ""}>
+                        {t("home.miSampleRate")}: {mediaMetadata.audio_sample_rate} Hz
+                      </div>
+                    )}
+                    {mediaMetadata.audio_channels && <div>{t("home.miChannels")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_channels} ch</span></div>}
+                    <div>{t("home.miAudioTracks")}: <span className="font-medium text-text-primary">{mediaMetadata.audio_tracks}</span></div>
                 </div>
-              </div>
+              </details>
             )}
 
             {error && (
@@ -1634,12 +1627,24 @@ export default function HomePage() {
           )}
           <div className="sticky bottom-3 z-30 hidden sm:block min-[1100px]:!hidden">{compactActionBar}</div>
 
-          <Card className="p-5 sm:p-6">
-            <div className="mb-5">
-              <span className="step-label">{t("home.workflowStep")}</span>
-              <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.taskConfig")}</h3>
-              <p className="mt-1.5 text-sm leading-6 text-text-secondary">{t("home.workflowDesc")}</p>
-            </div>
+          <Card className="overflow-hidden p-0">
+            <details id="task-output-options" className="group/output">
+              <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-6 sm:py-5">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand"><Film size={18} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.advancedOptions")}</span>
+                  <span className="mt-1 block text-base font-bold text-text-primary">{t("home.outputTitle")}</span>
+                  <span className="mt-0.5 block truncate text-xs text-text-tertiary">{t("home.outputHint")}</span>
+                </span>
+                <span className="hidden rounded-full border border-border-subtle bg-surface-overlay px-2.5 py-1 text-xs font-semibold text-text-tertiary sm:block">{deliveryTargets}</span>
+                <ChevronDown size={17} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/output:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="border-t border-border-subtle p-5 sm:p-6">
+                <div className="mb-5">
+                  <span className="step-label">{t("home.workflowStep")}</span>
+                  <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.taskConfig")}</h3>
+                  <p className="mt-1.5 text-sm leading-6 text-text-secondary">{t("home.workflowDesc")}</p>
+                </div>
 
             <div className="space-y-5">
               <fieldset id="task-delivery-options" tabIndex={-1} className="rounded-[1.2rem] border border-brand/16 bg-brand/[0.045] p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45 sm:p-5" data-testid="delivery-targets">
@@ -1826,7 +1831,7 @@ export default function HomePage() {
 
               </fieldset>
 
-              <details className="group rounded-[1rem] border border-border-subtle bg-surface-overlay/25">
+              <details className="group/more-settings rounded-[1rem] border border-border-subtle bg-surface-overlay/25">
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-5">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface-overlay text-text-secondary">
                     <Sparkles size={16} />
@@ -1838,7 +1843,7 @@ export default function HomePage() {
                   <span className="hidden text-xs font-semibold text-text-tertiary md:block">
                     {outputFormat.toUpperCase()} · {maxSubtitleChars === 0 ? t("home.subtitleBreakSmart") : maxSubtitleChars === -1 ? t("home.subtitleBreakUnlimited") : maxSubtitleChars}
                   </span>
-                  <ChevronDown size={16} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+                  <ChevronDown size={16} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/more-settings:rotate-180" aria-hidden="true" />
                 </summary>
                 <div className="space-y-5 border-t border-border-subtle px-4 py-5 sm:px-5">
 
@@ -2049,6 +2054,8 @@ export default function HomePage() {
                 </div>
               )}
             </div>
+              </div>
+            </details>
           </Card>
         </div>
 
@@ -2064,12 +2071,6 @@ export default function HomePage() {
                   <dt className="text-xs text-text-tertiary">{t("home.summaryTask")}</dt>
                   <dd className="text-right text-sm font-semibold text-text-primary">{activeTaskType ? t(activeTaskType.labelKey) : taskType}</dd>
                 </div>
-                {taskNeedsAsr && (
-                  <div className="system-row">
-                    <dt className="text-xs text-text-tertiary">{t("home.summaryEngine")}</dt>
-                    <dd className="max-w-[11rem] truncate text-right font-mono text-xs font-semibold text-text-primary" title={engineId}>{engineId}</dd>
-                  </div>
-                )}
                 <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryLanguage")}</dt>
                   <dd className="text-right text-sm font-semibold text-text-primary">{pipelineLanguage}</dd>
@@ -2081,22 +2082,6 @@ export default function HomePage() {
                 <div className="system-row">
                   <dt className="text-xs text-text-tertiary">{t("home.summaryFormat")}</dt>
                   <dd className="font-mono text-sm font-bold uppercase text-brand">{outputFormat}</dd>
-                </div>
-                <div className="system-row">
-                  <dt className="text-xs text-text-tertiary">{t("home.summarySubtitleBreak")}</dt>
-                  <dd className="text-right text-sm font-semibold text-text-primary">
-                    {maxSubtitleChars === 0
-                      ? t("home.subtitleBreakSmart")
-                      : maxSubtitleChars === -1
-                        ? t("home.subtitleBreakUnlimited")
-                        : `${t("home.subtitleBreakCustom")} · ${maxSubtitleChars}`}
-                  </dd>
-                </div>
-                <div className="system-row">
-                  <dt className="text-xs text-text-tertiary">{t("home.summaryReview")}</dt>
-                  <dd className={`text-right text-sm font-semibold ${reviewRequired ? "text-warning" : "text-text-primary"}`}>
-                    {reviewRequired ? t("home.reviewGateOn") : t("home.reviewGateOff")}
-                  </dd>
                 </div>
               </dl>
 
@@ -2123,9 +2108,9 @@ export default function HomePage() {
                       ? t("home.batchCreateTask", { count: selectedPaths.length })
                       : t("home.createTask"))}
                 </Button>
-                {taskType !== "translate-only" && (
-                  <Button type="button" onClick={handlePreview} disabled={creating} variant="secondary" className="w-full">
-                    {t("home.createPreview")}
+                {taskType !== "translate-only" && selectedPath && (
+                  <Button type="button" onClick={handlePreview} disabled={creating} variant="ghost" className="w-full">
+                    {t("home.previewSecondary")}
                   </Button>
                 )}
               </div>
@@ -2136,7 +2121,7 @@ export default function HomePage() {
       </div>
 
       <Card className="overflow-hidden p-5 sm:p-6">
-        <details className="group">
+        <details className="group/recipes">
           <summary className="flex cursor-pointer list-none items-center gap-4 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-overlay text-brand"><Save size={17} /></span>
             <span className="min-w-0 flex-1">
@@ -2147,7 +2132,7 @@ export default function HomePage() {
             <span className="hidden rounded-full border border-border-subtle bg-surface-overlay px-2.5 py-1 text-xs font-semibold text-text-tertiary sm:block">
               {builtInRecipes.length + recipes.length}
             </span>
-            <ChevronDown size={17} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+            <ChevronDown size={17} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/recipes:rotate-180" aria-hidden="true" />
           </summary>
 
           <div className="mt-5 flex justify-end border-t border-border-subtle pt-5">

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { AudioLines, Bot, ChevronDown, Edit3, FileVideo2, Film, Languages, ListTodo, ScrollText, Settings, PanelLeftClose, PanelLeftOpen, UserRound, Wrench } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { ActivityCenter, CommandPalette, WorkspaceOverlays } from "./WorkspaceOverlays";
+import { Card } from "./ui/Card";
 import brandIcon from "../../src-tauri/icons/icon.png";
 
 const navItems = [
@@ -21,6 +23,8 @@ const navItems = [
 const primaryNavItems = [navItems[0], navItems[1], navItems[7]] as const;
 const toolNavItems = [navItems[6], navItems[8], navItems[2], navItems[3], navItems[4], navItems[5]] as const;
 const settingsNavItem = navItems[9];
+const mobilePrimaryNavItems = [navItems[0], navItems[1], navItems[7]] as const;
+const mobileMoreNavItems = [navItems[6], navItems[8], navItems[2], navItems[3], navItems[4], navItems[5], navItems[9]] as const;
 
 const Logo = () => <img className="brand-logo" src={brandIcon} alt="" aria-hidden="true" />;
 
@@ -29,13 +33,24 @@ export default function Layout() {
   const { t } = useI18n();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finalsub:nav-collapsed") === "true");
   const [toolsOpen, setToolsOpen] = useState(() => toolNavItems.some(({ to }) => location.pathname === to));
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const mobileNavRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const activeItem = mobileNavRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
     activeItem?.scrollIntoView({ block: "nearest", inline: "center" });
     if (toolNavItems.some(({ to }) => location.pathname === to)) setToolsOpen(true);
+    setMobileMoreOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMoreOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMoreOpen]);
 
   const toggleCollapsed = () => {
     setCollapsed((value) => {
@@ -135,15 +150,47 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
-      <nav ref={mobileNavRef} className="liquid-shell liquid-dock fixed inset-x-3 bottom-3 z-50 flex snap-x gap-1 overflow-x-auto rounded-[1.4rem] p-1.5 sm:hidden">
-        {navItems.map(({ to, key, icon: Icon }) => {
+      {mobileMoreOpen && createPortal(
+        <div className="fixed inset-0 z-[70] sm:hidden" role="presentation" onMouseDown={() => setMobileMoreOpen(false)}>
+          <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" />
+          <Card role="dialog" aria-modal="true" aria-label={t("nav.mobileMore")} className="liquid-shell absolute inset-x-3 bottom-[5.75rem] max-h-[70vh] overflow-y-auto border border-border-strong p-3 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3 px-1 pb-2">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-brand">{t("nav.mobileMore")}</p>
+                <p className="mt-1 text-xs text-text-tertiary">{t("home.advancedOptionsHint")}</p>
+              </div>
+              <button type="button" onClick={() => setMobileMoreOpen(false)} className="flex h-9 w-9 items-center justify-center rounded-xl text-text-tertiary hover:bg-surface-overlay hover:text-text-primary" aria-label={t("common.close")}>×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 border-t border-border-subtle pt-2">
+              {mobileMoreNavItems.map(({ to, key, icon: Icon }) => {
+                const isActive = location.pathname === to;
+                return (
+                  <Link
+                    key={to}
+                    to={to}
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={() => setMobileMoreOpen(false)}
+                    className={`flex min-h-12 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${isActive ? "liquid-selected text-text-primary" : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"}`}
+                  >
+                    <Icon size={16} className={isActive ? "text-brand" : "text-text-tertiary"} />
+                    <span className="truncate">{t(key)}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </Card>
+        </div>,
+        document.body,
+      )}
+      <nav ref={mobileNavRef} className="liquid-shell liquid-dock fixed inset-x-3 bottom-3 z-50 grid grid-cols-4 gap-1 rounded-[1.4rem] p-1.5 sm:hidden">
+        {mobilePrimaryNavItems.map(({ to, key, icon: Icon }) => {
           const isActive = location.pathname === to;
           return (
             <Link
               key={to}
               to={to}
               aria-current={isActive ? "page" : undefined}
-              className={`flex min-h-14 min-w-[4.75rem] shrink-0 snap-center flex-col items-center justify-center gap-1 rounded-[1rem] px-2 text-[10px] font-semibold transition-all duration-200 ${
+              className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-[1rem] px-2 text-[10px] font-semibold transition-all duration-200 ${
                 isActive
                   ? "liquid-selected text-text-primary"
                   : "text-text-tertiary hover:bg-surface-overlay hover:text-text-primary"
@@ -154,6 +201,16 @@ export default function Layout() {
             </Link>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setMobileMoreOpen(true)}
+          aria-expanded={mobileMoreOpen}
+          aria-haspopup="dialog"
+          className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-[1rem] px-2 text-[10px] font-semibold transition-all duration-200 ${mobileMoreOpen || mobileMoreNavItems.some(({ to }) => location.pathname === to) ? "liquid-selected text-text-primary" : "text-text-tertiary hover:bg-surface-overlay hover:text-text-primary"}`}
+        >
+          <Wrench size={17} className={mobileMoreOpen || mobileMoreNavItems.some(({ to }) => location.pathname === to) ? "text-brand" : "text-text-tertiary"} />
+          <span className="max-w-full truncate">{t("nav.mobileMore")}</span>
+        </button>
       </nav>
       <WorkspaceOverlays />
     </div>
