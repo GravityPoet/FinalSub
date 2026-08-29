@@ -243,6 +243,17 @@ pub async fn download_model_impl(
         .into_iter()
         .find(|model| model.id == normalized)
         .ok_or_else(|| FinalSubError::Validation(format!("未知模型 ID: {normalized}")))?;
+
+    // A user-managed MLX snapshot is already a usable Parakeet model. Do not
+    // replace it with the larger Native fallback archive or touch the network.
+    if normalized == PARAKEET_MODEL_ID
+        && crate::core::asr::parakeet::mlx_runtime_supported()
+        && crate::core::asr::parakeet::is_mlx_model_installed_at(&models_dir)
+    {
+        emit_download_progress(&app, &normalized, 1, 1, "done", "ready", None, None, None);
+        return Ok(());
+    }
+
     let url = model_info
         .download_url
         .ok_or_else(|| FinalSubError::Validation(format!("模型 {normalized} 暂无可用下载链接")))?;

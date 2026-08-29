@@ -6,7 +6,7 @@ use std::time::Duration;
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::core::asr::parakeet::ParakeetNativeEngine;
+use crate::core::asr::parakeet::ParakeetEngine;
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, TranscribeJob};
 use crate::core::audio;
@@ -2885,8 +2885,9 @@ pub async fn transcribe_parakeet(
     let audio_path = validate_existing_file_path(&req.audio_path, "Audio file")?;
     let output_path = validate_new_output_path(&req.output_path, "Subtitle output path")?;
     let models_dir = parakeet_models_dir(&state.app_config_dir)?;
-    let engine = ParakeetNativeEngine::new(
+    let engine = ParakeetEngine::preferred(
         models_dir,
+        crate::core::task_runner::parakeet_mlx_script_path(&app),
         crate::core::task_runner::sherpa_vad_model_path(&app)?,
     );
     let model_ref = AsrModelRef {

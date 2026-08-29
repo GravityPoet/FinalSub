@@ -62,7 +62,8 @@ Go from raw footage to a finished master in minutes. FinalSub features a timelin
 
 ### 🚀 Get Started in 60 Seconds
 
-No Python, no setup. It just works.
+No Python setup is required for the bundled Native engines. On Apple Silicon,
+Parakeet MLX V2 can optionally reuse an existing local cache through `uv`.
 
 1. **Download:** Grab the macOS Universal DMG/App from our [Releases Page](https://github.com/GravityPoet/FinalSub/releases).
 2. **Import:** Drag and drop your video or audio file.

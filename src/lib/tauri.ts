@@ -2037,8 +2037,8 @@ function createMockModels(): AsrModelInfo[] {
     {
       id: "parakeet-tdt-0.6b-v2",
       engine_id: "parakeet-mlx",
-      name: "Parakeet TDT 0.6B V2",
-      description: "英文识别优化，原生 ONNX 运行时，安装后可完全离线",
+      name: "Parakeet TDT 0.6B V2（MLX 优先）",
+      description: "Apple Silicon 优先复用现有 MLX 缓存；其他平台或无 MLX 缓存时使用 Native ONNX 兜底",
       languages: ["en"],
       best_for: "english-fast",
       size_mb: 460,

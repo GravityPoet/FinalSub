@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::SystemTime;
 
 use super::{AsrCapabilities, AsrEngine, AsrModelRef, ProgressSink, ProgressUpdate, TranscribeJob};
 use crate::core::subtitle::{Cue, SubtitleTrack};
 use crate::error::{FinalSubError, Result};
 
 pub const PARAKEET_MODEL_ID: &str = "parakeet-tdt-0.6b-v2";
+pub const PARAKEET_MLX_MODEL_ID: &str = "mlx-community/parakeet-tdt-0.6b-v2";
 pub const PARAKEET_ARCHIVE_DIR: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
 pub(super) const REQUIRED_MODEL_FILES: &[&str] = &[
     "encoder.int8.onnx",
@@ -14,10 +17,442 @@ pub(super) const REQUIRED_MODEL_FILES: &[&str] = &[
     "tokens.txt",
 ];
 
-/// In-process Parakeet engine backed by the Rust sherpa-onnx binding.
+const PARAKEET_MLX_REPO_DIR: &str = "models--mlx-community--parakeet-tdt-0.6b-v2";
+const PARAKEET_MLX_MIN_WEIGHT_BYTES: u64 = 1_000_000_000;
+const PARAKEET_MLX_PYTHON: &str = "3.11";
+const PARAKEET_MLX_PACKAGE: &str = "parakeet-mlx==0.5.2";
+
+/// MLX 仅在 Apple Silicon 上可用；Native sherpa-onnx 仍作为跨平台兜底。
+pub fn mlx_runtime_supported() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+}
+
+fn mlx_huggingface_cache(cache_root: &Path) -> PathBuf {
+    if cache_root
+        .file_name()
+        .is_some_and(|name| name == "huggingface")
+    {
+        cache_root.to_path_buf()
+    } else {
+        cache_root.join("huggingface")
+    }
+}
+
+fn is_complete_mlx_snapshot(snapshot: &Path) -> bool {
+    let config = snapshot.join("config.json");
+    let weights = snapshot.join("model.safetensors");
+    config.is_file()
+        && std::fs::metadata(&config).is_ok_and(|metadata| metadata.len() > 0)
+        && weights.is_file()
+        && std::fs::metadata(&weights)
+            .is_ok_and(|metadata| metadata.len() >= PARAKEET_MLX_MIN_WEIGHT_BYTES)
+}
+
+fn valid_revision(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+/// Find a complete Parakeet MLX snapshot in the standard Hugging Face cache.
 ///
-/// The persisted engine id remains `parakeet-mlx` for compatibility with saved
-/// settings and task history, but the runtime no longer invokes MLX, Python, or uv.
+/// The returned directory is always beneath `cache_root/huggingface`; no
+/// network lookup or cache mutation is performed here.
+pub fn find_mlx_model_snapshot(cache_root: &Path) -> Option<PathBuf> {
+    let repository = mlx_huggingface_cache(cache_root).join(PARAKEET_MLX_REPO_DIR);
+    let snapshots = repository.join("snapshots");
+
+    if let Ok(revision) = std::fs::read_to_string(repository.join("refs/main")) {
+        let revision = revision.trim();
+        if valid_revision(revision) {
+            let candidate = snapshots.join(revision);
+            if is_complete_mlx_snapshot(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    let mut candidates = std::fs::read_dir(&snapshots)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() {
+                return None;
+            }
+            let path = entry.path();
+            is_complete_mlx_snapshot(&path).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    });
+    candidates.pop()
+}
+
+pub fn is_mlx_model_installed_at(cache_root: &Path) -> bool {
+    find_mlx_model_snapshot(cache_root).is_some()
+}
+
+fn command_available(command: &Path) -> bool {
+    if command.components().count() > 1 || command.is_absolute() {
+        return command.is_file();
+    }
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|directory| directory.join(command))
+        .any(|candidate| candidate.is_file())
+}
+
+pub fn default_uv_bin() -> PathBuf {
+    let mut candidates = vec![PathBuf::from("/opt/homebrew/bin/uv")];
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/bin/uv"));
+    }
+    candidates.push(PathBuf::from("/usr/local/bin/uv"));
+    candidates.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .map(|directory| directory.join("uv")),
+    );
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from("uv"))
+}
+
+/// MLX backend that invokes the maintained `parakeet-mlx` package through uv.
+/// The model itself is always passed as a local snapshot, so a complete cache
+/// never triggers a Hugging Face model download.
+pub struct ParakeetMlxEngine {
+    uv_bin: PathBuf,
+    transcribe_script: PathBuf,
+    cache_root: PathBuf,
+}
+
+impl ParakeetMlxEngine {
+    pub fn new(uv_bin: PathBuf, transcribe_script: PathBuf, cache_root: PathBuf) -> Self {
+        Self {
+            uv_bin,
+            transcribe_script,
+            cache_root,
+        }
+    }
+
+    pub fn model_path(&self, model: &AsrModelRef) -> Option<PathBuf> {
+        model
+            .model_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from)
+            .filter(|path| is_complete_mlx_snapshot(path))
+            .or_else(|| find_mlx_model_snapshot(&self.cache_root))
+    }
+
+    pub fn is_model_installed_at(cache_root: &Path) -> bool {
+        is_mlx_model_installed_at(cache_root)
+    }
+
+    fn missing_model_error(&self) -> FinalSubError {
+        FinalSubError::Validation(format!(
+            "Parakeet MLX V2 缓存不完整。请确认模型缓存位于 {}/huggingface/models--mlx-community--parakeet-tdt-0.6b-v2/snapshots/<revision>/，并包含完整的 config.json 与 model.safetensors",
+            self.cache_root.display()
+        ))
+    }
+}
+
+#[async_trait]
+impl AsrEngine for ParakeetMlxEngine {
+    fn id(&self) -> &'static str {
+        "parakeet-mlx"
+    }
+
+    fn capabilities(&self) -> AsrCapabilities {
+        AsrCapabilities {
+            supports_streaming: false,
+            supported_languages: vec!["en".into(), "auto".into()],
+            requires_model_download: false,
+        }
+    }
+
+    async fn prepare(&self, model: &AsrModelRef) -> Result<()> {
+        if !mlx_runtime_supported() {
+            return Err(FinalSubError::Validation(
+                "Parakeet MLX 仅支持 Apple Silicon；当前平台将使用 Native 兜底".into(),
+            ));
+        }
+        if !command_available(&self.uv_bin) {
+            return Err(FinalSubError::Validation(
+                "未找到 uv，无法启动 Parakeet MLX。请安装 uv：https://docs.astral.sh/uv/".into(),
+            ));
+        }
+        if !self.transcribe_script.is_file() {
+            return Err(FinalSubError::Validation(format!(
+                "Parakeet MLX 转录脚本未找到：{}",
+                self.transcribe_script.display()
+            )));
+        }
+        if self
+            .model_path(model)
+            .is_none_or(|path| !is_complete_mlx_snapshot(&path))
+        {
+            return Err(self.missing_model_error());
+        }
+
+        // Resolve the executable once during preparation so a Finder-launched
+        // app reports a useful error before creating a task subprocess.
+        let version = tokio::process::Command::new(&self.uv_bin)
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|error| FinalSubError::Validation(format!("启动 uv 失败：{error}")))?;
+        if !version.status.success() {
+            return Err(FinalSubError::Validation(
+                "uv 无法运行，请检查本机 uv 安装".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn transcribe(
+        &self,
+        job: TranscribeJob,
+        progress: ProgressSink,
+        cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<SubtitleTrack> {
+        let language = job
+            .language
+            .as_deref()
+            .unwrap_or("auto")
+            .to_ascii_lowercase();
+        if !matches!(language.as_str(), "auto" | "en" | "english") {
+            return Err(FinalSubError::Validation(format!(
+                "Parakeet v2 仅支持英文转录，当前语言：{language}"
+            )));
+        }
+        if cancel_rx.as_ref().is_some_and(|rx| *rx.borrow()) {
+            return Err(FinalSubError::Validation("任务已取消".into()));
+        }
+
+        let model_path = self
+            .model_path(&job.model)
+            .filter(|path| is_complete_mlx_snapshot(path))
+            .ok_or_else(|| self.missing_model_error())?;
+        let max_block_chars = match job.max_subtitle_chars {
+            -1 => 140,
+            value if (8..=120).contains(&value) => value,
+            _ => 84,
+        };
+
+        progress
+            .send(ProgressUpdate {
+                progress: 0.05,
+                message: "正在加载 Parakeet MLX V2（复用本地缓存）...".into(),
+            })
+            .await
+            .ok();
+
+        let mut command = tokio::process::Command::new(&self.uv_bin);
+        command
+            .args([
+                "run",
+                "--python",
+                PARAKEET_MLX_PYTHON,
+                "--with",
+                PARAKEET_MLX_PACKAGE,
+                "python",
+            ])
+            .arg(&self.transcribe_script)
+            .args(["--audio", &job.audio_path, "--output", &job.output_path])
+            .args(["--local-model-path", &model_path.to_string_lossy()])
+            .args(["--source-language", &language])
+            .args(["--max-block-chars", &max_block_chars.to_string()]);
+
+        let hf_home = mlx_huggingface_cache(&self.cache_root);
+        command
+            .env("HF_HOME", &hf_home)
+            .env("HF_HUB_CACHE", &hf_home)
+            .env("HF_HUB_OFFLINE", "1")
+            .env("TRANSFORMERS_OFFLINE", "1")
+            .env("PYTHONUNBUFFERED", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        progress
+            .send(ProgressUpdate {
+                progress: 0.12,
+                message: "正在执行 Parakeet MLX V2...".into(),
+            })
+            .await
+            .ok();
+
+        let child = command.spawn().map_err(|error| {
+            FinalSubError::Validation(format!("启动 Parakeet MLX 失败：{error}"))
+        })?;
+        let output = wait_for_process(child, cancel_rx).await?;
+        if !output.status.success() {
+            return Err(FinalSubError::Validation(format!(
+                "Parakeet MLX 转录失败：{}",
+                summarize_process_output(&output.stdout, &output.stderr)
+            )));
+        }
+
+        progress
+            .send(ProgressUpdate {
+                progress: 0.9,
+                message: "正在解析 Parakeet 字幕...".into(),
+            })
+            .await
+            .ok();
+        let srt = tokio::fs::read_to_string(&job.output_path)
+            .await
+            .map_err(|error| {
+                FinalSubError::Validation(format!("读取 Parakeet SRT 失败：{error}"))
+            })?;
+        let track = SubtitleTrack::from_srt(&srt)?;
+        if track.cues.is_empty() {
+            return Err(FinalSubError::Validation(
+                "Parakeet 未识别到字幕内容。该模型仅适用于英文语音；其他语言请切换 Whisper.cpp 或 SenseVoice。".into(),
+            ));
+        }
+
+        progress
+            .send(ProgressUpdate {
+                progress: 1.0,
+                message: format!("Parakeet MLX 转录完成，共 {} 条字幕", track.cues.len()),
+            })
+            .await
+            .ok();
+        Ok(track)
+    }
+}
+
+async fn wait_for_process(
+    child: tokio::process::Child,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<std::process::Output> {
+    let wait = child.wait_with_output();
+    tokio::pin!(wait);
+
+    if let Some(mut cancel_rx) = cancel_rx {
+        loop {
+            tokio::select! {
+                output = &mut wait => {
+                    return output.map_err(|error| FinalSubError::Validation(format!("读取 Parakeet MLX 进程输出失败：{error}")));
+                }
+                changed = cancel_rx.changed() => {
+                    if changed.is_ok() && *cancel_rx.borrow() {
+                        return Err(FinalSubError::Validation("任务已取消".into()));
+                    }
+                    if changed.is_err() {
+                        return wait.await.map_err(|error| FinalSubError::Validation(format!("读取 Parakeet MLX 进程输出失败：{error}")));
+                    }
+                }
+            }
+        }
+    }
+
+    wait.await.map_err(|error| {
+        FinalSubError::Validation(format!("读取 Parakeet MLX 进程输出失败：{error}"))
+    })
+}
+
+fn summarize_process_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    let combined = if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else if stdout.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        format!("{}\n{}", stdout.trim(), stderr.trim())
+    };
+    let max_chars = 4_000;
+    if combined.chars().count() <= max_chars {
+        combined
+    } else {
+        let tail = combined
+            .chars()
+            .skip(combined.chars().count() - max_chars)
+            .collect::<String>();
+        format!("…{tail}")
+    }
+}
+
+/// Select MLX on Apple Silicon when its local snapshot is complete; otherwise
+/// retain the existing in-process Native sherpa-onnx implementation.
+pub enum ParakeetEngine {
+    Mlx(ParakeetMlxEngine),
+    Native(ParakeetNativeEngine),
+}
+
+impl ParakeetEngine {
+    pub fn preferred(
+        models_dir: PathBuf,
+        mlx_script: Option<PathBuf>,
+        vad_model_path: PathBuf,
+    ) -> Self {
+        let native_available =
+            ParakeetNativeEngine::is_model_installed_at(&models_dir.join(PARAKEET_MODEL_ID));
+        let mlx_available = mlx_runtime_supported() && is_mlx_model_installed_at(&models_dir);
+        if mlx_available && (mlx_script.is_some() || !native_available) {
+            return Self::Mlx(ParakeetMlxEngine::new(
+                default_uv_bin(),
+                mlx_script
+                    .unwrap_or_else(|| PathBuf::from("resources/parakeet/parakeet_transcribe.py")),
+                models_dir,
+            ));
+        }
+        Self::Native(ParakeetNativeEngine::new(models_dir, vad_model_path))
+    }
+
+    pub fn runtime_name(&self) -> &'static str {
+        match self {
+            Self::Mlx(_) => "mlx",
+            Self::Native(_) => "native",
+        }
+    }
+}
+
+#[async_trait]
+impl AsrEngine for ParakeetEngine {
+    fn id(&self) -> &'static str {
+        "parakeet-mlx"
+    }
+
+    fn capabilities(&self) -> AsrCapabilities {
+        match self {
+            Self::Mlx(engine) => engine.capabilities(),
+            Self::Native(engine) => engine.capabilities(),
+        }
+    }
+
+    async fn prepare(&self, model: &AsrModelRef) -> Result<()> {
+        match self {
+            Self::Mlx(engine) => engine.prepare(model).await,
+            Self::Native(engine) => engine.prepare(model).await,
+        }
+    }
+
+    async fn transcribe(
+        &self,
+        job: TranscribeJob,
+        progress: ProgressSink,
+        cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<SubtitleTrack> {
+        match self {
+            Self::Mlx(engine) => engine.transcribe(job, progress, cancel_rx).await,
+            Self::Native(engine) => engine.transcribe(job, progress, cancel_rx).await,
+        }
+    }
+}
+
+/// In-process Parakeet fallback backed by the Rust sherpa-onnx binding.
 pub struct ParakeetNativeEngine {
     models_dir: PathBuf,
     vad_model_path: PathBuf,
@@ -338,6 +773,67 @@ mod tests {
             model_id: PARAKEET_MODEL_ID.into(),
             model_path: None,
         }
+    }
+
+    #[test]
+    fn finds_complete_mlx_snapshot_without_network_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("huggingface")
+            .join(PARAKEET_MLX_REPO_DIR)
+            .join("snapshots")
+            .join("0123456789abcdef");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), b"{}").unwrap();
+        let weights = std::fs::File::create(snapshot.join("model.safetensors")).unwrap();
+        weights.set_len(PARAKEET_MLX_MIN_WEIGHT_BYTES).unwrap();
+
+        assert_eq!(find_mlx_model_snapshot(temp.path()), Some(snapshot));
+        assert!(is_mlx_model_installed_at(temp.path()));
+    }
+
+    #[test]
+    fn ignores_partial_mlx_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("huggingface")
+            .join(PARAKEET_MLX_REPO_DIR)
+            .join("snapshots")
+            .join("0123456789abcdef");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), b"{}").unwrap();
+        std::fs::write(snapshot.join("model.safetensors"), b"partial").unwrap();
+
+        assert!(find_mlx_model_snapshot(temp.path()).is_none());
+    }
+
+    #[test]
+    fn preferred_engine_selects_mlx_for_a_complete_local_cache() {
+        if !mlx_runtime_supported() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = temp
+            .path()
+            .join("huggingface")
+            .join(PARAKEET_MLX_REPO_DIR)
+            .join("snapshots")
+            .join("0123456789abcdef");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), b"{}").unwrap();
+        let weights = std::fs::File::create(snapshot.join("model.safetensors")).unwrap();
+        weights.set_len(PARAKEET_MLX_MIN_WEIGHT_BYTES).unwrap();
+        let script = temp.path().join("parakeet_transcribe.py");
+        std::fs::write(&script, b"# test").unwrap();
+
+        let engine = ParakeetEngine::preferred(
+            temp.path().to_path_buf(),
+            Some(script),
+            temp.path().join("vad.onnx"),
+        );
+        assert_eq!(engine.runtime_name(), "mlx");
     }
 
     #[test]

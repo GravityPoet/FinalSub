@@ -49,6 +49,7 @@
       "licenses/ffmpeg-NOTICE.md",
       "resources/vad/ggml-silero-v5.1.2.bin",
       "resources/vad/silero_vad.onnx",
+      "resources/parakeet/parakeet_transcribe.py",
       "licenses/silero-vad-LICENSE.txt",
       "licenses/silero-vad-NOTICE.md",
       "licenses/kothok-edge-tts-LICENSE.txt",
