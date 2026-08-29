@@ -131,28 +131,6 @@ function sourceLanguagesForEngine(engineId: string) {
   }
 }
 
-const translationContentModes: Array<{
-  value: TranslationContentMode;
-  labelKey: "home.subtitleContentTargetOnly" | "home.subtitleContentSourceFirst" | "home.subtitleContentTargetFirst";
-  descKey: "home.subtitleContentTargetOnlyDesc" | "home.subtitleContentSourceFirstDesc" | "home.subtitleContentTargetFirstDesc";
-}> = [
-  {
-    value: "target-only",
-    labelKey: "home.subtitleContentTargetOnly",
-    descKey: "home.subtitleContentTargetOnlyDesc",
-  },
-  {
-    value: "source-and-target",
-    labelKey: "home.subtitleContentSourceFirst",
-    descKey: "home.subtitleContentSourceFirstDesc",
-  },
-  {
-    value: "target-and-source",
-    labelKey: "home.subtitleContentTargetFirst",
-    descKey: "home.subtitleContentTargetFirstDesc",
-  },
-];
-
 function fileNameFromPath(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -457,12 +435,34 @@ export default function HomePage() {
   const matchingBuiltInStyle = BUILT_IN_SUBTITLE_STYLE_PRESETS.find((preset) => subtitleStylesEqual(preset.style, composeStyle));
   const matchingUserStyle = subtitleStylePresets.find((preset) => subtitleStylesEqual(preset.style, composeStyle));
   const composeStylePresetValue = matchingBuiltInStyle?.id ?? matchingUserStyle?.id ?? "snapshot";
+  const bilingualTranslation = translationContentMode !== "target-only";
+  const bilingualOrder = translationContentMode === "target-and-source" ? "target-first" : "source-first";
+  const composeVerticalPosition = composeStyle.alignment >= 7
+    ? "top"
+    : composeStyle.alignment >= 4
+      ? "center"
+      : "bottom";
+  const composeVerticalPositionLabel = composeVerticalPosition === "top"
+    ? "home.composePositionTop"
+    : composeVerticalPosition === "center"
+      ? "home.composePositionCenter"
+      : "home.composePositionBottom";
 
   const handleComposeStyleChange = (presetId: string) => {
     const builtIn = BUILT_IN_SUBTITLE_STYLE_PRESETS.find((preset) => preset.id === presetId);
     const personal = subtitleStylePresets.find((preset) => preset.id === presetId);
     const style = builtIn?.style ?? personal?.style;
     if (style) setComposeStyle({ ...style });
+  };
+
+  const handleComposeVerticalPositionChange = (position: "top" | "center" | "bottom") => {
+    const horizontalColumn = composeStyle.alignment % 3 === 0
+      ? 3
+      : composeStyle.alignment % 3 === 1
+        ? 1
+        : 2;
+    const rowStart = position === "top" ? 7 : position === "center" ? 4 : 1;
+    setComposeStyle({ ...composeStyle, alignment: rowStart + horizontalColumn - 1 });
   };
   const dubbingReady = !enableDubbing || (
     dubbingEngine === "local"
@@ -1059,7 +1059,6 @@ export default function HomePage() {
   };
 
   const activeTaskType = taskTypes.find((item) => item.value === taskType);
-  const activeTranslationMode = translationContentModes.find((item) => item.value === translationContentMode);
   const sourceLanguageLabel = sourceLanguageOptions.find((item) => item.value === sourceLanguage);
   const targetLanguageLabel = sourceLanguageOptions.find((item) => item.value === targetLanguage);
   const pipelineLanguage = taskType === "generate-only"
@@ -1539,52 +1538,105 @@ export default function HomePage() {
                       </Select>
                     </div>
 
-                    <details className="group/subtitle-mode rounded-[1rem] border border-border-subtle bg-surface-overlay/35">
-                      <summary className="flex cursor-pointer list-none items-center gap-3 px-3.5 py-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35">
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-semibold text-text-primary">{t("home.subtitleModeSummary")}</span>
-                          <span className="mt-0.5 block truncate text-xs text-text-tertiary">{activeTranslationMode ? t(activeTranslationMode.labelKey) : t("home.subtitleContentTargetOnly")}</span>
-                        </span>
-                        <ChevronDown size={15} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/subtitle-mode:rotate-180" aria-hidden="true" />
-                      </summary>
-                      <fieldset className="border-t border-border-subtle px-3.5 py-3.5">
-                        <legend className="sr-only">{t("home.subtitleContent")}</legend>
-                        <div className="grid gap-2" role="radiogroup">
-                          {translationContentModes.map((mode) => {
-                            const isActive = translationContentMode === mode.value;
-                            return (
-                              <button
-                                key={mode.value}
-                                type="button"
-                                role="radio"
-                                aria-checked={isActive}
-                                tabIndex={isActive ? 0 : -1}
-                                data-testid={`translation-content-${mode.value}`}
-                                onKeyDown={(event) => {
-                                  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-                                  event.preventDefault();
-                                  const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
-                                  const currentIndex = translationContentModes.findIndex(({ value }) => value === translationContentMode);
-                                  const nextIndex = (currentIndex + direction + translationContentModes.length) % translationContentModes.length;
-                                  setTranslationContentMode(translationContentModes[nextIndex].value);
-                                  const radios = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='radio']");
-                                  requestAnimationFrame(() => radios?.[nextIndex]?.focus());
-                                }}
-                                onClick={() => setTranslationContentMode(mode.value)}
-                                className={`flex min-h-11 items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-all duration-200 ${
-                                  isActive
-                                    ? "liquid-selected text-text-primary"
-                                    : "border-border-default bg-surface-overlay/25 text-text-secondary hover:border-border-strong hover:bg-surface-overlay hover:text-text-primary"
-                                }`}
-                              >
-                                <span className="font-semibold">{t(mode.labelKey)}</span>
-                                <span className="hidden text-xs text-text-tertiary sm:block">{t(mode.descKey)}</span>
-                              </button>
-                            );
-                          })}
+                    <div className="grid gap-3">
+                      <fieldset
+                        className="rounded-[1rem] border border-border-subtle bg-surface-overlay/35 p-3.5"
+                        data-testid="translation-content-options"
+                      >
+                        <legend className="px-1 text-sm font-semibold text-text-primary">{t("home.subtitleModeSummary")}</legend>
+                        <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.subtitleContentHint")}</p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <label className={`flex min-h-16 cursor-pointer items-start rounded-xl border p-3 transition focus-within:ring-2 focus-within:ring-brand/45 ${
+                            !bilingualTranslation
+                              ? "liquid-selected text-text-primary"
+                              : "border-border-default bg-surface-overlay/25 text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
+                          }`}>
+                            <input
+                              type="radio"
+                              name="translation-content-kind"
+                              value="target-only"
+                              checked={!bilingualTranslation}
+                              onChange={() => setTranslationContentMode("target-only")}
+                              data-testid="translation-content-target-only"
+                              className="sr-only"
+                            />
+                            <span>
+                              <span className="block text-sm font-semibold">{t("home.subtitleContentTargetOnly")}</span>
+                              <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.subtitleContentTargetOnlyDesc")}</span>
+                            </span>
+                          </label>
+                          <label className={`flex min-h-16 cursor-pointer items-start rounded-xl border p-3 transition focus-within:ring-2 focus-within:ring-brand/45 ${
+                            bilingualTranslation
+                              ? "liquid-selected text-text-primary"
+                              : "border-border-default bg-surface-overlay/25 text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
+                          }`}>
+                            <input
+                              type="radio"
+                              name="translation-content-kind"
+                              value="bilingual"
+                              checked={bilingualTranslation}
+                              onChange={() => setTranslationContentMode("source-and-target")}
+                              data-testid="translation-content-bilingual"
+                              className="sr-only"
+                            />
+                            <span>
+                              <span className="block text-sm font-semibold">{t("home.subtitleContentBilingual")}</span>
+                              <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.subtitleContentBilingualDesc")}</span>
+                            </span>
+                          </label>
                         </div>
                       </fieldset>
-                    </details>
+
+                      {bilingualTranslation && (
+                        <fieldset
+                          className="rounded-[1rem] border border-brand/20 bg-brand/[0.045] p-3.5"
+                          data-testid="translation-order-options"
+                        >
+                          <legend className="px-1 text-sm font-semibold text-text-primary">{t("home.subtitleOrder")}</legend>
+                          <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.subtitleOrderHint")}</p>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            <label className={`flex min-h-16 cursor-pointer items-start rounded-xl border p-3 transition focus-within:ring-2 focus-within:ring-brand/45 ${
+                              bilingualOrder === "source-first"
+                                ? "liquid-selected text-text-primary"
+                                : "border-border-default bg-surface-overlay/25 text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
+                            }`}>
+                              <input
+                                type="radio"
+                                name="translation-content-order"
+                                value="source-first"
+                                checked={bilingualOrder === "source-first"}
+                                onChange={() => setTranslationContentMode("source-and-target")}
+                                data-testid="translation-content-source-and-target"
+                                className="sr-only"
+                              />
+                              <span>
+                                <span className="block text-sm font-semibold">{t("home.subtitleContentSourceFirst")}</span>
+                                <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.subtitleContentSourceFirstDesc")}</span>
+                              </span>
+                            </label>
+                            <label className={`flex min-h-16 cursor-pointer items-start rounded-xl border p-3 transition focus-within:ring-2 focus-within:ring-brand/45 ${
+                              bilingualOrder === "target-first"
+                                ? "liquid-selected text-text-primary"
+                                : "border-border-default bg-surface-overlay/25 text-text-secondary hover:border-border-strong hover:bg-surface-overlay"
+                            }`}>
+                              <input
+                                type="radio"
+                                name="translation-content-order"
+                                value="target-first"
+                                checked={bilingualOrder === "target-first"}
+                                onChange={() => setTranslationContentMode("target-and-source")}
+                                data-testid="translation-content-target-and-source"
+                                className="sr-only"
+                              />
+                              <span>
+                                <span className="block text-sm font-semibold">{t("home.subtitleContentTargetFirst")}</span>
+                                <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t("home.subtitleContentTargetFirstDesc")}</span>
+                              </span>
+                            </label>
+                          </div>
+                        </fieldset>
+                      )}
+                    </div>
                   </div>
                 </section>
               )}
@@ -1814,6 +1866,38 @@ export default function HomePage() {
                                 )}
                               </Select>
                               <p className="mt-1.5 text-[11px] leading-5 text-text-tertiary">{t("home.composeStyleSnapshotHint")}</p>
+                              <div className="mt-3 rounded-xl border border-border-subtle bg-surface-card/45 p-3">
+                                <div className="flex items-end justify-between gap-3">
+                                  <span>
+                                    <span className="block text-xs font-semibold text-text-secondary">{t("home.composePosition")}</span>
+                                    <span className="mt-0.5 block text-[11px] leading-5 text-text-tertiary">{t("home.composePositionHint")}</span>
+                                  </span>
+                                  <span className="text-[11px] font-semibold text-brand">{t(composeVerticalPositionLabel)}</span>
+                                </div>
+                                <div className="mt-2 grid grid-cols-3 gap-1 rounded-xl border border-border-subtle bg-surface-card/70 p-1" role="radiogroup" aria-label={t("home.composePosition")}>
+                                  {([
+                                    ["top", "home.composePositionTop"],
+                                    ["center", "home.composePositionCenter"],
+                                    ["bottom", "home.composePositionBottom"],
+                                  ] as const).map(([position, labelKey]) => (
+                                    <button
+                                      key={position}
+                                      type="button"
+                                      role="radio"
+                                      aria-checked={composeVerticalPosition === position}
+                                      data-testid={`compose-position-${position}`}
+                                      onClick={() => handleComposeVerticalPositionChange(position)}
+                                      className={`min-h-9 rounded-lg px-2 text-xs font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/45 ${
+                                        composeVerticalPosition === position
+                                          ? "liquid-selected text-brand"
+                                          : "text-text-secondary hover:bg-surface-overlay hover:text-text-primary"
+                                      }`}
+                                    >
+                                      {t(labelKey)}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
                             </div>
                           ) : (
                             <p className="rounded-lg bg-surface-overlay px-3 py-2 text-xs leading-5 text-text-tertiary">{t("home.composeSoftStyleHint")}</p>
