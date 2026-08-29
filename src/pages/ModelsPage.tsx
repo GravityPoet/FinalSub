@@ -127,7 +127,7 @@ export default function ModelsPage() {
   const engineLabel = (engineId: string): string => {
     const labels: Record<string, string> = {
       "whisper-cpp": "Whisper.cpp",
-      "parakeet-mlx": "Parakeet Native",
+      "parakeet-mlx": "Parakeet MLX V2（Native 兜底）",
       sensevoice: "SenseVoice",
       paraformer: "Paraformer",
       "qwen3-asr": "Qwen3-ASR",
@@ -576,7 +576,7 @@ export default function ModelsPage() {
                             <span>{t("models.retryAction")}</span>
                           </Button>
                         )}
-                        {model.status === "downloaded" && !["custom-command", "cloud-asr"].includes(model.engine_id) && (
+                        {model.status === "downloaded" && !["custom-command", "cloud-asr", "parakeet-mlx"].includes(model.engine_id) && (
                           <button
                             type="button"
                             onClick={() => setPendingDelete(model)}

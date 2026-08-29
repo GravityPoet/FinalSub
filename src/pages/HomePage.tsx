@@ -109,7 +109,7 @@ const targetLanguageOptions = sourceLanguageOptions.filter(({ value }) => value 
 
 const engineLabels: Record<string, string> = {
   "whisper-cpp": "Whisper.cpp",
-  "parakeet-mlx": "Parakeet Native",
+  "parakeet-mlx": "Parakeet MLX V2（Native 兜底）",
   sensevoice: "SenseVoice",
   paraformer: "Paraformer",
   "qwen3-asr": "Qwen3-ASR",

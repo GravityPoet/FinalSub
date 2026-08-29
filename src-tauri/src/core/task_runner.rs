@@ -12,7 +12,7 @@ use crate::commands::{
     parakeet_models_dir, resolve_sidecar, synthesize_and_align_dubbing_cue, whisper_models_dir,
 };
 use crate::core::asr::cloud::{parse_protocol, CloudAsrConfig, CloudAsrEngine};
-use crate::core::asr::parakeet::ParakeetNativeEngine;
+use crate::core::asr::parakeet::ParakeetEngine;
 use crate::core::asr::sherpa_native::{SherpaNativeEngine, SherpaNativeKind};
 use crate::core::asr::whisper::WhisperCppEngine;
 use crate::core::asr::{AsrEngine, AsrModelRef, ProgressUpdate, TranscribeJob};
@@ -148,6 +148,38 @@ pub(crate) fn sherpa_vad_model_path(app: &AppHandle) -> Result<PathBuf, String> 
             return Err(format!("内置 Silero VAD 资源缺失：{}", path.display()));
         }
         Ok(path)
+    }
+}
+
+pub(crate) fn parakeet_mlx_script_path(app: &AppHandle) -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        let current_dir = std::env::current_dir().ok()?;
+        [
+            current_dir
+                .join("src-tauri")
+                .join("resources")
+                .join("parakeet")
+                .join("parakeet_transcribe.py"),
+            current_dir
+                .join("resources")
+                .join("parakeet")
+                .join("parakeet_transcribe.py"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        app.path()
+            .resolve(
+                "resources/parakeet/parakeet_transcribe.py",
+                tauri::path::BaseDirectory::Resource,
+            )
+            .ok()
+            .filter(|path| path.is_file())
     }
 }
 
@@ -670,8 +702,9 @@ async fn run_task_impl(
                 }
                 "parakeet-mlx" => {
                     let models_dir = parakeet_models_dir(&app_config_dir)?;
-                    Box::new(ParakeetNativeEngine::new(
+                    Box::new(ParakeetEngine::preferred(
                         models_dir,
+                        parakeet_mlx_script_path(app),
                         sherpa_vad_model_path(app)?,
                     ))
                 }

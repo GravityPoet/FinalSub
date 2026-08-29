@@ -97,8 +97,8 @@ pub fn builtin_model_catalog() -> Vec<AsrModelInfo> {
         AsrModelInfo {
             id: "parakeet-tdt-0.6b-v2".into(),
             engine_id: "parakeet-mlx".into(),
-            name: "Parakeet TDT 0.6B V2 (Native)".into(),
-            description: "英文识别优化，内置 sherpa-onnx 原生运行时，无需 Python 或 uv".into(),
+            name: "Parakeet TDT 0.6B V2（MLX 优先）".into(),
+            description: "Apple Silicon 优先复用现有 MLX 缓存；其他平台或无 MLX 缓存时使用 Native sherpa-onnx 兜底".into(),
             languages: vec!["en".into()],
             best_for: "english-fast".into(),
             size_mb: Some(650),
@@ -242,7 +242,11 @@ pub fn scan_model_status(catalog: &mut [AsrModelInfo], whisper_dir: &Path, parak
             }
             "parakeet-mlx" => {
                 let path = parakeet_dir.join(&model.id);
-                if crate::core::asr::parakeet::ParakeetNativeEngine::is_model_installed_at(&path) {
+                let native_ready =
+                    crate::core::asr::parakeet::ParakeetNativeEngine::is_model_installed_at(&path);
+                let mlx_ready = crate::core::asr::parakeet::mlx_runtime_supported()
+                    && crate::core::asr::parakeet::is_mlx_model_installed_at(parakeet_dir);
+                if native_ready || mlx_ready {
                     model.status = ModelStatus::Downloaded;
                 } else {
                     model.status = ModelStatus::Available;
@@ -308,7 +312,30 @@ pub fn delete_managed_model(models_dir: &Path, model_id: &str) -> crate::error::
         })?;
     match model.engine_id.as_str() {
         "whisper-cpp" => delete_whisper_model(models_dir, &normalized),
-        "parakeet-mlx" | "sensevoice" | "paraformer" | "qwen3-asr" | "firered-asr" => {
+        "parakeet-mlx" => {
+            let path = models_dir.join(&normalized);
+            if !path.exists() && crate::core::asr::parakeet::is_mlx_model_installed_at(models_dir) {
+                return Err(crate::error::FinalSubError::Validation(
+                    "当前使用的是外部 Parakeet MLX 缓存，FinalSub 不会删除它；如需清理请在模型缓存目录中单独操作".into(),
+                ));
+            }
+            if !path.exists() {
+                return Err(crate::error::FinalSubError::Validation(format!(
+                    "模型目录不存在：{}",
+                    path.display()
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                std::fs::remove_file(path)?;
+            } else if metadata.is_dir() {
+                std::fs::remove_dir_all(path)?;
+            } else {
+                std::fs::remove_file(path)?;
+            }
+            Ok(())
+        }
+        "sensevoice" | "paraformer" | "qwen3-asr" | "firered-asr" => {
             let path = models_dir.join(&normalized);
             if !path.exists() {
                 return Err(crate::error::FinalSubError::Validation(format!(
@@ -394,6 +421,33 @@ mod tests {
         let parakeet = catalog
             .iter()
             .find(|m| m.id == "parakeet-tdt-0.6b-v2")
+            .unwrap();
+        assert!(matches!(parakeet.status, ModelStatus::Downloaded));
+    }
+
+    #[test]
+    fn scan_parakeet_mlx_cache_on_supported_architecture() {
+        if !crate::core::asr::parakeet::mlx_runtime_supported() {
+            return;
+        }
+        let tmp = TempDir::new().unwrap();
+        let snapshot = tmp
+            .path()
+            .join("huggingface")
+            .join("models--mlx-community--parakeet-tdt-0.6b-v2")
+            .join("snapshots")
+            .join("0123456789abcdef");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), b"{}").unwrap();
+        let weights = std::fs::File::create(snapshot.join("model.safetensors")).unwrap();
+        weights.set_len(1_000_000_000).unwrap();
+
+        let mut catalog = builtin_model_catalog();
+        scan_model_status(&mut catalog, &tmp.path().join("whisper"), tmp.path());
+
+        let parakeet = catalog
+            .iter()
+            .find(|model| model.id == "parakeet-tdt-0.6b-v2")
             .unwrap();
         assert!(matches!(parakeet.status, ModelStatus::Downloaded));
     }
