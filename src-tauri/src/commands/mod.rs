@@ -2363,9 +2363,14 @@ pub async fn burn_subtitle(
         audio_title,
         original_audio_tracks,
     };
+    let render_temp_dir = settings::resolved_temp_dir(&state.app_config_dir)
+        .map_err(|error| format!("无法准备字幕渲染临时目录：{error}"))?;
+    let prepared_subtitle =
+        audio::prepare_subtitle_for_render(&subtitle_path, &render_temp_dir, &style).await?;
+    let render_subtitle_path = prepared_subtitle.path();
     let initial_args = audio::compose_args(
         &video_path.to_string_lossy(),
-        &subtitle_path.to_string_lossy(),
+        &render_subtitle_path.to_string_lossy(),
         &output_path.to_string_lossy(),
         &style,
         &options,
@@ -2399,7 +2404,7 @@ pub async fn burn_subtitle(
                     encoding = audio::cpu_video_encoding_for_style(&style);
                     match audio::compose_args(
                         &video_path.to_string_lossy(),
-                        &subtitle_path.to_string_lossy(),
+                        &render_subtitle_path.to_string_lossy(),
                         &output_path.to_string_lossy(),
                         &style,
                         &audio::ComposeOptions {
@@ -2442,7 +2447,7 @@ pub async fn burn_subtitle(
                 encoding = audio::cpu_video_encoding_for_style(&style);
                 match audio::compose_args(
                     &video_path.to_string_lossy(),
-                    &subtitle_path.to_string_lossy(),
+                    &render_subtitle_path.to_string_lossy(),
                     &output_path.to_string_lossy(),
                     &style,
                     &audio::ComposeOptions {
@@ -2779,9 +2784,13 @@ pub async fn generate_subtitle_preview(
         preset: req.preset,
     };
 
+    let prepared_subtitle =
+        audio::prepare_subtitle_for_render(&subtitle_path, &temp_dir, &style).await?;
+    let render_subtitle_path = prepared_subtitle.path();
+
     let mut args = audio::burn_in_args(
         &video_path.to_string_lossy(),
-        &subtitle_path.to_string_lossy(),
+        &render_subtitle_path.to_string_lossy(),
         &preview_path.to_string_lossy(),
         &style,
     );

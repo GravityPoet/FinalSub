@@ -178,6 +178,161 @@ pub fn split_subtitle_text(text: &str, max_width: usize) -> Vec<String> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubtitleScriptKind {
+    Cjk,
+    Latin,
+    Other,
+}
+
+fn is_cjk_codepoint(codepoint: u32) -> bool {
+    (0x2e80..=0x2fff).contains(&codepoint)
+        || (0x3040..=0x30ff).contains(&codepoint)
+        || (0x3400..=0x4dbf).contains(&codepoint)
+        || (0x4e00..=0x9fff).contains(&codepoint)
+        || (0xac00..=0xd7af).contains(&codepoint)
+        || (0xf900..=0xfaff).contains(&codepoint)
+}
+
+fn subtitle_script_kind(line: &str) -> SubtitleScriptKind {
+    let cjk = line
+        .chars()
+        .filter(|character| is_cjk_codepoint(*character as u32))
+        .count();
+    let latin = line
+        .chars()
+        .filter(|character| character.is_ascii_alphabetic())
+        .count();
+    if cjk == 0 && latin == 0 {
+        SubtitleScriptKind::Other
+    } else if cjk > 0 {
+        // A translated CJK line often keeps Latin product names, acronyms, or
+        // model identifiers (for example “Vera Rubin / GPU”). Presence of CJK
+        // is therefore a stronger signal than a raw character-count majority.
+        SubtitleScriptKind::Cjk
+    } else {
+        SubtitleScriptKind::Latin
+    }
+}
+
+fn split_mixed_language_line(line: &str) -> Option<(String, String)> {
+    let chars: Vec<char> = line.chars().collect();
+    let first_cjk = chars
+        .iter()
+        .position(|character| is_cjk_codepoint(*character as u32));
+    let first_latin = chars
+        .iter()
+        .position(|character| character.is_ascii_alphabetic());
+    match (first_latin, first_cjk) {
+        (Some(latin), Some(cjk)) if latin < cjk => {
+            let source = chars[..cjk].iter().collect::<String>().trim().to_string();
+            let target = chars[cjk..].iter().collect::<String>().trim().to_string();
+            if !source.is_empty()
+                && !target.is_empty()
+                && subtitle_script_kind(&source) == SubtitleScriptKind::Latin
+                && subtitle_script_kind(&target) == SubtitleScriptKind::Cjk
+            {
+                Some((source, target))
+            } else {
+                None
+            }
+        }
+        (Some(latin), Some(cjk)) if cjk < latin => {
+            let target = chars[..latin].iter().collect::<String>().trim().to_string();
+            let source = chars[latin..].iter().collect::<String>().trim().to_string();
+            if !source.is_empty()
+                && !target.is_empty()
+                && subtitle_script_kind(&target) == SubtitleScriptKind::Cjk
+                && subtitle_script_kind(&source) == SubtitleScriptKind::Latin
+            {
+                Some((target, source))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 将一条英文/中文双语 cue 拆成两个语言块，保留原文件中的先后顺序。
+/// 返回值不是“固定英文在前”，调用方可据此保持用户选择的 source/target 顺序。
+pub fn split_bilingual_text(text: &str) -> Option<(String, String)> {
+    let lines: Vec<String> = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if lines.len() == 1 {
+        return split_mixed_language_line(&lines[0]);
+    }
+    if lines.len() < 2 {
+        return None;
+    }
+
+    let kinds: Vec<SubtitleScriptKind> = lines
+        .iter()
+        .map(|line| subtitle_script_kind(line))
+        .collect();
+    if !kinds.contains(&SubtitleScriptKind::Cjk) || !kinds.contains(&SubtitleScriptKind::Latin) {
+        return None;
+    }
+    let first_kind = kinds
+        .iter()
+        .copied()
+        .find(|kind| matches!(kind, SubtitleScriptKind::Cjk | SubtitleScriptKind::Latin))?;
+    let second_kind = match first_kind {
+        SubtitleScriptKind::Cjk => SubtitleScriptKind::Latin,
+        SubtitleScriptKind::Latin => SubtitleScriptKind::Cjk,
+        SubtitleScriptKind::Other => return None,
+    };
+
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    let mut current = first_kind;
+    for (line, kind) in lines.into_iter().zip(kinds) {
+        match kind {
+            kind if kind == first_kind => {
+                first.push(line);
+                current = first_kind;
+            }
+            kind if kind == second_kind => {
+                second.push(line);
+                current = second_kind;
+            }
+            SubtitleScriptKind::Other => {
+                if current == first_kind {
+                    first.push(line);
+                } else {
+                    second.push(line);
+                }
+            }
+            _ => {}
+        }
+    }
+    if first.is_empty() || second.is_empty() {
+        return None;
+    }
+    Some((first.join("\n"), second.join("\n")))
+}
+
+pub fn is_bilingual_text(text: &str) -> bool {
+    split_bilingual_text(text).is_some()
+}
+
+/// 判断轨道是否应按双语字幕渲染。文件名标记可兼容没有明显拉丁/中日韩字符的旧文件。
+pub fn looks_like_bilingual_track(track: &SubtitleTrack, filename_marked: bool) -> bool {
+    let pairs = track
+        .cues
+        .iter()
+        .filter(|cue| split_bilingual_text(&cue.text).is_some())
+        .count();
+    pairs > 0 && (filename_marked || pairs * 2 >= track.cues.len())
+}
+
 /// 对段级字幕执行任务级自定义断句。时间按显示宽度比例插值，并保证每条 cue
 /// 有正时长、时间轴单调且最后一条精确落在原 cue 的结束时间。
 pub fn resplit_track_for_width(
@@ -902,6 +1057,52 @@ mod tests {
             split_subtitle_text(&format!("{family}{family}"), 2).len(),
             2
         );
+    }
+
+    #[test]
+    fn bilingual_text_detection_preserves_language_order() {
+        assert_eq!(
+            split_bilingual_text("Hello world\n你好世界"),
+            Some(("Hello world".into(), "你好世界".into()))
+        );
+        assert_eq!(
+            split_bilingual_text("你好世界\nHello world"),
+            Some(("你好世界".into(), "Hello world".into()))
+        );
+        assert_eq!(
+            split_bilingual_text("Hello world.你好世界"),
+            Some(("Hello world.".into(), "你好世界".into()))
+        );
+        assert_eq!(
+            split_bilingual_text("A GPU company\nVera Rubin 和 Grace Blackwell GPU 芯片"),
+            Some((
+                "A GPU company".into(),
+                "Vera Rubin 和 Grace Blackwell GPU 芯片".into()
+            ))
+        );
+        assert!(split_bilingual_text("one ordinary subtitle\nsecond line").is_none());
+    }
+
+    #[test]
+    fn bilingual_track_detection_uses_ratio_or_filename_marker() {
+        let track = SubtitleTrack {
+            cues: vec![
+                Cue {
+                    index: 1,
+                    start_ms: 0,
+                    end_ms: 1_000,
+                    text: "Hello\n你好".into(),
+                },
+                Cue {
+                    index: 2,
+                    start_ms: 1_000,
+                    end_ms: 2_000,
+                    text: "Only English".into(),
+                },
+            ],
+        };
+        assert!(looks_like_bilingual_track(&track, false));
+        assert!(looks_like_bilingual_track(&track, true));
     }
 
     #[test]

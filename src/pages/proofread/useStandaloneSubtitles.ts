@@ -8,7 +8,7 @@ import { readTextFilePath, writeTextFilePath } from '../../lib/tauri';
 import {
   detectSubtitleFormat,
   parseSubtitleEntries,
-  convertSubtitleContent,
+  convertSubtitleContentForPlayer,
   serializeSubtitleEntries,
 } from './subtitleFormats';
 import { pathShim } from './subtitleDetector';
@@ -131,21 +131,27 @@ export const useStandaloneSubtitles = (
   // 创建播放器字幕轨道（VTT blob URL）
   const createPlayerTrack = async (
     srtPath: string | undefined,
-    language: string,
+    language: string | undefined,
     isDefault?: boolean,
+    layout: 'auto' | 'source' | 'target' | 'bilingual' = 'auto',
   ): Promise<PlayerSubtitleTrack | null> => {
     if (!srtPath) return null;
     try {
       const content = await readTextFilePath(srtPath);
       const fromFormat = detectSubtitleFormat(srtPath);
-      const vttContent = convertSubtitleContent(content, fromFormat, 'vtt');
+      const vttContent = convertSubtitleContentForPlayer(
+        content,
+        fromFormat,
+        srtPath,
+        layout,
+      );
       const vttBlob = new Blob([vttContent], { type: 'text/vtt' });
       const vttUrl = URL.createObjectURL(vttBlob);
       return {
         kind: 'subtitles',
         src: vttUrl,
-        srcLang: language,
-        label: `(${language})`,
+        srcLang: language || 'und',
+        label: language ? `(${language})` : '字幕',
         default: isDefault,
       };
     } catch (error) {
@@ -174,14 +180,13 @@ export const useStandaloneSubtitles = (
 
       // 读取源字幕
       const sourceSubtitles = await readSubtitleFile(config.sourceSubtitlePath);
-      if (config.sourceLanguage) {
-        const track = await createPlayerTrack(
-          config.sourceSubtitlePath,
-          config.sourceLanguage,
-          !shouldShowTranslation,
-        );
-        if (track) playerTracks.push(track);
-      }
+      const sourceTrack = await createPlayerTrack(
+        config.sourceSubtitlePath,
+        config.sourceLanguage,
+        !shouldShowTranslation,
+        'auto',
+      );
+      if (sourceTrack) playerTracks.push(sourceTrack);
 
       // 读取翻译字幕
       let translatedSubtitles: Subtitle[] = [];
@@ -189,14 +194,13 @@ export const useStandaloneSubtitles = (
         translatedSubtitles = await readSubtitleFile(config.targetSubtitlePath);
         setHasTranslationFile(translatedSubtitles.length > 0);
 
-        if (config.targetLanguage) {
-          const track = await createPlayerTrack(
-            config.targetSubtitlePath,
-            config.targetLanguage,
-            true,
-          );
-          if (track) playerTracks.push(track);
-        }
+        const track = await createPlayerTrack(
+          config.targetSubtitlePath,
+          config.targetLanguage,
+          true,
+          'target',
+        );
+        if (track) playerTracks.push(track);
       }
 
       setSubtitleTracksForPlayer(playerTracks);
