@@ -1,8 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::process::Command;
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::core::subtitle::{
+    format_ass_time, looks_like_bilingual_track, split_bilingual_text, subtitle_visual_width, Cue,
+    SubtitleTrack, MAX_SUBTITLE_FILE_BYTES,
+};
 
 /// 视频重编码方式。`Auto` 只在真实探测通过时使用硬件编码，否则回退到
 /// 既有的 libx264；`Hardware` 与 Auto 共享同一套安全回退逻辑。
@@ -98,6 +104,707 @@ pub struct BurnInStyleOptions {
     pub margin_v: Option<u32>,
     pub crf: Option<u8>,
     pub preset: Option<String>,
+}
+
+// Netflix timed-text guidance is expressed relative to the video canvas
+// (roughly 42 characters per line and two lines maximum), so the generated
+// ASS uses a 1280x720 reference canvas instead of libass's 384x288 fallback.
+const BILINGUAL_PLAY_RES_X: u32 = 1280;
+const BILINGUAL_PLAY_RES_Y: u32 = 720;
+const BILINGUAL_LATIN_MAX_LINE_CHARS: usize = 42;
+const BILINGUAL_CJK_MAX_LINE_CHARS: usize = 16;
+const NETFLIX_MAX_EVENT_LINES: usize = 2;
+const BILINGUAL_MAX_LINES_PER_LANGUAGE: usize = 1;
+const BILINGUAL_LANE_GAP: u32 = 10;
+const BILINGUAL_MAX_FONT_SIZE: u32 = 32;
+const BILINGUAL_MIN_EVENT_MS: u64 = 833;
+const BILINGUAL_MAX_EVENT_MS: u64 = 7_000;
+
+/// A subtitle path plus an optional generated ASS sidecar. The sidecar is
+/// removed automatically after the FFmpeg operation that owns this value.
+pub struct PreparedSubtitle {
+    path: PathBuf,
+    cleanup_path: Option<PathBuf>,
+}
+
+impl PreparedSubtitle {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PreparedSubtitle {
+    fn drop(&mut self) {
+        if let Some(path) = self.cleanup_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn ass_safe_text(text: &str) -> String {
+    // ASS uses braces/backslashes for override tags. Replacing these literal
+    // characters prevents subtitle text from injecting a tag.
+    text.replace('\\', "／")
+        .replace('{', "｛")
+        .replace('}', "｝")
+        .replace('\r', "")
+}
+
+fn ass_safe_font_name(value: Option<&str>) -> String {
+    let candidate = value.unwrap_or("PingFang SC").trim();
+    if candidate.is_empty()
+        || candidate
+            .chars()
+            .any(|character| character.is_control() || matches!(character, ',' | '\\'))
+    {
+        "PingFang SC".into()
+    } else {
+        candidate.to_string()
+    }
+}
+
+fn ass_safe_color(value: Option<&str>, fallback: &str) -> String {
+    let candidate = value.unwrap_or(fallback).trim();
+    let valid = candidate.len() == 10
+        && candidate.starts_with("&H")
+        && candidate[2..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit());
+    if valid {
+        candidate.to_ascii_uppercase()
+    } else {
+        fallback.into()
+    }
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|character| {
+        let codepoint = character as u32;
+        (0x2e80..=0x2fff).contains(&codepoint)
+            || (0x3040..=0x30ff).contains(&codepoint)
+            || (0x3400..=0x4dbf).contains(&codepoint)
+            || (0x4e00..=0x9fff).contains(&codepoint)
+            || (0xac00..=0xd7af).contains(&codepoint)
+            || (0xf900..=0xfaff).contains(&codepoint)
+    })
+}
+
+fn is_ass_preferred_break(grapheme: &str) -> bool {
+    grapheme.chars().all(char::is_whitespace)
+        || grapheme.chars().last().is_some_and(|character| {
+            matches!(
+                character,
+                '。' | '．'
+                    | '.'
+                    | '！'
+                    | '!'
+                    | '？'
+                    | '?'
+                    | '…'
+                    | '，'
+                    | ','
+                    | '；'
+                    | ';'
+                    | '、'
+                    | '：'
+                    | ':'
+                    | '—'
+                    | '-'
+            )
+        })
+}
+
+/// Apply the language-specific Netflix character cap. Prefer whitespace and
+/// punctuation boundaries so product names and English words are not cut in
+/// the middle just to hit the numeric cap.
+fn split_ass_character_limit(text: &str, max_chars: usize) -> Vec<String> {
+    if max_chars == 0 {
+        return vec![text.trim().to_string()];
+    }
+    let graphemes: Vec<&str> = UnicodeSegmentation::graphemes(text, true).collect();
+    if graphemes.len() <= max_chars {
+        return vec![text.trim().to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < graphemes.len() {
+        while start < graphemes.len() && graphemes[start].chars().all(char::is_whitespace) {
+            start += 1;
+        }
+        if start >= graphemes.len() {
+            break;
+        }
+        let mut end = start;
+        let mut preferred_cut = None;
+        while end < graphemes.len() && end - start < max_chars {
+            end += 1;
+            if is_ass_preferred_break(graphemes[end - 1]) {
+                preferred_cut = Some(end);
+            }
+        }
+        if end == graphemes.len() {
+            let line = graphemes[start..end].concat().trim().to_string();
+            if !line.is_empty() {
+                lines.push(line);
+            }
+            break;
+        }
+        let cut = preferred_cut
+            .filter(|candidate| *candidate > start)
+            .unwrap_or(end);
+        let line = graphemes[start..cut].concat().trim().to_string();
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        start = cut;
+    }
+    if lines.is_empty() {
+        vec![text.trim().to_string()]
+    } else {
+        lines
+    }
+}
+
+fn wrapped_ass_lines(text: &str) -> Vec<String> {
+    let is_cjk = contains_cjk(text);
+    let max_characters = if is_cjk {
+        BILINGUAL_CJK_MAX_LINE_CHARS
+    } else {
+        BILINGUAL_LATIN_MAX_LINE_CHARS
+    };
+    let mut lines = Vec::new();
+    // Some subtitle exporters use the ASS line-break token inside an SRT/VTT
+    // cue. Treat it as a real line break before applying the Netflix width
+    // limit; literal braces/backslashes are escaped later when serialized.
+    for line in text.replace("\\N", "\n").replace('\r', "").lines() {
+        lines.extend(split_ass_character_limit(line.trim(), max_characters));
+    }
+    if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines
+    }
+}
+
+fn wrapped_ass_blocks(text: &str, max_lines: usize) -> Vec<Vec<String>> {
+    wrapped_ass_lines(text)
+        .chunks(max_lines.max(1))
+        .map(|lines| lines.to_vec())
+        .collect()
+}
+
+fn render_block_width(lines: &[String]) -> u64 {
+    lines
+        .iter()
+        .map(|line| subtitle_visual_width(line) as u64)
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn render_block_for_segment(
+    blocks: &[Vec<String>],
+    segment_index: usize,
+    segment_count: usize,
+) -> Vec<String> {
+    if blocks.is_empty() {
+        return Vec::new();
+    }
+    if blocks.len() == 1 {
+        return blocks[0].clone();
+    }
+    // Advance at the start of a segment and hold the final block when the two
+    // languages need different numbers of segments. This avoids showing the
+    // first translated line twice before ever revealing the next one.
+    let count = segment_count.max(1);
+    let block_index = (((segment_index + 1) * blocks.len()).div_ceil(count))
+        .saturating_sub(1)
+        .min(blocks.len().saturating_sub(1));
+    blocks[block_index].clone()
+}
+
+fn split_bilingual_text_for_render(text: &str, force_bilingual: bool) -> Option<(String, String)> {
+    if let Some(pair) = split_bilingual_text(text) {
+        return Some(pair);
+    }
+    if !force_bilingual {
+        return None;
+    }
+
+    // A few ASR/export paths produce a bilingual cue whose two lines contain
+    // only punctuation, numbers, or a short token (for example "." / "。").
+    // Once the surrounding track is known to be bilingual, preserve those two
+    // physical lines as separate lanes instead of collapsing them into one ASS
+    // event. Do not guess for arbitrary multiline single-language subtitles.
+    let lines: Vec<String> = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if lines.len() != 2 {
+        return None;
+    }
+    let first_cjk = contains_cjk(&lines[0]);
+    let second_cjk = contains_cjk(&lines[1]);
+    let first_latin = lines[0]
+        .chars()
+        .any(|character| character.is_ascii_alphabetic());
+    let second_latin = lines[1]
+        .chars()
+        .any(|character| character.is_ascii_alphabetic());
+    let both_same_known_script = (first_cjk && second_cjk) || (first_latin && second_latin);
+    if !both_same_known_script {
+        Some((lines[0].clone(), lines[1].clone()))
+    } else {
+        None
+    }
+}
+
+fn ascii_word_at_start(text: &str) -> Option<&str> {
+    text.trim_start()
+        .split(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .filter(|word| !word.is_empty())
+}
+
+fn ascii_word_at_end(text: &str) -> Option<&str> {
+    text.trim_end()
+        .rsplit(|character: char| !character.is_ascii_alphabetic())
+        .next()
+        .filter(|word| !word.is_empty())
+}
+
+fn is_common_short_english_word(word: &str) -> bool {
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "a" | "an"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "do"
+            | "go"
+            | "he"
+            | "if"
+            | "in"
+            | "is"
+            | "it"
+            | "me"
+            | "my"
+            | "no"
+            | "of"
+            | "on"
+            | "or"
+            | "so"
+            | "to"
+            | "up"
+            | "us"
+            | "we"
+            | "am"
+    )
+}
+
+/// Detect the small class of ASR boundaries that cut one English word across
+/// two cues. Common short words are excluded so normal phrase boundaries are
+/// left intact.
+fn looks_like_split_english_word(previous: &str, next: &str) -> bool {
+    let Some(previous_word) = ascii_word_at_end(previous) else {
+        return false;
+    };
+    let Some(next_word) = ascii_word_at_start(next) else {
+        return false;
+    };
+    let Some(first) = next_word.chars().next() else {
+        return false;
+    };
+    let previous_trimmed = previous.trim_end();
+    let fragment_starts_after_apostrophe = previous_trimmed
+        .strip_suffix(previous_word)
+        .and_then(|prefix| prefix.chars().last())
+        .is_some_and(|character| matches!(character, '\'' | '’'));
+    previous_word.len() <= 2
+        && previous_word
+            .chars()
+            .any(|character| character.is_ascii_lowercase())
+        && previous_trimmed.ends_with(previous_word)
+        && !fragment_starts_after_apostrophe
+        && first.is_ascii_lowercase()
+        && !is_common_short_english_word(previous_word)
+}
+
+fn join_render_language_parts(left: &str, right: &str, force_no_space: bool) -> String {
+    let left = left.trim_end();
+    let right = right.trim_start();
+    if left.is_empty() {
+        return right.to_string();
+    }
+    if right.is_empty() {
+        return left.to_string();
+    }
+    let left_ascii = left
+        .chars()
+        .last()
+        .is_some_and(|character| character.is_ascii_alphanumeric());
+    let right_ascii = right
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric());
+    let likely_fragment_boundary = ascii_word_at_end(left)
+        .zip(ascii_word_at_start(right))
+        .is_some_and(|(left_word, right_word)| {
+            left_word.len() <= 2
+                && right_word
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_lowercase())
+        });
+    if left_ascii && right_ascii && !(force_no_space || likely_fragment_boundary) {
+        format!("{left} {right}")
+    } else {
+        format!("{left}{right}")
+    }
+}
+
+fn merge_render_bilingual_text(left: &(String, String), right: &(String, String)) -> String {
+    format!(
+        "{}\n{}",
+        join_render_language_parts(&left.0, &right.0, true),
+        join_render_language_parts(&left.1, &right.1, false)
+    )
+}
+
+/// Repair only word-split boundaries for rendering. The user's exported SRT
+/// and its original cue timing remain untouched; the generated ASS sidecar is
+/// allowed to show the complete word before applying Netflix line limits.
+fn coalesce_split_word_cues(track: &SubtitleTrack) -> SubtitleTrack {
+    let mut cues: Vec<Cue> = Vec::with_capacity(track.cues.len());
+    for cue in &track.cues {
+        let should_merge = cues.last().is_some_and(|previous| {
+            previous.end_ms <= cue.start_ms
+                && cue.start_ms - previous.end_ms <= 120
+                && split_bilingual_text_for_render(&previous.text, true)
+                    .zip(split_bilingual_text_for_render(&cue.text, true))
+                    .is_some_and(|(left, right)| looks_like_split_english_word(&left.0, &right.0))
+        });
+        if should_merge {
+            if let Some(previous) = cues.last_mut() {
+                let left = split_bilingual_text_for_render(&previous.text, true);
+                let right = split_bilingual_text_for_render(&cue.text, true);
+                if let (Some(left), Some(right)) = (left, right) {
+                    previous.text = merge_render_bilingual_text(&left, &right);
+                    previous.end_ms = previous.end_ms.max(cue.end_ms);
+                    continue;
+                }
+            }
+        }
+        cues.push(cue.clone());
+    }
+    SubtitleTrack { cues }
+}
+
+#[derive(Debug, Clone)]
+struct BilingualRenderSegment {
+    start_ms: u64,
+    end_ms: u64,
+    first_lines: Vec<String>,
+    second_lines: Vec<String>,
+}
+
+/// Split an overlong cue into Netflix-sized events without changing the
+/// source SRT on disk. A bilingual event uses one line per language, keeping
+/// the Netflix two-line maximum for the complete event. If one language needs
+/// fewer segments, its nearest block remains visible while the other advances.
+fn bilingual_render_segments(cue: &Cue, force_bilingual: bool) -> Vec<BilingualRenderSegment> {
+    let duration = cue.end_ms.saturating_sub(cue.start_ms).max(1);
+    let (first_blocks, second_blocks) =
+        match split_bilingual_text_for_render(&cue.text, force_bilingual) {
+            Some((first, second)) => (
+                wrapped_ass_blocks(&first, BILINGUAL_MAX_LINES_PER_LANGUAGE),
+                wrapped_ass_blocks(&second, BILINGUAL_MAX_LINES_PER_LANGUAGE),
+            ),
+            None => (
+                wrapped_ass_blocks(&cue.text, NETFLIX_MAX_EVENT_LINES),
+                Vec::new(),
+            ),
+        };
+    let duration_segment_count = duration
+        .saturating_add(BILINGUAL_MAX_EVENT_MS.saturating_sub(1))
+        .checked_div(BILINGUAL_MAX_EVENT_MS)
+        .unwrap_or(1) as usize;
+    let desired_count = first_blocks
+        .len()
+        .max(second_blocks.len())
+        .max(duration_segment_count)
+        .max(1);
+    // A one-millisecond cue cannot hold an arbitrary number of events. This
+    // only affects malformed/very short external files; normal media cues are
+    // long enough to retain every wrapped block.
+    let segment_count = desired_count.min(duration as usize).max(1);
+    let mut selected = Vec::with_capacity(segment_count);
+    for index in 0..segment_count {
+        let first_lines = render_block_for_segment(&first_blocks, index, segment_count);
+        let second_lines = render_block_for_segment(&second_blocks, index, segment_count);
+        let weight = render_block_width(&first_lines).max(render_block_width(&second_lines));
+        selected.push((first_lines, second_lines, weight));
+    }
+
+    let total_weight = selected
+        .iter()
+        .map(|(_, _, weight)| *weight)
+        .sum::<u64>()
+        .max(1);
+    let min_event = if duration >= BILINGUAL_MIN_EVENT_MS.saturating_mul(segment_count as u64) {
+        BILINGUAL_MIN_EVENT_MS
+    } else {
+        1
+    };
+    let mut cursor = cue.start_ms;
+    let mut accumulated_weight = 0u64;
+    selected
+        .into_iter()
+        .enumerate()
+        .map(|(index, (first_lines, second_lines, weight))| {
+            accumulated_weight = accumulated_weight.saturating_add(weight);
+            let is_last = index + 1 == segment_count;
+            let end_ms = if is_last {
+                cue.end_ms
+            } else {
+                let weighted_offset = (duration as u128)
+                    .saturating_mul(accumulated_weight as u128)
+                    .checked_div(total_weight as u128)
+                    .unwrap_or(0) as u64;
+                let remaining = (segment_count - index - 1) as u64;
+                let latest_end = cue
+                    .end_ms
+                    .saturating_sub(min_event.saturating_mul(remaining));
+                let earliest_end = cursor.saturating_add(min_event).min(cue.end_ms);
+                let max_end = cursor
+                    .saturating_add(BILINGUAL_MAX_EVENT_MS)
+                    .min(cue.end_ms);
+                let upper_bound = latest_end.min(max_end).max(earliest_end).min(cue.end_ms);
+                cue.start_ms
+                    .saturating_add(weighted_offset)
+                    .max(earliest_end)
+                    .min(upper_bound)
+            };
+            let segment = BilingualRenderSegment {
+                start_ms: cursor,
+                end_ms,
+                first_lines,
+                second_lines,
+            };
+            cursor = end_ms;
+            segment
+        })
+        .collect()
+}
+
+fn bilingual_font_size(style: &BurnInStyleOptions) -> u32 {
+    // The UI value is a logical pixel size at the 1280x720 reference canvas.
+    // Do not multiply it by libass's legacy 384x288 fallback scale: a nominal
+    // 24px SRT otherwise becomes roughly 60px on a 720p video.
+    style
+        .font_size
+        .unwrap_or(24)
+        .clamp(10, BILINGUAL_MAX_FONT_SIZE)
+}
+
+fn bilingual_alignment(style: &BurnInStyleOptions) -> (u8, u32) {
+    let alignment = style.alignment.unwrap_or(2).clamp(1, 9);
+    let column = (alignment - 1) % 3;
+    let anchor = 7 + column; // top-left / top-center / top-right
+    let x = match column {
+        0 => 64,
+        1 => BILINGUAL_PLAY_RES_X / 2,
+        _ => BILINGUAL_PLAY_RES_X - 64,
+    };
+    (anchor, x)
+}
+
+fn bilingual_vertical_start(alignment: u8, margin: u32, total_height: u32) -> u32 {
+    let max_start = BILINGUAL_PLAY_RES_Y
+        .saturating_sub(margin)
+        .saturating_sub(total_height);
+    let proposed = if alignment >= 7 {
+        margin
+    } else if alignment >= 4 {
+        BILINGUAL_PLAY_RES_Y.saturating_sub(total_height) / 2
+    } else {
+        BILINGUAL_PLAY_RES_Y
+            .saturating_sub(margin)
+            .saturating_sub(total_height)
+    };
+    proposed.min(max_start)
+}
+
+/// Serialize a bilingual track as an explicit two-lane ASS script.
+///
+/// Each language block becomes its own Dialogue event with an explicit
+/// position. This avoids renderer-dependent collapsing of two SRT lines while
+/// preserving the selected top/center/bottom and left/center/right alignment.
+pub fn serialize_bilingual_ass(track: &SubtitleTrack, style: &BurnInStyleOptions) -> String {
+    let font_size = bilingual_font_size(style);
+    let font_name = ass_safe_font_name(style.font_name.as_deref());
+    let primary = ass_safe_color(style.font_color.as_deref(), "&H00FFFFFF");
+    let outline = ass_safe_color(style.outline_color.as_deref(), "&H00000000");
+    let background = ass_safe_color(style.background_color.as_deref(), "&H80000000");
+    let outline_width = style.outline_width.unwrap_or(2.0).clamp(0.0, 10.0);
+    let shadow = style.shadow.unwrap_or(0.0).clamp(0.0, 20.0);
+    let border_style = if style.opaque_background.unwrap_or(false) {
+        3
+    } else {
+        1
+    };
+    let back_colour = if border_style == 3 {
+        background
+    } else {
+        "&H00000000".into()
+    };
+    let margin = style.margin_v.unwrap_or(30).min(BILINGUAL_PLAY_RES_Y / 2);
+    let line_height = ((font_size as f32 * 1.25).round() as u32).max(font_size.saturating_add(4));
+    let (anchor, x) = bilingual_alignment(style);
+    let alignment = style.alignment.unwrap_or(2).clamp(1, 9);
+
+    let mut out = format!(
+        "[Script Info]\nScriptType: v4.00+\nCollisions: Normal\nPlayResX: {BILINGUAL_PLAY_RES_X}\nPlayResY: {BILINGUAL_PLAY_RES_Y}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Bilingual,{font_name},{font_size},{primary},&H000000FF,{outline},{back_colour},0,0,0,0,100,100,0,0,{border_style},{outline_width:.2},{shadow:.2},8,48,48,{margin},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    );
+
+    let track_is_bilingual = looks_like_bilingual_track(track, false);
+    let render_track = coalesce_split_word_cues(track);
+    for cue in &render_track.cues {
+        for segment in bilingual_render_segments(cue, track_is_bilingual) {
+            let mut rendered_blocks = Vec::new();
+            if !segment.first_lines.is_empty() {
+                rendered_blocks.push(segment.first_lines);
+            }
+            if !segment.second_lines.is_empty() {
+                rendered_blocks.push(segment.second_lines);
+            }
+            let total_lines = rendered_blocks.iter().map(Vec::len).sum::<usize>().max(1) as u32;
+            let total_height = total_lines.saturating_mul(line_height).saturating_add(
+                BILINGUAL_LANE_GAP.saturating_mul(rendered_blocks.len().saturating_sub(1) as u32),
+            );
+            let mut y = bilingual_vertical_start(alignment, margin, total_height);
+            for (block_index, lines) in rendered_blocks.iter().enumerate() {
+                let text = lines
+                    .iter()
+                    .map(|line| ass_safe_text(line))
+                    .collect::<Vec<_>>()
+                    .join("\\N");
+                out.push_str(&format!(
+                    "Dialogue: 0,{},{},Bilingual,,0,0,0,,{{\\an{anchor}\\pos({x},{y})\\fs{font_size}}}{text}\n",
+                    format_ass_time(segment.start_ms),
+                    format_ass_time(segment.end_ms),
+                ));
+                y = y
+                    .saturating_add((lines.len() as u32).saturating_mul(line_height))
+                    .saturating_add(if block_index + 1 < rendered_blocks.len() {
+                        BILINGUAL_LANE_GAP
+                    } else {
+                        0
+                    });
+            }
+        }
+    }
+    out
+}
+
+fn subtitle_format_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("srt")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "vtt" => "vtt",
+        "ass" | "ssa" => "ass",
+        "lrc" => "lrc",
+        _ => "srt",
+    }
+}
+
+/// Prepare a subtitle path for deterministic rendering. Plain/non-bilingual
+/// files are returned untouched; bilingual SRT/VTT/LRC files receive a unique
+/// temporary ASS sidecar that is deleted when the returned guard is dropped.
+pub async fn prepare_subtitle_for_render(
+    subtitle_path: &Path,
+    temp_dir: &Path,
+    style: &BurnInStyleOptions,
+) -> Result<PreparedSubtitle, String> {
+    let extension = subtitle_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "ass" | "ssa") {
+        return Ok(PreparedSubtitle {
+            path: subtitle_path.to_path_buf(),
+            cleanup_path: None,
+        });
+    }
+
+    let metadata = tokio::fs::metadata(subtitle_path)
+        .await
+        .map_err(|error| format!("无法读取字幕文件信息：{error}"))?;
+    if metadata.len() > MAX_SUBTITLE_FILE_BYTES {
+        return Err(format!(
+            "字幕文件超过 {} MB，无法准备渲染",
+            MAX_SUBTITLE_FILE_BYTES / (1024 * 1024)
+        ));
+    }
+    let content = tokio::fs::read_to_string(subtitle_path)
+        .await
+        .map_err(|error| format!("无法读取字幕文件：{error}"))?;
+    let track = match SubtitleTrack::from_format(&content, subtitle_format_for_path(subtitle_path))
+    {
+        Ok(track) => track,
+        Err(_) => {
+            // Keep the existing FFmpeg error/reporting path for malformed
+            // external subtitle files instead of changing import semantics.
+            return Ok(PreparedSubtitle {
+                path: subtitle_path.to_path_buf(),
+                cleanup_path: None,
+            });
+        }
+    };
+    let filename_marked = subtitle_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| {
+            let lower = stem.to_ascii_lowercase();
+            lower.contains("bilingual") || stem.contains("双语")
+        })
+        .unwrap_or(false);
+    if !looks_like_bilingual_track(&track, filename_marked) {
+        return Ok(PreparedSubtitle {
+            path: subtitle_path.to_path_buf(),
+            cleanup_path: None,
+        });
+    }
+
+    tokio::fs::create_dir_all(temp_dir)
+        .await
+        .map_err(|error| format!("无法创建字幕渲染临时目录：{error}"))?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let partial_path = temp_dir.join(format!("finalsub-bilingual-{id}.ass.part"));
+    let ass_path = temp_dir.join(format!("finalsub-bilingual-{id}.ass"));
+    let ass = serialize_bilingual_ass(&track, style);
+    if let Err(error) = tokio::fs::write(&partial_path, ass).await {
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(format!("无法写入双语字幕渲染文件：{error}"));
+    }
+    if let Err(error) = tokio::fs::rename(&partial_path, &ass_path).await {
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(format!("无法提交双语字幕渲染文件：{error}"));
+    }
+    Ok(PreparedSubtitle {
+        path: ass_path.clone(),
+        cleanup_path: Some(ass_path),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -979,6 +1686,253 @@ mod tests {
         assert!(vf.contains("PrimaryColour=&H0000FFFF"));
         assert!(vf.contains("OutlineColour=&H00FF0000"));
         assert!(vf.contains("MarginV=50"));
+    }
+
+    #[test]
+    fn bilingual_ass_uses_netflix_reference_layout_without_legacy_scale() {
+        let track = SubtitleTrack::from_srt(
+            "1\n00:00:00,000 --> 00:00:03,000\nAI is useful.\nAI 很实用。\n\n",
+        )
+        .unwrap();
+        let ass = serialize_bilingual_ass(
+            &track,
+            &BurnInStyleOptions {
+                font_size: Some(24),
+                alignment: Some(2),
+                ..Default::default()
+            },
+        );
+        assert!(ass.contains("PlayResX: 1280"));
+        assert!(ass.contains("PlayResY: 720"));
+        assert!(ass.contains("Style: Bilingual,PingFang SC,24,"));
+        assert_eq!(ass.matches("Dialogue: ").count(), 2);
+        assert!(ass.contains("\\an8\\pos(640,"));
+        assert!(ass.contains("\\fs24"));
+        assert!(ass.contains("AI is useful."));
+        assert!(ass.contains("AI 很实用。"));
+    }
+
+    #[test]
+    fn bilingual_ass_caps_oversized_font_and_preserves_opaque_background() {
+        let track = SubtitleTrack::from_srt(
+            "1\n00:00:00,000 --> 00:00:03,000\nAI is useful.\nAI 很实用。\n\n",
+        )
+        .unwrap();
+        let ass = serialize_bilingual_ass(
+            &track,
+            &BurnInStyleOptions {
+                font_size: Some(120),
+                opaque_background: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(ass.contains("Style: Bilingual,PingFang SC,32,"));
+        assert!(ass.contains(",0,0,0,0,100,100,0,0,3,2.00,0.00,8,"));
+        assert!(ass.contains("\\fs32"));
+        assert!(!ass.contains("\\fs120"));
+    }
+
+    #[test]
+    fn bilingual_ass_segments_long_cues_to_two_lines_per_lane() {
+        let track = SubtitleTrack::from_srt(
+            "1\n00:00:00,000 --> 00:00:05,000\nThis is a deliberately long English sentence that should be segmented into multiple Netflix-sized subtitle events for readability.\n这是一条故意较长的中文句子，用于验证字幕会按照 Netflix 标准分成多个易读的事件。\n\n",
+        )
+        .unwrap();
+        let segments = bilingual_render_segments(&track.cues[0], true);
+        assert!(segments.len() > 1);
+        assert_eq!(segments.first().unwrap().start_ms, 0);
+        assert_eq!(segments.last().unwrap().end_ms, 5_000);
+        for segment in &segments {
+            assert!(segment.first_lines.len() <= BILINGUAL_MAX_LINES_PER_LANGUAGE);
+            assert!(segment.second_lines.len() <= BILINGUAL_MAX_LINES_PER_LANGUAGE);
+            assert!(
+                segment.first_lines.len() + segment.second_lines.len() <= NETFLIX_MAX_EVENT_LINES
+            );
+        }
+        let ass = serialize_bilingual_ass(&track, &BurnInStyleOptions::default());
+        for event in ass.lines().filter(|line| line.starts_with("Dialogue: ")) {
+            let text = event
+                .split_once(",,{")
+                .map(|(_, value)| value)
+                .unwrap_or("");
+            assert!(
+                text.matches("\\N").count() <= 1,
+                "event has more than two lines: {event}"
+            );
+        }
+    }
+
+    #[test]
+    fn bilingual_ass_applies_language_specific_netflix_line_limits() {
+        let track = SubtitleTrack::from_srt(
+            "1\n00:00:00,000 --> 00:00:20,000\nThis is a long English sentence with more than forty-two characters so it must be split cleanly.\n当美国企业客户需要更多内存芯片时英伟达宣布提高价格并推出新的 GPU 产品。\n\n",
+        )
+        .unwrap();
+        let segments = bilingual_render_segments(&track.cues[0], true);
+        assert!(segments.len() >= 3);
+        assert!(segments.iter().all(|segment| {
+            segment.end_ms > segment.start_ms
+                && segment.end_ms - segment.start_ms <= BILINGUAL_MAX_EVENT_MS
+                && segment.end_ms - segment.start_ms >= BILINGUAL_MIN_EVENT_MS
+        }));
+        for segment in &segments {
+            assert!(
+                segment.first_lines.len() + segment.second_lines.len() <= NETFLIX_MAX_EVENT_LINES
+            );
+            for line in &segment.first_lines {
+                assert!(
+                    UnicodeSegmentation::graphemes(line.as_str(), true).count()
+                        <= BILINGUAL_LATIN_MAX_LINE_CHARS,
+                    "Latin line exceeds 42 characters: {line}"
+                );
+            }
+            for line in &segment.second_lines {
+                assert!(
+                    UnicodeSegmentation::graphemes(line.as_str(), true).count()
+                        <= BILINGUAL_CJK_MAX_LINE_CHARS,
+                    "CJK line exceeds 16 characters: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bilingual_ass_uses_two_total_lines_and_preserves_vertical_choice() {
+        let track = SubtitleTrack::from_srt(
+            "1\n00:00:00,000 --> 00:00:05,000\nThis English sentence is long enough to require another timed event under the Netflix limit.\n这条中文句子也足够长，需要拆分到下一个时间段显示。\n\n",
+        )
+        .unwrap();
+        let segments = bilingual_render_segments(&track.cues[0], true);
+        assert!(segments.len() > 1);
+        assert!(segments.iter().all(|segment| {
+            segment.first_lines.len() <= 1
+                && segment.second_lines.len() <= 1
+                && segment.first_lines.len() + segment.second_lines.len() <= 2
+        }));
+
+        let bottom = serialize_bilingual_ass(
+            &track,
+            &BurnInStyleOptions {
+                alignment: Some(2),
+                ..Default::default()
+            },
+        );
+        let top = serialize_bilingual_ass(
+            &track,
+            &BurnInStyleOptions {
+                alignment: Some(8),
+                ..Default::default()
+            },
+        );
+        assert!(bottom.contains("\\an8\\pos(640,620)"));
+        assert!(top.contains("\\an8\\pos(640,30)"));
+    }
+
+    #[test]
+    fn bilingual_render_repairs_word_split_only_at_adjacent_cues() {
+        let track = SubtitleTrack {
+            cues: vec![
+                Cue {
+                    index: 1,
+                    start_ms: 0,
+                    end_ms: 1_000,
+                    text: "raising pr\n提高 pr".into(),
+                },
+                Cue {
+                    index: 2,
+                    start_ms: 1_000,
+                    end_ms: 2_000,
+                    text: "ices now\nices 价格".into(),
+                },
+            ],
+        };
+        let ass = serialize_bilingual_ass(&track, &BurnInStyleOptions::default());
+        assert!(ass.contains("raising prices now"));
+        assert!(!ass.contains("raising pr\\N"));
+    }
+
+    #[test]
+    fn bilingual_render_does_not_merge_complete_short_words_or_abbreviations() {
+        let track = SubtitleTrack {
+            cues: vec![
+                Cue {
+                    index: 1,
+                    start_ms: 0,
+                    end_ms: 1_000,
+                    text: "When the U.S.\n当美国".into(),
+                },
+                Cue {
+                    index: 2,
+                    start_ms: 1_000,
+                    end_ms: 2_000,
+                    text: "is ready\n已做好准备".into(),
+                },
+                Cue {
+                    index: 3,
+                    start_ms: 2_000,
+                    end_ms: 3_000,
+                    text: "about the\n关于这个".into(),
+                },
+                Cue {
+                    index: 4,
+                    start_ms: 3_000,
+                    end_ms: 4_000,
+                    text: "product\n产品".into(),
+                },
+                Cue {
+                    index: 5,
+                    start_ms: 4_000,
+                    end_ms: 5_000,
+                    text: "it's\n它正在".into(),
+                },
+                Cue {
+                    index: 6,
+                    start_ms: 5_000,
+                    end_ms: 6_000,
+                    text: "going well\n进展顺利".into(),
+                },
+            ],
+        };
+        let ass = serialize_bilingual_ass(&track, &BurnInStyleOptions::default());
+        assert_eq!(ass.matches("Dialogue: ").count(), 12);
+        assert!(!ass.contains("U.S.is ready"));
+        assert!(!ass.contains("theproduct"));
+        assert!(!ass.contains("it'sgoing"));
+    }
+
+    #[test]
+    fn bilingual_ass_neutralizes_override_characters() {
+        let track = SubtitleTrack::from_srt(
+            "1\n00:00:00,000 --> 00:00:01,000\nHello {\\fs200}\\N world\n你好\n\n",
+        )
+        .unwrap();
+        let ass = serialize_bilingual_ass(&track, &BurnInStyleOptions::default());
+        assert!(!ass.contains("{\\fs200}"));
+        assert!(ass.contains("｛／fs200｝"));
+    }
+
+    #[tokio::test]
+    async fn prepare_bilingual_subtitle_creates_and_cleans_unique_ass_sidecar() {
+        let fixture = tempfile::tempdir().unwrap();
+        let subtitle = fixture.path().join("captions.finalsub.zh.bilingual.srt");
+        std::fs::write(
+            &subtitle,
+            "1\n00:00:00,000 --> 00:00:01,000\nHello\n你好\n\n",
+        )
+        .unwrap();
+        let prepared =
+            prepare_subtitle_for_render(&subtitle, fixture.path(), &BurnInStyleOptions::default())
+                .await
+                .unwrap();
+        let generated = prepared.path().to_path_buf();
+        assert_eq!(
+            generated.extension().and_then(|value| value.to_str()),
+            Some("ass")
+        );
+        assert!(generated.is_file());
+        assert_ne!(generated, subtitle);
+        drop(prepared);
+        assert!(!generated.exists());
     }
 
     #[test]

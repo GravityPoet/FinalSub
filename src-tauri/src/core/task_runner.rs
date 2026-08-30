@@ -2326,6 +2326,12 @@ async fn run_compose_stage(
     let style_snapshot = compose.style.clone().unwrap_or_default();
     style_snapshot.validate()?;
     let style = style_snapshot.to_burn_in_options();
+    let render_temp_dir = crate::core::settings::resolved_temp_dir(app_config_dir)
+        .map_err(|error| format!("无法准备字幕渲染临时目录：{error}"))?;
+    let prepared_subtitle =
+        crate::core::audio::prepare_subtitle_for_render(subtitle_path, &render_temp_dir, &style)
+            .await?;
+    let render_subtitle_path = prepared_subtitle.path();
     let encoding =
         crate::core::audio::resolve_video_encoding(&ffmpeg, encoder_mode, &style, media_path).await;
     let original_audio_tracks = if matches!(
@@ -2372,7 +2378,7 @@ async fn run_compose_stage(
     let mut active_encoding = encoding;
     let mut args = crate::core::audio::compose_args(
         &media_path.to_string_lossy(),
-        &subtitle_path.to_string_lossy(),
+        &render_subtitle_path.to_string_lossy(),
         &output_path,
         &style,
         &options,
@@ -2410,7 +2416,7 @@ async fn run_compose_stage(
                 active_encoding = crate::core::audio::cpu_video_encoding_for_style(&style);
                 args = crate::core::audio::compose_args(
                     &media_path.to_string_lossy(),
-                    &subtitle_path.to_string_lossy(),
+                    &render_subtitle_path.to_string_lossy(),
                     &output_path,
                     &style,
                     &crate::core::audio::ComposeOptions {
