@@ -979,6 +979,18 @@ mod tests {
     }
 
     #[test]
+    fn bilingual_srt_keeps_physical_break_and_ass_uses_forced_break() {
+        let input = "1\n00:00:01,000 --> 00:00:03,500\nHello world\n你好世界\n\n";
+        let track = SubtitleTrack::from_srt(input).unwrap();
+
+        let srt = track.to_format("srt").unwrap();
+        assert!(srt.contains("Hello world\n你好世界"));
+
+        let ass = track.to_format("ass").unwrap();
+        assert!(ass.contains("Hello world\\N你好世界"));
+    }
+
+    #[test]
     fn parse_vtt_basic() {
         let vtt = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.500 align:start\nHello world\n\n00:00:04.000 --> 00:00:06.000\nSecond line";
         let track = SubtitleTrack::from_vtt(vtt).unwrap();

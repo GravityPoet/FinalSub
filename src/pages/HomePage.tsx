@@ -2066,6 +2066,25 @@ export default function HomePage() {
                   <Select id="task-output-format" value={outputFormat} onChange={(event) => setOutputFormat(event.target.value)}>
                     {outputFormats.map((format) => <option key={format.value} value={format.value}>{format.label}</option>)}
                   </Select>
+                  {bilingualTranslation && (
+                    <p
+                      className={`mt-2 flex items-start gap-1.5 text-xs leading-5 ${outputFormat === "ass" ? "text-success" : "text-warning"}`}
+                      role="status"
+                    >
+                      <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                      <span>{outputFormat === "ass" ? t("home.bilibiliAssReady") : t("home.bilibiliAssHint")}</span>
+                      {outputFormat !== "ass" && (
+                        <button
+                          type="button"
+                          onClick={() => setOutputFormat("ass")}
+                          className="shrink-0 font-semibold underline decoration-warning/45 underline-offset-2 transition hover:text-warning/80"
+                          data-testid="use-ass-for-bilibili"
+                        >
+                          {t("home.useAssForBilibili")}
+                        </button>
+                      )}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label htmlFor="task-output-name" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.outputName")}</label>
