@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  X,
   Volume2,
 } from "lucide-react";
 import { useI18n } from "../lib/i18n";
@@ -183,7 +184,7 @@ export default function HomePage() {
   const [sourceLanguage, setSourceLanguage] = useState("auto");
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [translationContentMode, setTranslationContentMode] =
-    useState<TranslationContentMode>("target-only");
+    useState<TranslationContentMode>("source-and-target");
   const [outputFormat, setOutputFormat] = useState("srt");
   const [outputName, setOutputName] = useState("");
   const [maxSubtitleChars, setMaxSubtitleChars] = useState(0);
@@ -1257,6 +1258,20 @@ export default function HomePage() {
                           {t("home.pairSubtitles")}
                         </Button>
                       )}
+                      {selectedPaths.length === 1 && (
+                        <Button
+                          type="button"
+                          onClick={clearSelectedPaths}
+                          variant="ghost"
+                          size="sm"
+                          className="text-text-tertiary hover:text-danger"
+                          aria-label={t("home.removeSource")}
+                          title={t("home.removeSourceHint")}
+                        >
+                          <X size={14} />
+                          {t("home.removeSource")}
+                        </Button>
+                      )}
                       <Button type="button" onClick={handleSelectMedia} variant="primary" size="sm">
                         <FolderOpen size={14} />
                         {t("home.selectFile")}
@@ -1268,6 +1283,12 @@ export default function HomePage() {
                       </Button>
                     </div>
                   </div>
+
+                  {selectedPath && (
+                    <p className="mt-3 text-xs leading-5 text-text-tertiary">
+                      {t("home.replaceSourceHint")}
+                    </p>
+                  )}
 
                   {inputTypeMismatchHint && (
                     <div className="mt-4 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3.5 py-3 text-xs leading-5 text-warning" role="status">
