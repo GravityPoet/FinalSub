@@ -20,11 +20,11 @@ const navItems = [
   { to: "/settings", key: "nav.settings", icon: Settings },
 ] as const;
 
-const primaryNavItems = [navItems[0], navItems[1], navItems[7]] as const;
-const toolNavItems = [navItems[6], navItems[8], navItems[2], navItems[3], navItems[4], navItems[5]] as const;
+const primaryNavItems = [navItems[0], navItems[1], navItems[7], navItems[3]] as const;
+const toolNavItems = [navItems[6], navItems[8], navItems[2], navItems[4], navItems[5]] as const;
 const settingsNavItem = navItems[9];
-const mobilePrimaryNavItems = [navItems[0], navItems[1], navItems[7]] as const;
-const mobileMoreNavItems = [navItems[6], navItems[8], navItems[2], navItems[3], navItems[4], navItems[5], navItems[9]] as const;
+const mobilePrimaryNavItems = [navItems[0], navItems[1], navItems[7], navItems[3]] as const;
+const mobileMoreNavItems = [navItems[6], navItems[8], navItems[2], navItems[4], navItems[5], navItems[9]] as const;
 
 const Logo = () => <img className="brand-logo" src={brandIcon} alt="" aria-hidden="true" />;
 
@@ -182,7 +182,7 @@ export default function Layout() {
         </div>,
         document.body,
       )}
-      <nav ref={mobileNavRef} className="liquid-shell liquid-dock fixed inset-x-3 bottom-3 z-50 grid grid-cols-4 gap-1 rounded-[1.4rem] p-1.5 sm:hidden">
+      <nav ref={mobileNavRef} className="liquid-shell liquid-dock fixed inset-x-3 bottom-3 z-50 grid grid-cols-5 gap-1 rounded-[1.4rem] p-1.5 sm:hidden">
         {mobilePrimaryNavItems.map(({ to, key, icon: Icon }) => {
           const isActive = location.pathname === to;
           return (
