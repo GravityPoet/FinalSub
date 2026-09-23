@@ -98,7 +98,8 @@ build_universal() {
   else
     codesign --force --keychain "${SIGNING_KEYCHAIN}" --sign "${SIGNING_IDENTITY}" --timestamp=none "${staged_output}"
   fi
-  lipo "${staged_output}" -verify_arch arm64 x86_64
+  lipo -verify_arch arm64 "${staged_output}"
+  lipo -verify_arch x86_64 "${staged_output}"
   codesign --verify --strict "${staged_output}"
 
 }
@@ -137,7 +138,8 @@ for binary_name in ffmpeg whisper-cli; do
   destination="${BIN_DIR}/${binary_name}-universal-apple-darwin"
   install -m 755 "${STAGING_DIR}/${binary_name}-universal-apple-darwin" "${destination}.new"
   mv -f "${destination}.new" "${destination}"
-  lipo "${destination}" -verify_arch arm64 x86_64
+  lipo -verify_arch arm64 "${destination}"
+  lipo -verify_arch x86_64 "${destination}"
   codesign --verify --strict "${destination}"
 done
 
