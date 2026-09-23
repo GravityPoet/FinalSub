@@ -109,21 +109,68 @@ fn command_available(command: &Path) -> bool {
 }
 
 pub fn default_uv_bin() -> PathBuf {
-    let mut candidates = vec![PathBuf::from("/opt/homebrew/bin/uv")];
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/bin/uv"));
+    // 优先尊重用户 PATH 环境（brew / 官方安装器 / cargo / asdf 等任意来源）
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path_var) {
+            let candidate = directory.join("uv");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
     }
+    // PATH 未命中时回退常见安装位置（不偏向某个包管理器）
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin/uv"));
+        candidates.push(home.join(".cargo/bin/uv"));
+    }
+    candidates.push(PathBuf::from("/opt/homebrew/bin/uv"));
     candidates.push(PathBuf::from("/usr/local/bin/uv"));
-    candidates.extend(
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-            .map(|directory| directory.join("uv")),
-    );
     candidates
         .into_iter()
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| PathBuf::from("uv"))
+}
+
+const PARAKEET_MLX_MIRROR_INDEXES: &[&str] = &[
+    "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "https://mirrors.aliyun.com/pypi/simple/",
+];
+
+fn has_user_index_override() -> bool {
+    [
+        "UV_DEFAULT_INDEX",
+        "UV_INDEX_URL",
+        "UV_INDEX",
+        "UV_EXTRA_INDEX_URL",
+        "PIP_INDEX_URL",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+}
+
+fn is_retryable_uv_error(combined_output: &str) -> bool {
+    let lower = combined_output.to_lowercase();
+    [
+        "failed to fetch",
+        "pypi.org",
+        "failed to lookup",
+        "nodename nor servname",
+        "dns error",
+        "servfail",
+        "request failed after",
+        "client error",
+        "network was disabled",
+        "not found in the cache",
+        "no solution found",
+        "connection",
+        "timed out",
+        "timeout",
+        "temporary failure",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn prepend_path(directory: &Path, inherited_path: Option<&OsStr>) -> Option<OsString> {
@@ -297,57 +344,122 @@ impl AsrEngine for ParakeetMlxEngine {
             .await
             .ok();
 
-        let mut command = tokio::process::Command::new(&self.uv_bin);
-        command
-            .args([
-                "run",
-                "--python",
-                PARAKEET_MLX_PYTHON,
-                "--with",
-                PARAKEET_MLX_PACKAGE,
-                "python",
-            ])
-            .arg(&self.transcribe_script)
-            .args(["--audio", &job.audio_path, "--output", &job.output_path])
-            .args(["--local-model-path", &model_path.to_string_lossy()])
-            .args(["--source-language", &language])
-            .args(["--max-block-chars", &max_block_chars.to_string()]);
-
-        let hf_home = mlx_huggingface_cache(&self.cache_root);
-        command
-            .env("HF_HOME", &hf_home)
-            .env("HF_HUB_CACHE", &hf_home)
-            .env("HF_HUB_OFFLINE", "1")
-            .env("TRANSFORMERS_OFFLINE", "1")
-            .env("PYTHONUNBUFFERED", "1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        if let Some(path) = path_with_ffmpeg(self.ffmpeg_path.as_deref()) {
-            // Finder-launched apps receive a minimal PATH. Keep the bundled
-            // sidecar ahead of it so parakeet_mlx.audio can resolve `ffmpeg`
-            // through shutil.which without requiring a Homebrew installation.
-            command.env("PATH", path);
+        // pypi.org 在部分网络下 DNS 不可用（SERVFAIL），但国内镜像可用。
+        // 离线优先 + 镜像兜底：先试本地 uv 缓存，失败再联网，联网失败再换镜像。
+        // CLI flag（--offline / --default-index）优先于 env，用户已配
+        // UV_DEFAULT_INDEX / UV_INDEX_URL 等时不再自动换源。
+        let allow_mirror = !has_user_index_override();
+        let mut attempts: Vec<(bool, Option<&str>)> = vec![(true, None)];
+        if allow_mirror {
+            attempts.push((true, Some(PARAKEET_MLX_MIRROR_INDEXES[0])));
+        }
+        attempts.push((false, None));
+        if allow_mirror {
+            for mirror in PARAKEET_MLX_MIRROR_INDEXES {
+                attempts.push((false, Some(mirror)));
+            }
         }
 
-        progress
-            .send(ProgressUpdate {
-                progress: 0.12,
-                message: "正在执行 Parakeet MLX V2...".into(),
-            })
-            .await
-            .ok();
+        let mut last_output: Option<std::process::Output> = None;
+        let mut last_attempt_desc = String::new();
+        let mut succeeded: Option<std::process::Output> = None;
+        for (attempt_index, (offline, mirror)) in attempts.iter().enumerate() {
+            if cancel_rx.as_ref().is_some_and(|rx| *rx.borrow()) {
+                return Err(FinalSubError::Validation("任务已取消".into()));
+            }
+            let attempt_desc = match (*offline, *mirror) {
+                (true, None) => "离线缓存".to_string(),
+                (true, Some(m)) => format!("离线缓存（镜像 {m}）"),
+                (false, None) => "联网直连".to_string(),
+                (false, Some(m)) => format!("镜像 {m}"),
+            };
+            last_attempt_desc = attempt_desc.clone();
+            progress
+                .send(ProgressUpdate {
+                    progress: if attempt_index == 0 { 0.12 } else { 0.15 },
+                    message: if attempt_index == 0 {
+                        "正在执行 Parakeet MLX V2...".into()
+                    } else {
+                        format!("直连失败，正在尝试{attempt_desc}...")
+                    },
+                })
+                .await
+                .ok();
 
-        let child = command.spawn().map_err(|error| {
-            FinalSubError::Validation(format!("启动 Parakeet MLX 失败：{error}"))
-        })?;
-        let output = wait_for_process(child, cancel_rx).await?;
-        if !output.status.success() {
-            return Err(FinalSubError::Validation(format!(
-                "Parakeet MLX 转录失败：{}",
-                summarize_process_output(&output.stdout, &output.stderr)
-            )));
+            let mut command = tokio::process::Command::new(&self.uv_bin);
+            command.arg("run");
+            if *offline {
+                command.arg("--offline");
+            }
+            if let Some(mirror) = mirror {
+                command.args(["--default-index", mirror]);
+            }
+            command
+                .args(["--python", PARAKEET_MLX_PYTHON, "--with", PARAKEET_MLX_PACKAGE, "python"])
+                .arg(&self.transcribe_script)
+                .args(["--audio", &job.audio_path, "--output", &job.output_path])
+                .args(["--local-model-path", &model_path.to_string_lossy()])
+                .args(["--source-language", &language])
+                .args(["--max-block-chars", &max_block_chars.to_string()]);
+
+            let hf_home = mlx_huggingface_cache(&self.cache_root);
+            command
+                .env("HF_HOME", &hf_home)
+                .env("HF_HUB_CACHE", &hf_home)
+                .env("HF_HUB_OFFLINE", "1")
+                .env("TRANSFORMERS_OFFLINE", "1")
+                .env("PYTHONUNBUFFERED", "1")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            if let Some(path) = path_with_ffmpeg(self.ffmpeg_path.as_deref()) {
+                // Finder-launched apps receive a minimal PATH. Keep the bundled
+                // sidecar ahead of it so parakeet_mlx.audio can resolve `ffmpeg`
+                // through shutil.which without requiring a Homebrew installation.
+                command.env("PATH", path);
+            }
+
+            let child = command.spawn().map_err(|error| {
+                FinalSubError::Validation(format!("启动 Parakeet MLX 失败：{error}"))
+            })?;
+            let output = wait_for_process(child, cancel_rx.clone()).await?;
+            if output.status.success() {
+                succeeded = Some(output);
+                break;
+            }
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // 非网络错误（如音频缺失、脚本参数、模型输出为空）直接返回，不换源重试。
+            if !is_retryable_uv_error(&combined) {
+                return Err(FinalSubError::Validation(format!(
+                    "Parakeet MLX 转录失败：{}",
+                    summarize_process_output(&output.stdout, &output.stderr)
+                )));
+            }
+            last_output = Some(output);
         }
+
+        match succeeded {
+            Some(_) => {},
+            None => {
+                let detail = last_output
+                    .as_ref()
+                    .map(|output| summarize_process_output(&output.stdout, &output.stderr))
+                    .unwrap_or_else(|| format!("{last_attempt_desc}均失败"));
+                let mut message = format!("Parakeet MLX 转录失败：{detail}");
+                if detail.to_lowercase().contains("pypi.org")
+                    || detail.to_lowercase().contains("failed to fetch")
+                    || detail.to_lowercase().contains("dns")
+                    || detail.to_lowercase().contains("lookup")
+                {
+                    message.push_str("（当前网络无法访问 pypi.org，已自动尝试离线缓存与国内镜像仍失败。请检查 DNS/代理，或设置 UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple 后重试；也可先在模型管理下载 Native 兜底模型）");
+                }
+                return Err(FinalSubError::Validation(message));
+            }
+        };
 
         progress
             .send(ProgressUpdate {
@@ -1137,5 +1249,37 @@ mod tests {
 
         let unlimited = build_cues("Hello world again", &tokens, Some(&timestamps), 1_600, -1);
         assert_eq!(unlimited.len(), 1);
+    }
+
+    #[test]
+    fn pypi_dns_failure_is_retryable_but_script_errors_are_not() {
+        let dns_failure = "error: Failed to fetch: `https://pypi.org/simple/parakeet-mlx/`\nCaused by: Request failed after 3 retries\nCaused by: error sending request for url (https://pypi.org/simple/parakeet-mlx/)\nCaused by: client error (Connect)\nCaused by: dns error\nCaused by: failed to lookup address information: nodename nor servname provided, or not known";
+        assert!(is_retryable_uv_error(dns_failure));
+        assert!(is_retryable_uv_error(
+            "No solution found when resolving `--with` dependencies: parakeet-mlx was not found in the cache and network was disabled"
+        ));
+        assert!(!is_retryable_uv_error(
+            "Audio file is missing: /tmp/input.wav"
+        ));
+        assert!(!is_retryable_uv_error(
+            "Parakeet v2 only supports English transcription, got: zh"
+        ));
+    }
+
+    #[test]
+    fn mirror_fallback_list_uses_reachable_domestic_indexes() {
+        assert!(PARAKEET_MLX_MIRROR_INDEXES
+            .iter()
+            .all(|url| url.starts_with("https://") && url.contains("/simple")));
+        assert_eq!(
+            PARAKEET_MLX_MIRROR_INDEXES[0],
+            "https://pypi.tuna.tsinghua.edu.cn/simple"
+        );
+    }
+
+    #[test]
+    fn default_uv_bin_returns_uv_path() {
+        let bin = default_uv_bin();
+        assert!(bin.to_string_lossy().contains("uv"));
     }
 }
