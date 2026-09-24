@@ -310,6 +310,8 @@ export default function ProofreadEditor({
             <Button
               variant="secondary"
               size="sm"
+              onClick={() => handleExportClick(shouldShowTranslation ? 'ass' : 'srt')}
+              title={shouldShowTranslation ? t('proofread.editor.bilibiliAssHint') : undefined}
             >
               <Download className="w-4 h-4 text-text-secondary" />
               {t('proofread.editor.exportSubtitle')}
