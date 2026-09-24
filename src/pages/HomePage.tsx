@@ -123,6 +123,13 @@ function rememberTranslationContentDefault(mode: TranslationContentMode): void {
   }
 }
 
+function defaultOutputFormatForTranslation(
+  mode: TranslationContentMode,
+  configuredFormat: string,
+): string {
+  return mode !== "target-only" && configuredFormat !== "ass" ? "ass" : configuredFormat;
+}
+
 function cloneSourceSelection(snapshot: SourceSelectionSnapshot): SourceSelectionSnapshot {
   return {
     selectedPaths: [...snapshot.selectedPaths],
@@ -243,7 +250,9 @@ export default function HomePage() {
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [translationContentMode, setTranslationContentMode] =
     useState<TranslationContentMode>(readTranslationContentDefault);
-  const [outputFormat, setOutputFormat] = useState("srt");
+  const [outputFormat, setOutputFormat] = useState(() => (
+    defaultOutputFormatForTranslation(readTranslationContentDefault(), "srt")
+  ));
   const [outputName, setOutputName] = useState("");
   const [maxSubtitleChars, setMaxSubtitleChars] = useState(0);
   const [customSubtitleChars, setCustomSubtitleChars] = useState(40);
@@ -289,6 +298,7 @@ export default function HomePage() {
   const rememberTranslationContentMode = useCallback((mode: TranslationContentMode) => {
     setTranslationContentMode(mode);
     rememberTranslationContentDefault(mode);
+    if (mode !== "target-only") setOutputFormat("ass");
   }, []);
 
   const restorePreviousSource = useCallback(() => {
@@ -464,7 +474,10 @@ export default function HomePage() {
       );
       setOutputFormat(
         outputFormats.some(({ value }) => value === settings.subtitle_output_format)
-          ? settings.subtitle_output_format
+          ? defaultOutputFormatForTranslation(
+            readTranslationContentDefault(),
+            settings.subtitle_output_format,
+          )
           : "srt",
       );
       const readyLocalTts = loadedTtsModels.find(
