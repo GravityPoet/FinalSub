@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  Undo2,
   X,
   Volume2,
 } from "lucide-react";
@@ -82,6 +83,55 @@ const videoExtensions = [
 const subtitleExtensions = ["srt", "vtt", "ass", "lrc"];
 
 type SourceInputKind = "media" | "subtitle";
+
+type SourceSelectionSnapshot = {
+  selectedPaths: string[];
+  selectedInputKind: SourceInputKind | null;
+  pairedSubtitlePaths: string[];
+  manualSubtitlePairs: Record<string, string>;
+  taskType: string;
+};
+
+type SourceUndoAction = "import" | "replace" | "clear";
+
+type SourceUndoState = {
+  snapshot: SourceSelectionSnapshot;
+  action: SourceUndoAction;
+};
+
+const translationContentDefaultStorageKey = "finalsub.translation-content-default";
+
+function isTranslationContentMode(value: string): value is TranslationContentMode {
+  return value === "target-only" || value === "source-and-target" || value === "target-and-source";
+}
+
+function readTranslationContentDefault(): TranslationContentMode {
+  if (typeof window === "undefined") return "source-and-target";
+  try {
+    const saved = window.localStorage.getItem(translationContentDefaultStorageKey);
+    return saved && isTranslationContentMode(saved) ? saved : "source-and-target";
+  } catch {
+    return "source-and-target";
+  }
+}
+
+function rememberTranslationContentDefault(mode: TranslationContentMode): void {
+  try {
+    window.localStorage.setItem(translationContentDefaultStorageKey, mode);
+  } catch {
+    // A restricted WebView storage should not block subtitle creation.
+  }
+}
+
+function cloneSourceSelection(snapshot: SourceSelectionSnapshot): SourceSelectionSnapshot {
+  return {
+    selectedPaths: [...snapshot.selectedPaths],
+    selectedInputKind: snapshot.selectedInputKind,
+    pairedSubtitlePaths: [...snapshot.pairedSubtitlePaths],
+    manualSubtitlePairs: { ...snapshot.manualSubtitlePairs },
+    taskType: snapshot.taskType,
+  };
+}
 
 const sourceLanguageOptions = [
   { value: "auto", labelKey: "language.auto" },
@@ -169,6 +219,14 @@ export default function HomePage() {
   // accidentally replace/clear the uploaded path.
   const [selectedInputKind, setSelectedInputKind] = useState<SourceInputKind | null>(null);
   const selectionRequestRef = useRef(0);
+  const selectionStateRef = useRef<SourceSelectionSnapshot>({
+    selectedPaths: [],
+    selectedInputKind: null,
+    pairedSubtitlePaths: [],
+    manualSubtitlePairs: {},
+    taskType: "generate-and-translate",
+  });
+  const [selectionUndo, setSelectionUndo] = useState<SourceUndoState | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string>("");
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "error">("loading");
@@ -184,7 +242,7 @@ export default function HomePage() {
   const [sourceLanguage, setSourceLanguage] = useState("auto");
   const [targetLanguage, setTargetLanguage] = useState("zh");
   const [translationContentMode, setTranslationContentMode] =
-    useState<TranslationContentMode>("source-and-target");
+    useState<TranslationContentMode>(readTranslationContentDefault);
   const [outputFormat, setOutputFormat] = useState("srt");
   const [outputName, setOutputName] = useState("");
   const [maxSubtitleChars, setMaxSubtitleChars] = useState(0);
@@ -218,31 +276,93 @@ export default function HomePage() {
   const { t } = useI18n();
   const selectedPath = selectedPaths[0] ?? "";
 
+  useEffect(() => {
+    selectionStateRef.current = {
+      selectedPaths,
+      selectedInputKind,
+      pairedSubtitlePaths,
+      manualSubtitlePairs,
+      taskType,
+    };
+  }, [manualSubtitlePairs, pairedSubtitlePaths, selectedInputKind, selectedPaths, taskType]);
+
+  const rememberTranslationContentMode = useCallback((mode: TranslationContentMode) => {
+    setTranslationContentMode(mode);
+    rememberTranslationContentDefault(mode);
+  }, []);
+
+  const restorePreviousSource = useCallback(() => {
+    if (!selectionUndo) return;
+    const snapshot = cloneSourceSelection(selectionUndo.snapshot);
+    selectionRequestRef.current += 1;
+    setSelectedPaths(snapshot.selectedPaths);
+    setSelectedInputKind(snapshot.selectedInputKind);
+    setPairedSubtitlePaths(snapshot.pairedSubtitlePaths);
+    setManualSubtitlePairs(snapshot.manualSubtitlePairs);
+    setTaskType(snapshot.taskType);
+    selectionStateRef.current = snapshot;
+    setSelectionUndo(null);
+  }, [selectionUndo]);
+
+  useEffect(() => {
+    const handleUndoShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.key.toLowerCase() !== "z") return;
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (!selectionUndo) return;
+      event.preventDefault();
+      restorePreviousSource();
+    };
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [restorePreviousSource, selectionUndo]);
+
   const commitSelectedPaths = useCallback((paths: string[], subtitles: string[] = []) => {
     if (paths.length === 0) return;
+    const previousSelection = cloneSourceSelection(selectionStateRef.current);
     const nextKind = sourceInputKindForPath(paths[0]);
+    const nextTaskType = nextKind === "subtitle"
+      ? "translate-only"
+      : (previousSelection.taskType === "translate-only" ? "generate-and-translate" : previousSelection.taskType);
+    const nextPairedSubtitlePaths = nextKind === "media" ? [...subtitles] : [];
+    setSelectionUndo({
+      snapshot: previousSelection,
+      action: previousSelection.selectedPaths.length > 0 ? "replace" : "import",
+    });
     setSelectedPaths(paths);
     setSelectedInputKind(nextKind);
-    setTaskType((current) => (
-      nextKind === "subtitle"
-        ? "translate-only"
-        : (current === "translate-only" ? "generate-and-translate" : current)
-    ));
+    setTaskType(nextTaskType);
     if (nextKind === "subtitle") {
       setEnableDubbing(false);
       setEnableCompose(false);
       setDubbingReview(false);
     }
-    setPairedSubtitlePaths(nextKind === "media" ? subtitles : []);
+    setPairedSubtitlePaths(nextPairedSubtitlePaths);
     setManualSubtitlePairs({});
+    selectionStateRef.current = {
+      selectedPaths: [...paths],
+      selectedInputKind: nextKind,
+      pairedSubtitlePaths: nextPairedSubtitlePaths,
+      manualSubtitlePairs: {},
+      taskType: nextTaskType,
+    };
   }, []);
 
   const clearSelectedPaths = useCallback(() => {
+    const previousSelection = cloneSourceSelection(selectionStateRef.current);
     selectionRequestRef.current += 1;
+    setSelectionUndo({ snapshot: previousSelection, action: "clear" });
     setSelectedPaths([]);
     setSelectedInputKind(null);
     setPairedSubtitlePaths([]);
     setManualSubtitlePairs({});
+    selectionStateRef.current = {
+      ...previousSelection,
+      selectedPaths: [],
+      selectedInputKind: null,
+      pairedSubtitlePaths: [],
+      manualSubtitlePairs: {},
+    };
   }, []);
 
   const discoverAndCommit = useCallback(async (paths: string[], kind: SourceInputKind) => {
@@ -274,6 +394,7 @@ export default function HomePage() {
     // can be inspected against another workflow and remains available when
     // the user switches back.
     setTaskType(nextTaskType);
+    setSelectionUndo(null);
     if (nextTaskType === "translate-only") {
       setEnableDubbing(false);
       setEnableCompose(false);
@@ -1258,18 +1379,17 @@ export default function HomePage() {
                           {t("home.pairSubtitles")}
                         </Button>
                       )}
-                      {selectedPaths.length === 1 && (
+                      {selectedPath && (
                         <Button
                           type="button"
                           onClick={clearSelectedPaths}
                           variant="ghost"
                           size="sm"
-                          className="text-text-tertiary hover:text-danger"
-                          aria-label={t("home.removeSource")}
-                          title={t("home.removeSourceHint")}
+                          className="px-2 text-text-tertiary hover:bg-danger/10 hover:text-danger"
+                          aria-label={t("home.clearCurrentSource")}
+                          title={t("home.clearCurrentSourceHint")}
                         >
-                          <X size={14} />
-                          {t("home.removeSource")}
+                          <X size={15} />
                         </Button>
                       )}
                       <Button type="button" onClick={handleSelectMedia} variant="primary" size="sm">
@@ -1284,10 +1404,29 @@ export default function HomePage() {
                     </div>
                   </div>
 
-                  {selectedPath && (
-                    <p className="mt-3 text-xs leading-5 text-text-tertiary">
-                      {t("home.replaceSourceHint")}
-                    </p>
+                  {selectionUndo && (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand/15 bg-brand/8 px-3 py-2 text-xs text-text-secondary" role="status">
+                      <span>
+                        {t(
+                          selectionUndo.action === "replace"
+                            ? "home.sourceReplaced"
+                            : selectionUndo.action === "clear"
+                              ? "home.sourceRemoved"
+                              : "home.sourceImported",
+                        )}
+                      </span>
+                      <Button
+                        type="button"
+                        onClick={restorePreviousSource}
+                        variant="ghost"
+                        size="sm"
+                        className="-my-1 text-brand hover:bg-brand/10"
+                        title={t("home.undoSourceHint")}
+                      >
+                        <Undo2 size={14} />
+                        {t("home.undoSource")}
+                      </Button>
+                    </div>
                   )}
 
                   {inputTypeMismatchHint && (
@@ -1577,7 +1716,7 @@ export default function HomePage() {
                               name="translation-content-kind"
                               value="target-only"
                               checked={!bilingualTranslation}
-                              onChange={() => setTranslationContentMode("target-only")}
+                              onChange={() => rememberTranslationContentMode("target-only")}
                               data-testid="translation-content-target-only"
                               className="sr-only"
                             />
@@ -1596,7 +1735,7 @@ export default function HomePage() {
                               name="translation-content-kind"
                               value="bilingual"
                               checked={bilingualTranslation}
-                              onChange={() => setTranslationContentMode("source-and-target")}
+                              onChange={() => rememberTranslationContentMode("source-and-target")}
                               data-testid="translation-content-bilingual"
                               className="sr-only"
                             />
@@ -1626,7 +1765,7 @@ export default function HomePage() {
                                 name="translation-content-order"
                                 value="source-first"
                                 checked={bilingualOrder === "source-first"}
-                                onChange={() => setTranslationContentMode("source-and-target")}
+                                onChange={() => rememberTranslationContentMode("source-and-target")}
                                 data-testid="translation-content-source-and-target"
                                 className="sr-only"
                               />
@@ -1645,7 +1784,7 @@ export default function HomePage() {
                                 name="translation-content-order"
                                 value="target-first"
                                 checked={bilingualOrder === "target-first"}
-                                onChange={() => setTranslationContentMode("target-and-source")}
+                                onChange={() => rememberTranslationContentMode("target-and-source")}
                                 data-testid="translation-content-target-and-source"
                                 className="sr-only"
                               />
