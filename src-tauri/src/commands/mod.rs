@@ -5081,6 +5081,178 @@ mod tests {
         );
     }
 
+    fn review_publication_fixture(root: &Path, dub: bool, compose: bool) -> Task {
+        let mut task = task_queue::create_task(CreateTaskParams {
+            task_type: TaskType::GenerateAndTranslate,
+            media_path: root.join("media.mp4").to_string_lossy().into_owned(),
+            provided_subtitle_path: None,
+            media_name: "media.mp4".into(),
+            engine_id: "whisper-cpp".into(),
+            model_id: "small".into(),
+            source_language: Some("en".into()),
+            target_language: Some("zh".into()),
+            translation_content_mode: TranslationContentMode::SourceAndTarget,
+            output_format: Some("srt".into()),
+            output_formats: ["srt", "vtt", "ass", "lrc", "txt"]
+                .map(str::to_string)
+                .to_vec(),
+            output_name: None,
+            strip_chinese_punctuation: false,
+            review_required: false,
+            max_subtitle_chars: 0,
+            pipeline: Some(PipelineConfig::for_task(
+                TaskType::GenerateAndTranslate,
+                dub,
+                compose,
+                true,
+                false,
+                None,
+                None,
+            )),
+        });
+        task.status = TaskStatus::Review;
+        for format in &task.output_formats {
+            let path = root.join(format!("media.finalsub.{format}"));
+            std::fs::write(&path, "original output").unwrap();
+            task.output_paths.push(path.to_string_lossy().into_owned());
+        }
+        task.output_path = task.output_paths.first().cloned();
+        std::fs::write(root.join("review-source.srt"), "original source").unwrap();
+        std::fs::write(root.join("review-target.srt"), "original target").unwrap();
+        let pipeline = task.pipeline.as_mut().unwrap();
+        for kind in [
+            task_queue::PipelineStageKind::Transcribe,
+            task_queue::PipelineStageKind::Translate,
+        ] {
+            pipeline.stage_mut(kind).unwrap().status = task_queue::PipelineStageStatus::Done;
+        }
+        pipeline
+            .stage_mut(task_queue::PipelineStageKind::SubtitleReview)
+            .unwrap()
+            .status = task_queue::PipelineStageStatus::Review;
+        pipeline.current_stage = Some(task_queue::PipelineStageKind::SubtitleReview);
+        task
+    }
+
+    fn reviewed_cues() -> Vec<crate::core::subtitle::quality::QualityCue> {
+        vec![crate::core::subtitle::quality::QualityCue {
+            start_ms: 1000,
+            end_ms: 4000,
+            source: "The edited subtitle".into(),
+            target: Some("已经校对的字幕".into()),
+        }]
+    }
+
+    #[test]
+    fn published_review_updates_all_formats_and_resumes_only_downstream() {
+        use task_queue::{PipelineStageKind as Kind, PipelineStageStatus as Status};
+        for (dub, compose, expected_stage) in [
+            (true, true, Some(Kind::Dub)),
+            (false, true, Some(Kind::Compose)),
+            (false, false, None),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let task = review_publication_fixture(temp.path(), dub, compose);
+            let version = subtitle_review::version(temp.path(), &task).unwrap();
+            let publication =
+                subtitle_review::publish(temp.path(), &task, &reviewed_cues(), &version).unwrap();
+            let updated = publication.task.clone();
+            assert_ne!(
+                subtitle_review::version(temp.path(), &updated).unwrap(),
+                version
+            );
+            for output in &updated.output_paths {
+                let content = std::fs::read_to_string(output).unwrap();
+                assert!(content.contains("The edited subtitle"), "{output}");
+                assert!(content.contains("已经校对的字幕"), "{output}");
+            }
+            assert_eq!(updated.quality_report.as_ref().unwrap().cue_count, 1);
+            let dubbing = std::fs::read_to_string(temp.path().join("dubbing-source.srt")).unwrap();
+            assert!(dubbing.contains("已经校对的字幕"));
+            assert!(!dubbing.contains("The edited subtitle"));
+            let id = updated.id.clone();
+            let map = HashMap::from([(id.clone(), updated)]);
+            let (approved, _) =
+                approve_review_tasks(&map, std::slice::from_ref(&id), "reviewed").unwrap();
+            task_queue::save_tasks(temp.path(), &approved).unwrap();
+            publication.commit();
+            let loaded = task_queue::load_tasks(temp.path()).unwrap();
+            let task = &loaded[&id];
+            let pipeline = task.pipeline.as_ref().unwrap();
+            assert_eq!(pipeline.current_stage, expected_stage);
+            assert_eq!(
+                pipeline.stage(Kind::Transcribe).unwrap().status,
+                Status::Done
+            );
+            assert_eq!(
+                pipeline.stage(Kind::Translate).unwrap().status,
+                Status::Done
+            );
+            assert_eq!(
+                pipeline.stage(Kind::SubtitleReview).unwrap().status,
+                Status::Done
+            );
+            assert_eq!(
+                task.status,
+                if expected_stage.is_some() {
+                    TaskStatus::Pending
+                } else {
+                    TaskStatus::Done
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn published_review_rolls_back_uncommitted_files_and_rejects_external_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let task = review_publication_fixture(temp.path(), true, true);
+        let version = subtitle_review::version(temp.path(), &task).unwrap();
+        let publication =
+            subtitle_review::publish(temp.path(), &task, &reviewed_cues(), &version).unwrap();
+        drop(publication); // Equivalent to a failed task snapshot write.
+        assert_eq!(
+            subtitle_review::version(temp.path(), &task).unwrap(),
+            version
+        );
+        assert!(!temp.path().join("dubbing-source.srt").exists());
+
+        std::fs::write(&task.output_paths[1], "external edit").unwrap();
+        let error = subtitle_review::publish(temp.path(), &task, &reviewed_cues(), &version)
+            .err()
+            .unwrap();
+        assert!(error.contains("其他窗口或应用修改"));
+        assert_eq!(
+            std::fs::read_to_string(&task.output_paths[1]).unwrap(),
+            "external edit"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&task.output_paths[0]).unwrap(),
+            "original output"
+        );
+    }
+
+    #[test]
+    fn published_review_rejects_invalid_cues_and_running_tasks_without_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut task = review_publication_fixture(temp.path(), true, false);
+        let version = subtitle_review::version(temp.path(), &task).unwrap();
+        for (start_ms, end_ms, target) in [(1000, 1000, Some("译文")), (0, 4000, None)] {
+            let mut cues = reviewed_cues();
+            cues[0].start_ms = start_ms;
+            cues[0].end_ms = end_ms;
+            cues[0].target = target.map(str::to_string);
+            assert!(subtitle_review::publish(temp.path(), &task, &cues, &version).is_err());
+        }
+        task.status = TaskStatus::Running;
+        assert!(subtitle_review::publish(temp.path(), &task, &reviewed_cues(), &version).is_err());
+        assert_eq!(
+            subtitle_review::version(temp.path(), &task).unwrap(),
+            version
+        );
+        assert!(!temp.path().join("review-backups").exists());
+    }
+
     #[test]
     fn overlong_dubbing_review_retries_dub_before_downstream_export() {
         let mut task = task_queue::create_task(CreateTaskParams {
