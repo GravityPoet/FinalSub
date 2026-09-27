@@ -395,7 +395,13 @@ impl AsrEngine for ParakeetMlxEngine {
                 command.args(["--default-index", mirror]);
             }
             command
-                .args(["--python", PARAKEET_MLX_PYTHON, "--with", PARAKEET_MLX_PACKAGE, "python"])
+                .args([
+                    "--python",
+                    PARAKEET_MLX_PYTHON,
+                    "--with",
+                    PARAKEET_MLX_PACKAGE,
+                    "python",
+                ])
                 .arg(&self.transcribe_script)
                 .args(["--audio", &job.audio_path, "--output", &job.output_path])
                 .args(["--local-model-path", &model_path.to_string_lossy()])
@@ -443,7 +449,7 @@ impl AsrEngine for ParakeetMlxEngine {
         }
 
         match succeeded {
-            Some(_) => {},
+            Some(_) => {}
             None => {
                 let detail = last_output
                     .as_ref()

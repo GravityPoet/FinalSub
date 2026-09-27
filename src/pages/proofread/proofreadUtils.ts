@@ -25,6 +25,10 @@ function generateUUID(): string {
 
 // 待校对文件项
 export interface PendingFile {
+  originTaskId?: string;
+  originTaskVersion?: string;
+  reviewSourceContent?: string;
+  reviewTargetContent?: string;
   id: string;
   videoPath?: string;
   fileName: string;

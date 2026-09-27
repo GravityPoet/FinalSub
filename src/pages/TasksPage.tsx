@@ -475,8 +475,9 @@ export default function TasksPage() {
               : reviewStage === "dubbing-review"
               ? t("tasks.dubbingReviewDesc")
               : (task.pipeline ? t("tasks.subtitleReviewDesc") : t("tasks.reviewDesc"));
+            const subtitlePaths = task.output_paths?.length ? task.output_paths : [task.pipeline?.subtitle_output_path ?? task.output_path];
             const artifactPaths = [
-              { label: t("tasks.artifactSubtitle"), path: task.pipeline?.subtitle_output_path ?? task.output_path },
+              ...subtitlePaths.map((path) => ({ label: `${t("tasks.artifactSubtitle")} · ${path?.split('.').pop()?.toUpperCase() ?? ''}`, path })),
               { label: t("tasks.artifactDubbing"), path: task.pipeline?.dubbed_audio_path },
               { label: t("tasks.artifactVideo"), path: task.pipeline?.final_video_path },
             ].filter((artifact): artifact is { label: string; path: string } => Boolean(artifact.path));
@@ -625,6 +626,13 @@ export default function TasksPage() {
 
                 <PipelineRail task={task} />
 
+                {task.quality_report && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-overlay px-3 py-2">
+                    <span className="text-xs text-text-secondary">{t("quality.summary", { count: task.quality_report.affected_cues, total: task.quality_report.cue_count })}</span>
+                    <Button size="sm" variant="secondary" onClick={() => navigate(`/proofread?task=${encodeURIComponent(task.id)}`)}>{t("quality.open")}</Button>
+                  </div>
+                )}
+                {task.status === "error" && !task.quality_report && <Button size="sm" variant="ghost" onClick={() => navigate(`/proofread?task=${encodeURIComponent(task.id)}`)}>{t("quality.open")}</Button>}
                 {(task.status === "review" || artifactPaths.length > 0) && (
                   <div className="mt-4 space-y-3 rounded-xl border border-border-subtle bg-surface-overlay p-3.5 text-sm">
                     {task.status === "review" && (

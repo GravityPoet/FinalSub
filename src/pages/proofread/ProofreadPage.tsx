@@ -13,6 +13,8 @@ import {
 import { loadProofreadTasks, saveProofreadTasks } from '../../lib/tauri';
 import { ToastProvider } from './Toast';
 import { useI18n } from '../../lib/i18n';
+import { useSearchParams } from 'react-router-dom';
+import { getTaskReviewSource } from '../../lib/tauri';
 
 type WorkflowStage = 'import' | 'list' | 'edit';
 
@@ -39,6 +41,22 @@ export default function ProofreadPage() {
   const [savedTaskId, setSavedTaskId] = useState<string | null>(null);
   const [taskName, setTaskName] = useState<string>('');
   const [importType, setImportType] = useState<'video' | 'subtitle'>('video');
+  const [params] = useSearchParams();
+  const [taskLoadError, setTaskLoadError] = useState('');
+  const originTaskId = params.get('task');
+  useEffect(() => {
+    if (!originTaskId) return;
+    let active = true;
+    setTaskLoadError('');
+    getTaskReviewSource(originTaskId).then((source) => {
+      if (!active) return;
+      setPendingFiles([{ id: originTaskId, originTaskId, originTaskVersion: source.version, reviewSourceContent: source.source_content, reviewTargetContent: source.target_content || undefined, fileName: (source.media_path || source.source_path).split(/[\\/]/).pop() || '', videoPath: source.media_path || undefined, selectedSource: source.source_path, selectedTarget: source.target_path || undefined, sourceLanguage: source.source_language, targetLanguage: source.target_language, detectedSubtitles: [], status: 'proofreading' }]);
+      setCurrentEditIndex(0);
+      setStage('edit');
+      setActiveTab('new');
+    }).catch((error) => { if (active) setTaskLoadError(String(error)); });
+    return () => { active = false; };
+  }, [originTaskId]);
 
   const handleLoadTask = useCallback(async (task: ProofreadTask) => {
     const files: PendingFile[] = await Promise.all(
@@ -177,6 +195,7 @@ export default function ProofreadPage() {
   }, [pendingFiles, savedTaskId, stage]);
 
   const renderStage = () => {
+    if (taskLoadError) return <p role="alert" className="m-4 rounded-xl bg-danger/10 p-4 text-danger">{taskLoadError}</p>;
     switch (stage) {
       case 'import':
         return <ProofreadImport onImportComplete={handleImportComplete} />;

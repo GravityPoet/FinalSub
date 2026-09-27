@@ -1395,6 +1395,21 @@ export default function TranslationPage() {
         <Card className="p-6">
           <h3 className="mb-1 font-display text-h2 font-semibold text-text-primary">{t("translation.runtimeTitle")}</h3>
           <p className="mb-5 text-sm leading-6 text-text-tertiary">{t("translation.runtimeDesc")}</p>
+          <fieldset className="mb-5 rounded-xl border border-border-subtle p-3">
+            <legend className="px-1 text-sm font-semibold text-text-primary">{t("translation.backupTitle")}</legend>
+            <p className="mb-3 text-xs text-text-tertiary">{t("translation.backupHint")}</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {[0, 1, 2].map((index) => <Select key={index} aria-label={`${t('translation.backupTitle')} ${index + 1}`} value={settings.translate_fallback_providers?.[index] || ''} onChange={(event) => {
+                const chain = [...(settings.translate_fallback_providers || [])];
+                chain[index] = event.target.value;
+                setSettings({ ...settings, translate_fallback_providers: [...new Set(chain.filter(Boolean))] });
+                setRuntimeSaved(false);
+              }}>
+                <option value="">{t('translation.noBackup')}</option>
+                {providers.filter((provider) => provider.implemented && provider.id !== settings.translate_provider && provider.is_ai === providers.find((p) => p.id === settings.translate_provider)?.is_ai).map((provider) => <option key={provider.id} value={provider.id}>{providerDisplayName(provider)}</option>)}
+              </Select>)}
+            </div>
+          </fieldset>
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label htmlFor="translation-batch-size" className="mb-1.5 block text-sm font-medium text-text-secondary">{t("translation.batchSize")}</label>

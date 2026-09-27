@@ -1,7 +1,7 @@
 # FinalSub 功能与发布矩阵
 
-更新时间：2026-08-30
-对照基线：SmartSub `dd38b8aecd8934b7218b8973131a88fd9826c208`（2026-07-20 当前上游 HEAD）与 FinalSub 当前主线的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
+更新时间：2026-09-27
+对照基线：SmartSub `a2b164b3dd86388355c6a4b84e4a49825a0e7f57`（v3.9.0，当前上游 HEAD）与 FinalSub 当前主线的源码、单元测试、真实媒体夹具、Universal 生产构建和真实应用 UI。
 
 状态定义：
 
@@ -21,13 +21,13 @@ FinalSub 的字幕生成、批处理、已有字幕自动/手动配对与跳过 
 
 | 能力 | 状态 | 当前实现与证据 |
 |---|---:|---|
-| 单文件字幕任务 | 🟢 | FFmpeg 提取 → ASR → 可选翻译 → 多格式写出；任务进度、日志、暂停、恢复、取消、重试均接入 |
+| 单文件字幕任务 | 🟢 | FFmpeg 提取 → ASR → 可选翻译 → SRT/VTT/ASS/LRC/TXT 多格式写出；任务进度、日志、暂停、恢复、取消、重试均接入 |
 | 批量任务 | 🟢 | 多文件、文件夹递归扫描、拖放、绝对路径粘贴；Rust 后端原子批量建任务，失败不留下半批状态 |
-| 音视频 + 已有字幕配对 | 🟣 | 混合文件/文件夹一次导入；同名与语言后缀自动配对，逐媒体手动覆盖或显式回退 ASR；同一批次允许“已配对跳过 ASR + 未配对继续识别”，任务与重试持久保留字幕路径；Rust 边界校验绝对路径、存在性、格式与 20 MB 上限 |
+| 音视频 + 已有字幕配对 | 🟣 | 混合文件/文件夹一次导入；同名与语言后缀自动配对，并检测/提取视频内嵌字幕轨后配对；逐媒体手动覆盖或显式回退 ASR；同一批次允许“已配对跳过 ASR + 未配对继续识别”，任务与重试持久保留字幕路径；Rust 边界校验绝对路径、存在性、格式与 20 MB 上限 |
 | 输出命名 | 🟢 | 支持 `{name}`、`{lang}`、`{index}`，原子占位避免覆盖和并发重名 |
 | 任务持久化 | 🟢 | `tasks.json` 临时文件 + rename；重启后未完成任务恢复为可继续状态 |
 | 字幕翻译 | 🟢 | 19 个 provider dispatch；免费入口按 Bing → Google → 已配置 DeepLX 自动兜底；批量大小、并发、间隔、术语表、动态 Schema、回显对齐、定点补翻、提示词模板、自定义 headers/body、代理和模型发现 |
-| 字幕校对 | 🟢 | 视频联动、导入/检测、编辑、拆分、合并、时间偏移、搜索替换、撤销重做、保存及错误恢复 |
+| 字幕校对 | 🟣 | 视频联动、编辑/拆合、撤销重做；质量巡检覆盖阅读速度、长度、重叠、短时长、重复、控制字符与翻译异常，支持问题行跳转/试听/重译/忽略及 JSON 报告；校对发布带版本校验、备份、原子写回、多格式同步，并从下游阶段续跑 |
 | 视频合成工作台 | 🟢 | 硬/软字幕结构分离，进度、取消、10 秒预览、字体/描边/阴影/背景、九宫格位置、CRF、编码 preset 与配音音轨组合 |
 | 软字幕 / MKV 封装 | 🟢 | stream-copy 视频与原声，SRT/VTT 转 SubRip、ASS 保留 ASS，语言/标题 metadata 与默认轨道 disposition；双音轨自动使用 MKV |
 | TTS 配音与声音克隆 | 🟠 | 已交付本地/云端引擎、逐行/批量工作台、会话恢复、估时校准与时间轴自动收敛、本地/云端音色资产及 WAV/MP3 导出；云端创建、找回、状态刷新、训练次数、一键重训和 `.svoice` 迁移已接入，仍需真实本地模型音质与付费账号 E2E，见第 5 节 |
@@ -95,7 +95,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 | 能力 | 状态 | 说明 |
 |---|---:|---|
-| Provider 覆盖 | 🟣 | 免费翻译自动兜底（Bing → Google → 可选 DeepLX）以及百度、Google、阿里云、火山、豆包、小牛、腾讯、讯飞、DeepLX、微软、Ollama、DeepSeek、Azure OpenAI、DeerAPI、Gemini、SiliconFlow、Qwen、自定义 OpenAI 兼容，共 19 个内置项；免费公共源内置 200/500 ms 节流、Bing 匿名令牌缓存和失效刷新 |
+| Provider 覆盖 | 🟣 | 免费翻译自动兜底（Bing → Google → 可选 DeepLX）以及百度、Google、阿里云、火山、豆包、小牛、腾讯、讯飞、DeepLX、微软、Ollama、DeepSeek、Azure OpenAI、DeerAPI、Gemini、SiliconFlow、Qwen、自定义 OpenAI 兼容，共 19 个内置项；免费公共源内置 200/500 ms 节流、Bing 匿名令牌缓存和失效刷新；备用服务按 provider 独立读取 endpoint、模型、密钥及请求头 |
 | Provider 独立配置 | 🟢 | endpoint、模型、system/user prompt、自定义 headers/body 与密钥字段按 provider 保存 |
 | 批量翻译 | 🟢 | 行数/字符边界、并发、间隔、checkpoint 恢复、严格 key 对齐与失败可见性 |
 | 术语表管理 | 🟢 | 多术语表、优先级、启停、确定性冲突处理、CSV/TXT 导入与 CSV 导出；每批只发送命中的最多 100 条术语 |
@@ -212,9 +212,11 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 
 ## 13. 仍不能宣称完成的事项
 
-1. Apple Developer ID 正式签名、公证、stapling 尚未用仓库 secrets 跑通；本机稳定自签名包适合本地覆盖安装，但不能替代客户侧 Gatekeeper 信任。
-2. Windows PFX 导入、Tauri Authenticode 配置、同证书/时间戳验签门禁已交付；正式 CA 代码签名证书尚未配置，公开下载仍可能触发 SmartScreen。
-3. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
-4. 付费云 ASR、翻译、ElevenLabs 与豆包 provider 尚缺真实账号 smoke test；协议边界测试不能替代服务端验收。
-5. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛、人工红线续跑与可配置 1–3 路独立 worker 已交付；Edge 中文真实合成与 ASR 回听已通过，仍缺 Kokoro/VITS/ZipVoice 真实本地模型音质 E2E 和 A/B 音色比较。
-6. Ubuntu 22.04 runner 已完成 Linux 原生桌面服务 E2E；扩大“支持所有主流发行版”的对外声明前，仍需至少一台目标发行版实体/虚拟桌面做 UI 与桌面集成抽检。
+1. SmartSub v3.9.0 新增的内置 AI 助手/MCP 与 CLI 工具箱（音频提取、字幕转换/对齐、视频压缩/裁剪/GIF）尚未纳入本轮；FinalSub 当前优先保证字幕→翻译→校对→配音→成片主链路，避免为对齐堆叠第二套工具平台。
+2. SmartSub v3.9.0 的多视频独立参考文稿匹配、faster-whisper 运行时压缩包/目录导入和工具箱微阶段历史展示仍未对齐；已有字幕自动/手动配对、内嵌字幕提取、多格式输出和阶段级任务状态已覆盖相邻用户路径。
+3. Apple Developer ID 正式签名、公证、stapling 尚未用仓库 secrets 跑通；本机稳定自签名包适合本地覆盖安装，但不能替代客户侧 Gatekeeper 信任。
+4. Windows PFX 导入、Tauri Authenticode 配置、同证书/时间戳验签门禁已交付；正式 CA 代码签名证书尚未配置，公开下载仍可能触发 SmartScreen。
+5. 签名应用内更新代码和发布门禁已交付，但生产 updater 根密钥尚未获批生成/托管，也尚未用两个正式版本完成远端覆盖升级与回滚演练。
+6. 付费云 ASR、翻译、ElevenLabs 与豆包 provider 尚缺真实账号 smoke test；协议边界测试不能替代服务端验收。
+7. 本地/云端 TTS、本地/云端音色资产、配音会话、视频联动、字幕安全写回、自动时间轴收敛、人工红线续跑与可配置 1–3 路独立 worker 已交付；Edge 中文真实合成与 ASR 回听已通过，仍缺 Kokoro/VITS/ZipVoice 真实本地模型音质 E2E 和 A/B 音色比较。
+8. Ubuntu 22.04 runner 已完成 Linux 原生桌面服务 E2E；扩大“支持所有主流发行版”的对外声明前，仍需至少一台目标发行版实体/虚拟桌面做 UI 与桌面集成抽检。

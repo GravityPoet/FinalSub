@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useRef } from 'react';
 import { ArrowLeft, Check, Save, Loader2, AlertTriangle, Download, Languages } from 'lucide-react';
 import { useToast } from './Toast';
 import { Button } from '../../components/ui/Button';
@@ -12,7 +12,8 @@ import SubtitleList from './subtitle/SubtitleList';
 import SubtitleEditToolbar from './subtitle/SubtitleEditToolbar';
 import { PendingFile } from './proofreadUtils';
 import { useI18n } from '../../lib/i18n';
-import { convertStringsOpencc, saveDialog } from '../../lib/tauri';
+import { convertStringsOpencc, saveDialog, publishTaskReview } from '../../lib/tauri';
+import QualityPanel from './QualityPanel';
 
 interface ProofreadEditorProps {
   file: PendingFile;
@@ -37,6 +38,8 @@ export default function ProofreadEditor({
       targetLanguage: file.targetLanguage,
       finalTargetSubtitlePath: file.selectedTarget, // 兼容用 selectedTarget 代替 finalTargetSubtitlePath
       translateContent: 'onlyTranslate',
+      reviewSourceContent: file.reviewSourceContent,
+      reviewTargetContent: file.reviewTargetContent,
     }),
     [file],
   );
@@ -56,7 +59,7 @@ export default function ProofreadEditor({
     loadError,
     retryLoad,
     handleSubtitleChange,
-    handleSave,
+    handleSave: saveSubtitleDraft,
     handleExport,
     getSubtitleStats,
     isTranslationFailed,
@@ -112,6 +115,26 @@ export default function ProofreadEditor({
   const [isCompleting, setIsCompleting] = useState(false);
 
   const { showToast } = useToast();
+  const reviewVersion = useRef(file.originTaskVersion);
+  const handleSave = async () => {
+    if (file.originTaskId) {
+      try {
+        const cues = mergedSubtitles.map((cue) => ({
+          start_ms: Math.round((cue.startTimeInSeconds || 0) * 1000),
+          end_ms: Math.round((cue.endTimeInSeconds || 0) * 1000),
+          source: cue.sourceContent ?? cue.content.join('\n'),
+          target: shouldShowTranslation ? cue.targetContent ?? '' : null,
+        }));
+        if (!reviewVersion.current) throw new Error(t('quality.changed'));
+        reviewVersion.current = await publishTaskReview(file.originTaskId, cues, reviewVersion.current);
+        setIsDirty(false);
+        showToast('success', t('proofread.standalone.saveSuccess'));
+      }
+      catch (error) { setIsDirty(true); showToast('error', String(error)); return false; }
+      return true;
+    }
+    return saveSubtitleDraft();
+  };
 
   const handleExportClick = async (format: 'srt' | 'vtt' | 'ass' | 'lrc' | 'txt') => {
     try {
@@ -419,6 +442,9 @@ export default function ProofreadEditor({
       />
 
       {/* 主内容区 */}
+      <QualityPanel subtitles={mergedSubtitles} sourceLanguage={file.sourceLanguage || 'auto'} targetLanguage={file.targetLanguage || 'zh'} bilingual={shouldShowTranslation} onChange={updateSubtitles}
+        onLocate={(index, play) => { handleSubtitleClick(index); if (play && playerRef.current) { playerRef.current.currentTime = Math.max(0, (mergedSubtitles[index]?.startTimeInSeconds || 0) - 0.5); void playerRef.current.play().catch(() => undefined); } }}
+        onSplit={handleSplitClick} onMerge={(index) => handleMergeSubtitles(index, index + 2)} />
       <div
         className={`grid gap-4 flex-1 overflow-hidden min-h-0 p-6 ${
           hasVideo ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'

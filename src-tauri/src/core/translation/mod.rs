@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::error::Error as StdError;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+pub mod recovery;
 
 use crate::error::{FinalSubError, Result};
 
