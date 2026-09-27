@@ -48,7 +48,7 @@ const ECHO_SIMILARITY_THRESHOLD: f64 = 0.75;
 const ALIGNMENT_REPAIR_MAX_ATTEMPTS: usize = 3;
 
 enum TranslationAttemptResult {
-    Success(String),
+    Success(String, String),
     Cancelled,
     Failed(String),
 }
@@ -74,6 +74,7 @@ struct AlignedBatchReport {
     repaired: usize,
     unresolved: usize,
     alignment_retry_used: bool,
+    provider: String,
 }
 
 enum AlignedBatchResult {
@@ -953,6 +954,24 @@ async fn run_task_impl(
         let settings =
             crate::core::settings::load_settings(&app_config_dir).map_err(|e| e.to_string())?;
         let provider = settings.translate_provider.clone();
+        let backup_requests =
+            crate::core::translation::recovery::backup_requests(&settings, &provider);
+        if !backup_requests.is_empty() {
+            write_task_log(
+                app,
+                &app_config_dir,
+                task_id,
+                &format!(
+                    "已配置备用翻译顺序：{}",
+                    backup_requests
+                        .iter()
+                        .map(|request| request.provider.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                ),
+            )
+            .await;
+        }
         if provider.is_empty() {
             return Err("请先在翻译管理中配置翻译服务商".into());
         }
@@ -1136,10 +1155,17 @@ async fn run_task_impl(
                         thinking_control_bypassed: false,
                     };
                     let mut child_cancel = cancel_rx.clone();
+                    let backups = backup_requests.clone();
                     requests.spawn(async move {
                         (
                             cue_index,
-                            translate_with_retries(&request, retry_times, &mut child_cancel).await,
+                            translate_with_retries(
+                                &request,
+                                retry_times,
+                                &mut child_cancel,
+                                &backups,
+                            )
+                            .await,
                         )
                     });
                 }
@@ -1149,7 +1175,20 @@ async fn run_task_impl(
                     let (cue_index, result) =
                         joined.map_err(|error| format!("并发翻译任务异常：{error}"))?;
                     match result {
-                        TranslationAttemptResult::Success(text) => {
+                        TranslationAttemptResult::Success(text, actual_provider) => {
+                            if actual_provider != provider {
+                                write_task_log(
+                                    app,
+                                    &app_config_dir,
+                                    task_id,
+                                    &format!(
+                                        "第 {} 行已由备用服务 {} 完成",
+                                        cue_index + 1,
+                                        actual_provider
+                                    ),
+                                )
+                                .await;
+                            }
                             translated.push((cue_index, text));
                         }
                         TranslationAttemptResult::Cancelled => {
@@ -1243,10 +1282,20 @@ async fn run_task_impl(
                     echo_anchoring,
                     retry_times,
                     cancel_rx,
+                    &backup_requests,
                 )
                 .await
                 {
                     AlignedBatchResult::Success(report) => {
+                        if report.provider != provider {
+                            write_task_log(
+                                app,
+                                &app_config_dir,
+                                task_id,
+                                &format!("当前批次已切换到备用翻译服务 {}", report.provider),
+                            )
+                            .await;
+                        }
                         unresolved_total += report.unresolved;
                         for (offset, translated_text) in report.translations.into_iter().enumerate()
                         {
@@ -1354,8 +1403,30 @@ async fn run_task_impl(
                 thinking_control_bypassed: false,
             };
 
-            let translated_text = match translate_with_retries(&req, retry_times, cancel_rx).await {
-                TranslationAttemptResult::Success(text) => text,
+            let translated_text = match translate_with_retries(
+                &req,
+                retry_times,
+                cancel_rx,
+                &backup_requests,
+            )
+            .await
+            {
+                TranslationAttemptResult::Success(text, actual_provider) => {
+                    if actual_provider != provider {
+                        write_task_log(
+                            app,
+                            &app_config_dir,
+                            task_id,
+                            &format!(
+                                "第 {} 行已由备用服务 {} 完成",
+                                next_cue_index + 1,
+                                actual_provider
+                            ),
+                        )
+                        .await;
+                    }
+                    text
+                }
                 TranslationAttemptResult::Cancelled => {
                     handle_translation_stop(
                         app,
@@ -1403,6 +1474,10 @@ async fn run_task_impl(
         }
 
         if unresolved_total > 0 {
+            std::fs::write(work_dir.join("review-source.srt"), source_track.to_srt())
+                .map_err(|error| error.to_string())?;
+            std::fs::write(work_dir.join("review-target.srt"), track.to_srt())
+                .map_err(|error| error.to_string())?;
             // 保留断点：重试时 restore_translated_checkpoint 会把占位符行视为未翻译并重新翻译。
             return Err(format!(
                 "有 {} 行字幕在对齐校验与定点补翻后仍未成功，任务未写出成品；重试任务将从失败行继续翻译",
@@ -1426,6 +1501,39 @@ async fn run_task_impl(
     }
 
     // 5. 字幕输出阶段 (0.95 - 1.00)
+    let quality_cues = source_track
+        .cues
+        .iter()
+        .enumerate()
+        .map(
+            |(index, source)| crate::core::subtitle::quality::QualityCue {
+                start_ms: source.start_ms,
+                end_ms: source.end_ms,
+                source: source.text.clone(),
+                target: should_translate.then(|| {
+                    track
+                        .cues
+                        .get(index)
+                        .map(|cue| cue.text.clone())
+                        .unwrap_or_default()
+                }),
+            },
+        )
+        .collect::<Vec<_>>();
+    let report = crate::core::subtitle::quality::inspect(
+        &quality_cues,
+        task.source_language.as_deref().unwrap_or("auto"),
+        task.target_language.as_deref().unwrap_or(""),
+    );
+    std::fs::write(work_dir.join("review-source.srt"), source_track.to_srt())
+        .map_err(|error| error.to_string())?;
+    if should_translate {
+        std::fs::write(work_dir.join("review-target.srt"), track.to_srt())
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(current) = tasks.write().await.get_mut(task_id) {
+        current.quality_report = Some(report);
+    }
     update_task_progress(app, tasks.clone(), task_id, 0.95, "正在写出字幕文件...").await;
 
     // 双语字幕 + 配音：固化一份纯译文轨道供配音阶段使用，
@@ -1455,7 +1563,6 @@ async fn run_task_impl(
         }
     }
 
-    let format_str = task.output_format.clone();
     let mut output_track = if should_translate {
         build_translation_output_track(&source_track, &track, task.translation_content_mode)
     } else {
@@ -1466,9 +1573,7 @@ async fn run_task_impl(
             cue.text = strip_chinese_punctuation(&cue.text);
         }
     }
-    let srt_output = output_track
-        .to_format(&format_str)
-        .map_err(|e| e.to_string())?;
+    let output_formats = task_output_formats(&task);
 
     let suffix = match task.task_type {
         TaskType::GenerateOnly => ".finalsub".to_string(),
@@ -1483,11 +1588,27 @@ async fn run_task_impl(
     };
 
     let output_stem = resolve_output_stem(&task, &media_path)?;
-    let final_output_path =
-        reserve_unique_output_path(&media_path, output_stem.as_deref(), &suffix, &format_str)?;
+    let mut output_paths = Vec::with_capacity(output_formats.len());
+    for format in &output_formats {
+        match reserve_unique_output_path(&media_path, output_stem.as_deref(), &suffix, format) {
+            Ok(path) => output_paths.push((path, format.clone())),
+            Err(error) => {
+                for (path, _) in &output_paths {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(error);
+            }
+        }
+    }
+    let final_output_path = output_paths
+        .first()
+        .map(|(path, _)| path.clone())
+        .ok_or_else(|| "没有可用的字幕输出格式".to_string())?;
 
     if check_cancelled(cancel_rx) {
-        let _ = tokio::fs::remove_file(&final_output_path).await;
+        for (path, _) in &output_paths {
+            let _ = tokio::fs::remove_file(path).await;
+        }
         handle_cancel_signal(
             app,
             tasks,
@@ -1500,17 +1621,32 @@ async fn run_task_impl(
         return Ok(());
     }
 
-    // 原子写入：先 create_new 预留最终路径，防止并发任务覆盖；再写入唯一 temp 并 rename。
-    let tmp_path = temporary_subtitle_output_path(&final_output_path, task_id, &format_str)?;
-    if let Err(e) = tokio::fs::write(&tmp_path, &srt_output).await {
-        let _ = tokio::fs::remove_file(&final_output_path).await;
-        return Err(format!("写入临时字幕文件失败：{}", e));
-    }
-
-    if let Err(e) = tokio::fs::rename(&tmp_path, &final_output_path).await {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        let _ = tokio::fs::remove_file(&final_output_path).await;
-        return Err(format!("重命名字幕文件失败：{}", e));
+    // 每种格式均先写唯一临时文件，再原子 rename；任一格式失败都会清理整批占位文件。
+    for (output_path, format) in &output_paths {
+        let rendered = match output_track.to_format(format) {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                for (path, _) in &output_paths {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+                return Err(error.to_string());
+            }
+        };
+        let tmp_path = temporary_subtitle_output_path(output_path, task_id, format)?;
+        if let Err(error) = tokio::fs::write(&tmp_path, rendered).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            for (path, _) in &output_paths {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            return Err(format!("写入临时字幕文件失败：{}", error));
+        }
+        if let Err(error) = tokio::fs::rename(&tmp_path, output_path).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            for (path, _) in &output_paths {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            return Err(format!("重命名字幕文件失败：{}", error));
+        }
     }
 
     // 6. 写入统一流水线快照；没有 pipeline 的旧任务继续沿用原有
@@ -1541,7 +1677,18 @@ async fn run_task_impl(
             )
             .await;
         }
-        set_pipeline_subtitle_output(app, tasks.clone(), task_id, &subtitle_output).await;
+        let all_output_paths = output_paths
+            .iter()
+            .map(|(path, _)| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        set_pipeline_subtitle_output(
+            app,
+            tasks.clone(),
+            task_id,
+            &subtitle_output,
+            &all_output_paths,
+        )
+        .await;
 
         let subtitle_review = task
             .pipeline
@@ -1605,6 +1752,10 @@ async fn run_task_impl(
         };
         t.reviewed_at = None;
         t.output_path = Some(final_output_path.to_string_lossy().to_string());
+        t.output_paths = output_paths
+            .iter()
+            .map(|(path, _)| path.to_string_lossy().to_string())
+            .collect();
         t.updated_at = chrono::Utc::now().to_rfc3339();
         let task_clone = t.clone();
         drop(task_map);
@@ -1714,6 +1865,7 @@ async fn set_pipeline_subtitle_output(
     tasks: Arc<RwLock<HashMap<String, Task>>>,
     task_id: &str,
     output_path: &str,
+    output_paths: &[String],
 ) {
     let mut task_map = tasks.write().await;
     if let Some(task) = task_map.get_mut(task_id) {
@@ -1726,6 +1878,7 @@ async fn set_pipeline_subtitle_output(
                 .map(|stage| stage.kind);
         }
         task.output_path = Some(output_path.to_string());
+        task.output_paths = output_paths.to_vec();
         task.updated_at = chrono::Utc::now().to_rfc3339();
         let task_clone = task.clone();
         drop(task_map);
@@ -2887,6 +3040,8 @@ fn validate_batch_alignment(
     parsed: &HashMap<String, ParsedBatchTranslation>,
     expected_keys: &[String],
     source_texts: &[String],
+    source_language: &str,
+    target_language: &str,
     echo_anchoring: bool,
 ) -> BatchAlignmentValidation {
     let mut validation = BatchAlignmentValidation::default();
@@ -2910,11 +3065,34 @@ fn validate_batch_alignment(
                 continue;
             }
         }
+        if is_strong_untranslated_evidence(
+            &source_texts[index],
+            &entry.translation,
+            source_language,
+            target_language,
+        ) {
+            validation.flagged.push(key.clone());
+            continue;
+        }
         validation
             .accepted
             .insert(key.clone(), entry.translation.clone());
     }
     validation
+}
+
+fn is_strong_untranslated_evidence(
+    source: &str,
+    translation: &str,
+    source_language: &str,
+    target_language: &str,
+) -> bool {
+    crate::core::subtitle::quality::untranslated_evidence(
+        source,
+        translation,
+        source_language,
+        target_language,
+    ) == crate::core::subtitle::quality::UntranslatedEvidence::Strong
 }
 
 fn normalize_for_alignment(text: &str) -> Vec<char> {
@@ -2998,7 +3176,9 @@ async fn translate_aligned_batch(
     echo_anchoring: bool,
     retry_times: u32,
     cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+    backups: &[TranslateRequest],
 ) -> AlignedBatchResult {
+    let mut actual_provider = base_request.provider.clone();
     let mut alignment_retry_used = false;
     let mut last_validation = BatchAlignmentValidation::default();
     let mut expected_keys = Vec::new();
@@ -3020,17 +3200,26 @@ async fn translate_aligned_batch(
             echo_anchoring,
         ));
 
-        let raw_text = match translate_with_retries(&request, retry_times, cancel_rx).await {
-            TranslationAttemptResult::Success(text) => text,
+        let raw_text = match translate_with_retries(&request, retry_times, cancel_rx, backups).await
+        {
+            TranslationAttemptResult::Success(text, provider) => {
+                actual_provider = provider;
+                text
+            }
             TranslationAttemptResult::Cancelled => return AlignedBatchResult::Cancelled,
             TranslationAttemptResult::Failed(error) => return AlignedBatchResult::Failed(error),
         };
         let parsed = parse_batch_translation_response(&raw_text, &expected_keys)
             .unwrap_or_else(|_| HashMap::new());
-        last_validation =
-            validate_batch_alignment(&parsed, &expected_keys, source_texts, echo_anchoring);
-        let large_mismatch_threshold = expected_keys.len().div_ceil(3);
-        if last_validation.flagged.len() > large_mismatch_threshold && alignment_attempt == 0 {
+        last_validation = validate_batch_alignment(
+            &parsed,
+            &expected_keys,
+            source_texts,
+            &base_request.source_language,
+            &base_request.target_language,
+            echo_anchoring,
+        );
+        if last_validation.flagged.len() * 3 > expected_keys.len() && alignment_attempt == 0 {
             alignment_retry_used = true;
             continue;
         }
@@ -3057,12 +3246,21 @@ async fn translate_aligned_batch(
                 std::slice::from_ref(&key),
                 echo_anchoring,
             ));
-            let raw_text =
-                match translate_with_retries(&request, retry_times.min(1), cancel_rx).await {
-                    TranslationAttemptResult::Success(text) => text,
-                    TranslationAttemptResult::Cancelled => return AlignedBatchResult::Cancelled,
-                    TranslationAttemptResult::Failed(_) => continue,
-                };
+            let raw_text = match translate_with_retries(
+                &request,
+                retry_times.min(1),
+                cancel_rx,
+                backups,
+            )
+            .await
+            {
+                TranslationAttemptResult::Success(text, provider) => {
+                    actual_provider = provider;
+                    text
+                }
+                TranslationAttemptResult::Cancelled => return AlignedBatchResult::Cancelled,
+                TranslationAttemptResult::Failed(_) => continue,
+            };
             let Ok(parsed) =
                 parse_batch_translation_response(&raw_text, std::slice::from_ref(&key))
             else {
@@ -3076,6 +3274,8 @@ async fn translate_aligned_batch(
                 &parsed,
                 std::slice::from_ref(&key),
                 std::slice::from_ref(&source_texts[source_index]),
+                &base_request.source_language,
+                &base_request.target_language,
                 echo_anchoring,
             );
             if let Some(translation) = validation.accepted.get(&key) {
@@ -3110,6 +3310,7 @@ async fn translate_aligned_batch(
         repaired,
         unresolved,
         alignment_retry_used,
+        provider: actual_provider,
     })
 }
 
@@ -3149,6 +3350,23 @@ async fn translate_with_retries(
     req: &TranslateRequest,
     retry_times: u32,
     cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+    backups: &[TranslateRequest],
+) -> TranslationAttemptResult {
+    let mut result = translate_one_with_retries(req, retry_times, cancel_rx).await;
+    for backup in backups {
+        if !matches!(result, TranslationAttemptResult::Failed(_)) {
+            return result;
+        }
+        let request = crate::core::translation::recovery::inherit_content(backup, req);
+        result = translate_one_with_retries(&request, retry_times.min(1), cancel_rx).await;
+    }
+    result
+}
+
+async fn translate_one_with_retries(
+    req: &TranslateRequest,
+    retry_times: u32,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) -> TranslationAttemptResult {
     let mut last_err = String::new();
 
@@ -3172,10 +3390,27 @@ async fn translate_with_retries(
 
         match translate_result {
             Ok(resp) => {
-                if resp.success {
-                    return TranslationAttemptResult::Success(resp.translated_text);
+                if resp.success && !resp.translated_text.trim().is_empty() {
+                    if req.response_json_schema.is_none()
+                        && is_strong_untranslated_evidence(
+                            &req.text,
+                            &resp.translated_text,
+                            &req.source_language,
+                            &req.target_language,
+                        )
+                    {
+                        last_err = "翻译服务原样返回原文，正在尝试恢复".into();
+                    } else {
+                        return TranslationAttemptResult::Success(
+                            resp.translated_text,
+                            req.provider.clone(),
+                        );
+                    }
+                } else {
+                    last_err = resp
+                        .error
+                        .unwrap_or_else(|| "翻译服务没有返回有效译文".into());
                 }
-                last_err = resp.error.unwrap_or_else(|| "未知翻译错误".into());
             }
             Err(e) => {
                 last_err = e.to_string();
@@ -3224,7 +3459,7 @@ async fn wait_translation_interval(
     }
 }
 
-fn build_translation_output_track(
+pub(crate) fn build_translation_output_track(
     source_track: &SubtitleTrack,
     translated_track: &SubtitleTrack,
     mode: TranslationContentMode,
@@ -3269,7 +3504,25 @@ fn merge_bilingual_text(top: &str, bottom: &str) -> String {
     }
 }
 
-fn reserve_unique_output_path(
+pub(crate) fn task_output_formats(task: &Task) -> Vec<String> {
+    let mut formats = Vec::new();
+    for format in task
+        .output_formats
+        .iter()
+        .chain(std::iter::once(&task.output_format))
+    {
+        let format = format.trim().to_ascii_lowercase();
+        if !format.is_empty() && !formats.contains(&format) {
+            formats.push(format);
+        }
+    }
+    if formats.is_empty() {
+        formats.push("srt".into());
+    }
+    formats
+}
+
+pub(crate) fn reserve_unique_output_path(
     media_path: &Path,
     stem_override: Option<&str>,
     suffix: &str,
@@ -3330,7 +3583,7 @@ fn resolve_output_stem(task: &Task, media_path: &Path) -> Result<Option<String>,
     Ok(Some(resolved))
 }
 
-fn strip_chinese_punctuation(text: &str) -> String {
+pub(crate) fn strip_chinese_punctuation(text: &str) -> String {
     const PUNCTUATION: &[char] = &[
         '，', '。', '！', '？', '；', '：', '、', '“', '”', '‘', '’', '（', '）', '【', '】', '《',
         '》', '〈', '〉', '…', '—', '·', '～', '﹏', '「', '」', '『', '』',
@@ -3606,7 +3859,7 @@ mod tests {
             &keys,
         )
         .unwrap();
-        let validated = validate_batch_alignment(&parsed, &keys, &sources, true);
+        let validated = validate_batch_alignment(&parsed, &keys, &sources, "en", "zh", true);
 
         assert!(prompt.contains("same keys"));
         assert_eq!(keys, vec!["1".to_string(), "2".to_string()]);
@@ -3623,7 +3876,7 @@ mod tests {
         let parsed =
             parse_batch_translation_response("{\"1\":{\"src\":\"World\",\"tr\":\"世界\"}}", &keys)
                 .unwrap();
-        let validated = validate_batch_alignment(&parsed, &keys, &sources, true);
+        let validated = validate_batch_alignment(&parsed, &keys, &sources, "en", "zh", true);
 
         assert_eq!(validated.flagged, keys);
         assert!(validated.accepted.is_empty());
@@ -3662,6 +3915,46 @@ mod tests {
     fn echo_similarity_ignores_formatting_but_detects_merged_text() {
         assert!(text_similarity("Hello, WORLD!", "hello world") > 0.99);
         assert!(text_similarity("Hello world and next subtitle", "Hello world") < 0.75);
+    }
+
+    #[test]
+    fn strong_untranslated_evidence_flags_cross_language_copy() {
+        assert!(is_strong_untranslated_evidence(
+            "This subtitle was returned unchanged",
+            "This subtitle was returned unchanged",
+            "en",
+            "zh"
+        ));
+        assert!(!is_strong_untranslated_evidence(
+            "OpenAI", "OpenAI", "en", "zh"
+        ));
+        assert!(!is_strong_untranslated_evidence(
+            "你好世界",
+            "你好世界",
+            "zh",
+            "zh"
+        ));
+    }
+
+    #[test]
+    fn ten_rows_with_four_alignment_problems_require_batch_retry() {
+        let keys = (1..=10).map(|index| index.to_string()).collect::<Vec<_>>();
+        let sources = (1..=10)
+            .map(|index| format!("Source line {index}"))
+            .collect::<Vec<_>>();
+        let mut parsed = HashMap::new();
+        for key in keys.iter().take(6) {
+            parsed.insert(
+                key.clone(),
+                ParsedBatchTranslation {
+                    echoed_source: Some(format!("Source line {key}")),
+                    translation: format!("译文 {key}"),
+                },
+            );
+        }
+        let validation = validate_batch_alignment(&parsed, &keys, &sources, "en", "zh", true);
+        assert_eq!(validation.flagged.len(), 4);
+        assert!(validation.flagged.len() * 3 > keys.len());
     }
 
     #[test]

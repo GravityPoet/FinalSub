@@ -15,7 +15,7 @@ use crate::core::models::{self, AsrModelInfo, ModelStatus};
 use crate::core::recipes::{self, SaveTaskRecipeRequest, TaskRecipe};
 use crate::core::settings::{self, Settings};
 use crate::core::style_presets::{self, SaveSubtitleStylePresetRequest, SubtitleStylePreset};
-use crate::core::subtitle::SubtitleTrack;
+use crate::core::subtitle::{review as subtitle_review, SubtitleTrack};
 use crate::core::task_queue::{
     self, CreateTaskParams, PipelineConfig, Task, TaskMap, TaskStatus, TaskType,
     TranslationContentMode,
@@ -1276,6 +1276,8 @@ pub struct CreateTaskRequest {
     pub target_language: Option<String>,
     pub translation_content_mode: Option<String>,
     pub output_format: Option<String>,
+    #[serde(default)]
+    pub output_formats: Vec<String>,
     pub output_name: Option<String>,
     pub strip_chinese_punctuation: Option<bool>,
     pub review_required: Option<bool>,
@@ -1478,7 +1480,13 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
         validate_subtitle_input_file(path)?;
     }
 
-    let output_format = validate_subtitle_output_format(req.output_format)?;
+    let mut output_formats = validate_subtitle_output_formats(&req.output_formats)?;
+    if output_formats.is_empty() {
+        output_formats.push(
+            validate_subtitle_output_format(req.output_format)?.unwrap_or_else(|| "srt".into()),
+        );
+    }
+    let output_format = Some(output_formats[0].clone());
     let max_subtitle_chars = validate_max_subtitle_chars(req.max_subtitle_chars)?;
     let output_name = validate_output_name_template(req.output_name)?;
     let translation_content_mode = validate_translation_content_mode(req.translation_content_mode)?;
@@ -1525,6 +1533,7 @@ fn prepare_task_request(req: CreateTaskRequest) -> Result<Task, String> {
         target_language,
         translation_content_mode,
         output_format,
+        output_formats,
         output_name,
         strip_chinese_punctuation: req.strip_chinese_punctuation.unwrap_or(false),
         review_required: req.review_required.unwrap_or(false),
@@ -1656,6 +1665,7 @@ pub async fn create_preview_task(
         target_language: None,
         translation_content_mode: TranslationContentMode::TargetOnly,
         output_format: None,
+        output_formats: Vec::new(),
         output_name: None,
         strip_chinese_punctuation: false,
         review_required: false,
@@ -3158,6 +3168,129 @@ pub async fn test_translation(
 }
 
 #[tauri::command]
+pub async fn repair_subtitle_translation(
+    app: AppHandle,
+    text: String,
+    source_language: String,
+    target_language: String,
+) -> Result<String, String> {
+    if text.trim().is_empty() || text.len() > 20_000 || text.chars().any(char::is_control) {
+        return Err("待重译字幕必须是 1-20000 字节且不能包含控制字符".into());
+    }
+    if source_language.len() > 32
+        || target_language.len() > 32
+        || source_language.chars().any(char::is_control)
+        || target_language.chars().any(char::is_control)
+    {
+        return Err("字幕语言代码无效".into());
+    }
+    let state = app.state::<AppState>();
+    let settings = crate::core::settings::load_settings(&state.app_config_dir)
+        .map_err(|error| error.to_string())?;
+    let provider = settings.translate_provider.clone();
+    if provider.is_empty() {
+        return Err("请先配置翻译服务商".into());
+    }
+    let info = translation::builtin_providers()
+        .into_iter()
+        .find(|item| item.id == provider)
+        .ok_or("翻译服务商不存在")?;
+    let endpoint = settings
+        .translate_endpoints
+        .get(&provider)
+        .cloned()
+        .or_else(|| (!info.default_endpoint.is_empty()).then_some(info.default_endpoint.clone()));
+    let mut secrets = std::collections::HashMap::new();
+    for field in &info.secret_fields {
+        if let Some(value) = crate::core::secrets::get_provider_secret(
+            &provider,
+            endpoint.as_deref().unwrap_or_default(),
+            field,
+        )? {
+            secrets.insert(field.clone(), value);
+        }
+    }
+    let response = translation::translate_text(&translation::TranslateRequest {
+        text,
+        source_language,
+        target_language,
+        provider,
+        api_key: secrets.get("apiKey").cloned(),
+        api_url: endpoint,
+        model_name: settings
+            .translate_models
+            .get(&settings.translate_provider)
+            .cloned(),
+        secret_fields: (!secrets.is_empty()).then_some(secrets),
+        system_prompt: settings
+            .translate_system_prompts
+            .get(&settings.translate_provider)
+            .cloned(),
+        user_prompt: settings
+            .translate_user_prompts
+            .get(&settings.translate_provider)
+            .cloned(),
+        proxy_url: settings.proxy_enabled.then_some(settings.proxy_url),
+        custom_headers: settings
+            .translate_custom_headers
+            .get(&settings.translate_provider)
+            .cloned(),
+        custom_body: settings
+            .translate_custom_body
+            .get(&settings.translate_provider)
+            .cloned(),
+        structured_output: None,
+        response_json_schema: None,
+        glossary_prompt: None,
+        enable_thinking: Some(false),
+        thinking_control_bypassed: false,
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    if response.success && !response.translated_text.trim().is_empty() {
+        Ok(response.translated_text)
+    } else {
+        Err(response
+            .error
+            .unwrap_or_else(|| "翻译服务没有返回译文".into()))
+    }
+}
+
+#[tauri::command]
+pub async fn publish_task_review(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+    cues: Vec<crate::core::subtitle::quality::QualityCue>,
+    expected_version: String,
+) -> Result<String, String> {
+    validate_task_id(&task_id)?;
+    // Hold the queue lock so a concurrent resume cannot use partially updated outputs.
+    let mut tasks = state.tasks.write().await;
+    let task = tasks.get(&task_id).cloned().ok_or("任务不存在")?;
+    let root = state.app_config_dir.join("tasks").join(&task_id);
+    let publication = subtitle_review::publish(&root, &task, &cues, &expected_version)?;
+    let updated = publication.task.clone();
+    let version = subtitle_review::version(&root, &updated)?;
+    let mut next = tasks.clone();
+    next.insert(task_id.clone(), updated.clone());
+    crate::core::task_queue::save_tasks(&state.app_config_dir, &next)?;
+    *tasks = next;
+    publication.commit();
+    drop(tasks);
+    emit_task_update(&app, &updated);
+
+    // Publishing a pipeline review is the approval action for the subtitle
+    // stage.  Release the queue lock before reusing the normal approval path:
+    // it persists the next stage and starts the worker from Dub/DubbingReview/
+    // Compose, without re-running transcription or translation.
+    if updated.status == TaskStatus::Review && updated.pipeline.is_some() {
+        approve_tasks_by_ids(&app, &state, vec![task_id]).await?;
+    }
+    Ok(version)
+}
+
+#[tauri::command]
 pub async fn test_translation_proxy(
     proxy_url: String,
     target_url: String,
@@ -3659,6 +3792,59 @@ fn validate_subtitle_output_format(raw: Option<String>) -> Result<Option<String>
         "srt" | "vtt" | "txt" | "lrc" | "ass" => Ok(Some(format)),
         _ => Err("Output format only supports srt, vtt, txt, lrc, ass".into()),
     }
+}
+
+fn validate_subtitle_output_formats(raw: &[String]) -> Result<Vec<String>, String> {
+    if raw.len() > 5 {
+        return Err("最多同时导出 5 种字幕格式".into());
+    }
+    let mut formats = Vec::new();
+    for value in raw {
+        let format = value.trim().to_ascii_lowercase();
+        if format.is_empty() {
+            continue;
+        }
+        if !matches!(format.as_str(), "srt" | "vtt" | "txt" | "lrc" | "ass") {
+            return Err("Output formats only support srt, vtt, txt, lrc, ass".into());
+        }
+        if !formats.contains(&format) {
+            formats.push(format);
+        }
+    }
+    Ok(formats)
+}
+
+#[tauri::command]
+pub async fn inspect_subtitle_quality(
+    cues: Vec<crate::core::subtitle::quality::QualityCue>,
+    source_language: String,
+    target_language: String,
+) -> Result<crate::core::subtitle::quality::QualityReport, String> {
+    if cues.len() > 100_000
+        || cues
+            .iter()
+            .map(|cue| cue.source.len() + cue.target.as_ref().map_or(0, String::len))
+            .sum::<usize>()
+            > 20 * 1024 * 1024
+    {
+        return Err("字幕巡检最多支持 100000 行或 20 MB 文本".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::subtitle::quality::inspect(&cues, &source_language, &target_language)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_task_review_source(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<subtitle_review::ReviewSource, String> {
+    validate_task_id(&task_id)?;
+    let tasks = state.tasks.read().await;
+    let task = tasks.get(&task_id).ok_or("任务不存在")?;
+    subtitle_review::load(&state.app_config_dir.join("tasks").join(&task_id), task)
 }
 
 fn validate_max_subtitle_chars(raw: Option<i32>) -> Result<i32, String> {
@@ -4583,6 +4769,7 @@ mod tests {
                 target_language: Some("zh".into()),
                 translation_content_mode: None,
                 output_format: Some("srt".into()),
+                output_formats: Vec::new(),
                 output_name: None,
                 strip_chinese_punctuation: None,
                 review_required: None,
@@ -4775,6 +4962,7 @@ mod tests {
                 output_format: Some("srt".into()),
                 output_name: None,
                 strip_chinese_punctuation: false,
+                output_formats: Vec::new(),
                 review_required: true,
                 max_subtitle_chars: 0,
                 pipeline: None,
@@ -4825,6 +5013,7 @@ mod tests {
             target_language: Some("zh".into()),
             translation_content_mode: TranslationContentMode::TargetOnly,
             output_format: Some("srt".into()),
+            output_formats: Vec::new(),
             output_name: None,
             strip_chinese_punctuation: false,
             review_required: false,
@@ -4907,6 +5096,7 @@ mod tests {
             output_format: Some("srt".into()),
             output_name: None,
             strip_chinese_punctuation: false,
+            output_formats: Vec::new(),
             review_required: false,
             max_subtitle_chars: 0,
             pipeline: Some(task_queue::PipelineConfig::for_task(
@@ -5170,6 +5360,7 @@ mod tests {
             output_format: Some("srt".into()),
             output_name: None,
             strip_chinese_punctuation: false,
+            output_formats: Vec::new(),
             review_required: false,
             max_subtitle_chars: 0,
             pipeline: None,
@@ -5232,6 +5423,7 @@ mod tests {
             output_format: Some("srt".into()),
             output_name: None,
             strip_chinese_punctuation: false,
+            output_formats: Vec::new(),
             review_required: false,
             max_subtitle_chars: 0,
             pipeline: None,

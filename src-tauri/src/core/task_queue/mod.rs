@@ -270,6 +270,8 @@ pub struct Task {
     pub translation_content_mode: TranslationContentMode,
     pub output_format: String,
     #[serde(default)]
+    pub output_formats: Vec<String>,
+    #[serde(default)]
     pub output_name: Option<String>,
     #[serde(default)]
     pub strip_chinese_punctuation: bool,
@@ -284,6 +286,10 @@ pub struct Task {
     pub progress: f32,
     pub status_message: String,
     pub output_path: Option<String>,
+    #[serde(default)]
+    pub output_paths: Vec<String>,
+    #[serde(default)]
+    pub quality_report: Option<crate::core::subtitle::quality::QualityReport>,
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -304,6 +310,8 @@ pub struct CreateTaskParams {
     pub target_language: Option<String>,
     pub translation_content_mode: TranslationContentMode,
     pub output_format: Option<String>,
+    #[serde(default)]
+    pub output_formats: Vec<String>,
     pub output_name: Option<String>,
     pub strip_chinese_punctuation: bool,
     pub review_required: bool,
@@ -327,6 +335,7 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         target_language: params.target_language,
         translation_content_mode: params.translation_content_mode,
         output_format: params.output_format.unwrap_or_else(|| "srt".into()),
+        output_formats: params.output_formats,
         output_name: params.output_name,
         strip_chinese_punctuation: params.strip_chinese_punctuation,
         review_required: params.review_required,
@@ -336,6 +345,8 @@ pub fn create_task(params: CreateTaskParams) -> Task {
         progress: 0.0,
         status_message: "待处理".into(),
         output_path: None,
+        output_paths: Vec::new(),
+        quality_report: None,
         error: None,
         created_at: now.clone(),
         updated_at: now,
@@ -412,6 +423,7 @@ mod tests {
             target_language: None,
             translation_content_mode: TranslationContentMode::TargetOnly,
             output_format: Some("srt".into()),
+            output_formats: Vec::new(),
             output_name: None,
             strip_chinese_punctuation: false,
             review_required: false,

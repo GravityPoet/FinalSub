@@ -102,6 +102,8 @@ pub struct Settings {
     pub target_language: String,
     #[serde(alias = "translateProvider")]
     pub translate_provider: String,
+    #[serde(default)]
+    pub translate_fallback_providers: Vec<String>,
     #[serde(alias = "translateEndpoints")]
     pub translate_endpoints: std::collections::HashMap<String, String>,
     #[serde(alias = "translateModels")]
@@ -193,6 +195,7 @@ impl Default for Settings {
             source_language: "auto".into(),
             target_language: "zh".into(),
             translate_provider: String::new(),
+            translate_fallback_providers: Vec::new(),
             translate_endpoints: std::collections::HashMap::new(),
             translate_models: std::collections::HashMap::new(),
             translate_retry_times: 0,
@@ -676,6 +679,17 @@ fn validate_storage_path_setting(value: &str, label: &str, allow_empty: bool) ->
 }
 
 pub fn validate_settings(settings: &Settings) -> Result<()> {
+    let providers = crate::core::translation::builtin_providers();
+    if settings.translate_fallback_providers.len() > 3
+        || settings
+            .translate_fallback_providers
+            .iter()
+            .any(|id| !providers.iter().any(|provider| &provider.id == id))
+    {
+        return Err(crate::error::FinalSubError::Validation(
+            "备用翻译服务最多 3 个，且必须是受支持的服务".into(),
+        ));
+    }
     if !matches!(settings.language.as_str(), "zh" | "en" | "ja") {
         return Err(crate::error::FinalSubError::Validation(format!(
             "不支持的界面语言：{}",

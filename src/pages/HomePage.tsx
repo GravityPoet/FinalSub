@@ -37,6 +37,8 @@ import {
   listAsrModels,
   listTtsModels,
   listTtsProviders,
+  listEmbeddedSubtitles,
+  extractEmbeddedSubtitle,
   listenDragDrop,
   getSettings,
   checkForUpdate,
@@ -45,6 +47,7 @@ import {
   listTaskRecipes,
   listSubtitleStylePresets,
   openDialog,
+  saveDialog,
   openPath,
   saveTaskRecipe,
   type AppUpdateEvent,
@@ -58,6 +61,7 @@ import {
   type TtsProviderProfile,
   type UpdateInfo,
   type VideoMetadata,
+  type EmbeddedSubtitleStream,
 } from "../lib/tauri";
 import { pairMediaWithSubtitles } from "../lib/filePairing";
 import {
@@ -242,6 +246,9 @@ export default function HomePage() {
   const [updateError, setUpdateError] = useState("");
   const [mediaMetadata, setMediaMetadata] = useState<VideoMetadata | null>(null);
   const [mediaMetadataError, setMediaMetadataError] = useState("");
+  const [embeddedSubtitles, setEmbeddedSubtitles] = useState<EmbeddedSubtitleStream[]>([]);
+  const [embeddedSubtitleLoading, setEmbeddedSubtitleLoading] = useState(false);
+  const [embeddedSubtitleError, setEmbeddedSubtitleError] = useState("");
 
   const [taskType, setTaskType] = useState("generate-and-translate");
   const [engineId, setEngineId] = useState("parakeet-mlx");
@@ -253,6 +260,9 @@ export default function HomePage() {
   const [outputFormat, setOutputFormat] = useState(() => (
     defaultOutputFormatForTranslation(readTranslationContentDefault(), "srt")
   ));
+  const [selectedOutputFormats, setSelectedOutputFormats] = useState<string[]>(() => [
+    defaultOutputFormatForTranslation(readTranslationContentDefault(), "srt"),
+  ]);
   const [outputName, setOutputName] = useState("");
   const [maxSubtitleChars, setMaxSubtitleChars] = useState(0);
   const [customSubtitleChars, setCustomSubtitleChars] = useState(40);
@@ -298,8 +308,23 @@ export default function HomePage() {
   const rememberTranslationContentMode = useCallback((mode: TranslationContentMode) => {
     setTranslationContentMode(mode);
     rememberTranslationContentDefault(mode);
-    if (mode !== "target-only") setOutputFormat("ass");
+    if (mode !== "target-only") {
+      setOutputFormat("ass");
+      setSelectedOutputFormats((current) => current.includes("ass") ? current : ["ass", ...current]);
+    }
   }, []);
+
+  const handleOutputFormatsChange = useCallback((format: string, checked: boolean) => {
+    setSelectedOutputFormats((current) => {
+      const next = checked
+        ? [...new Set([...current, format])]
+        : current.filter((item) => item !== format);
+      if (next.length === 0) return current;
+      const primary = next.includes(outputFormat) ? outputFormat : next[0];
+      setOutputFormat(primary);
+      return next;
+    });
+  }, [outputFormat]);
 
   const restorePreviousSource = useCallback(() => {
     if (!selectionUndo) return;
@@ -480,6 +505,10 @@ export default function HomePage() {
           )
           : "srt",
       );
+      const configuredOutputFormat = outputFormats.some(({ value }) => value === settings.subtitle_output_format)
+        ? defaultOutputFormatForTranslation(readTranslationContentDefault(), settings.subtitle_output_format)
+        : "srt";
+      setSelectedOutputFormats([configuredOutputFormat]);
       const readyLocalTts = loadedTtsModels.find(
         (model) => model.status === "ready" && !model.clone_only,
       );
@@ -528,6 +557,28 @@ export default function HomePage() {
       setMediaMetadataError("");
     }
   }, [selectedPath, taskType]);
+
+  useEffect(() => {
+    if (!selectedPath || selectedInputKind !== "media" || taskType === "translate-only") {
+      setEmbeddedSubtitles([]);
+      setEmbeddedSubtitleError("");
+      return;
+    }
+    let active = true;
+    setEmbeddedSubtitleLoading(true);
+    setEmbeddedSubtitleError("");
+    listEmbeddedSubtitles(selectedPath)
+      .then((streams) => {
+        if (active) setEmbeddedSubtitles(streams);
+      })
+      .catch((error) => {
+        if (active) setEmbeddedSubtitleError(String(error));
+      })
+      .finally(() => {
+        if (active) setEmbeddedSubtitleLoading(false);
+      });
+    return () => { active = false; };
+  }, [selectedInputKind, selectedPath, taskType]);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -766,6 +817,26 @@ export default function HomePage() {
     setManualSubtitlePairs({});
   };
 
+  const handleExtractEmbeddedSubtitle = async (stream: EmbeddedSubtitleStream) => {
+    if (!selectedPath) return;
+    setError("");
+    try {
+      const stem = fileNameFromPath(selectedPath).replace(/\.[^.]+$/, "");
+      const language = stream.language?.replace(/[^A-Za-z0-9-]/g, "") || `track-${stream.sub_index + 1}`;
+      const outputPath = await saveDialog({
+        defaultPath: `${stem}.${language}.srt`,
+        filters: [{ name: t("home.subFile"), extensions: ["srt"] }],
+      });
+      if (!outputPath || Array.isArray(outputPath)) return;
+      const extractedPath = await extractEmbeddedSubtitle(selectedPath, stream.sub_index, outputPath);
+      setPairedSubtitlePaths((current) => [...new Set([...current, extractedPath])]);
+      setManualSubtitlePairs((current) => ({ ...current, [selectedPath]: extractedPath }));
+      setEmbeddedSubtitleError("");
+    } catch (extractionError) {
+      setEmbeddedSubtitleError(String(extractionError));
+    }
+  };
+
   const revealTaskIssue = (targetId: string) => {
     requestAnimationFrame(() => {
       const target = document.getElementById(targetId);
@@ -819,6 +890,7 @@ export default function HomePage() {
           translation_content_mode:
             taskType === "generate-only" ? undefined : translationContentMode,
           output_format: outputFormat,
+          output_formats: [...new Set([outputFormat, ...selectedOutputFormats])],
           output_name: resolvedOutputName,
           strip_chinese_punctuation: stripChinesePunctuation,
           review_required: pipelineEnabled ? false : reviewRequired,
@@ -929,6 +1001,7 @@ export default function HomePage() {
         target_language: "zh",
         translation_content_mode: "target-only",
         output_format: "srt",
+        output_formats: ["srt"],
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: true,
@@ -962,6 +1035,7 @@ export default function HomePage() {
         target_language: "zh",
         translation_content_mode: "target-only",
         output_format: "srt",
+        output_formats: ["srt"],
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: false,
@@ -980,6 +1054,7 @@ export default function HomePage() {
         target_language: "zh",
         translation_content_mode: "source-and-target",
         output_format: "srt",
+        output_formats: ["srt"],
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: true,
@@ -998,6 +1073,7 @@ export default function HomePage() {
         target_language: "zh",
         translation_content_mode: "target-only",
         output_format: "srt",
+        output_formats: ["srt"],
         output_name: "",
         strip_chinese_punctuation: false,
         review_required: true,
@@ -1014,6 +1090,7 @@ export default function HomePage() {
     target_language: targetLanguage,
     translation_content_mode: translationContentMode,
     output_format: outputFormat,
+    output_formats: selectedOutputFormats,
     output_name: outputName,
     strip_chinese_punctuation: stripChinesePunctuation,
     review_required: reviewRequired,
@@ -1089,6 +1166,7 @@ export default function HomePage() {
         ? snapshot.output_format
         : "srt",
     );
+    setSelectedOutputFormats(snapshot.output_formats?.length ? snapshot.output_formats : [snapshot.output_format]);
     setOutputName(snapshot.output_name);
     setStripChinesePunctuation(snapshot.strip_chinese_punctuation);
     const recipePipeline = snapshot.pipeline;
@@ -1583,6 +1661,33 @@ export default function HomePage() {
                           {t("home.clearPairing")}
                         </button>
                       </div>
+                    </section>
+                  )}
+
+                  {selectedInputKind === "media" && selectedPath && (embeddedSubtitleLoading || embeddedSubtitles.length > 0 || embeddedSubtitleError) && (
+                    <section className="mt-4 rounded-xl border border-info/20 bg-info/8 p-3.5" aria-labelledby="embedded-subtitle-title">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <h4 id="embedded-subtitle-title" className="text-sm font-semibold text-text-primary">{t("home.embeddedSubtitleTitle")}</h4>
+                          <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.embeddedSubtitleHint")}</p>
+                        </div>
+                        {embeddedSubtitleLoading && <span className="text-xs text-text-tertiary">{t("home.embeddedSubtitleDetecting")}</span>}
+                      </div>
+                      {embeddedSubtitleError && <p className="mt-2 break-words text-xs text-danger">{embeddedSubtitleError}</p>}
+                      {embeddedSubtitles.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {embeddedSubtitles.map((stream) => (
+                            <div key={stream.sub_index} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle bg-surface-raised/60 px-3 py-2">
+                              <span className="text-xs font-medium text-text-secondary">
+                                {stream.language || t("home.embeddedSubtitleUnknownLanguage")} · {stream.codec}
+                              </span>
+                              <Button type="button" size="sm" variant="secondary" onClick={() => void handleExtractEmbeddedSubtitle(stream)}>
+                                {t("home.embeddedSubtitleExtract")}
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </section>
                   )}
 
@@ -2237,8 +2342,22 @@ export default function HomePage() {
                 <div>
                   <label htmlFor="task-output-format" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.outputFormat")}</label>
                   <Select id="task-output-format" value={outputFormat} onChange={(event) => setOutputFormat(event.target.value)}>
-                    {outputFormats.map((format) => <option key={format.value} value={format.value}>{format.label}</option>)}
+                    {outputFormats.filter((format) => selectedOutputFormats.includes(format.value)).map((format) => <option key={format.value} value={format.value}>{format.label}</option>)}
                   </Select>
+                  <div className="mt-2 flex flex-wrap gap-2" aria-label={t("home.outputFormats")}>
+                    {outputFormats.map((format) => (
+                      <label key={format.value} className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-overlay px-2.5 py-1.5 text-xs text-text-secondary">
+                        <input
+                          type="checkbox"
+                          checked={selectedOutputFormats.includes(format.value)}
+                          onChange={(event) => handleOutputFormatsChange(format.value, event.target.checked)}
+                          className="h-3.5 w-3.5 accent-brand"
+                        />
+                        {format.label}
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-xs leading-5 text-text-tertiary">{t("home.outputFormatsHint")}</p>
                   {bilingualTranslation && (
                     <p
                       className={`mt-2 flex items-start gap-1.5 text-xs leading-5 ${outputFormat === "ass" ? "text-success" : "text-warning"}`}

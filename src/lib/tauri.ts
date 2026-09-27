@@ -680,6 +680,7 @@ export interface Task {
   target_language: string | null;
   translation_content_mode: TranslationContentMode;
   output_format: string;
+  output_formats?: string[];
   output_name: string | null;
   strip_chinese_punctuation: boolean;
   review_required: boolean;
@@ -689,9 +690,28 @@ export interface Task {
   progress: number;
   status_message: string;
   output_path: string | null;
+  output_paths?: string[];
+  quality_report?: QualityReport | null;
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface QualityCue { start_ms: number; end_ms: number; source: string; target?: string | null; }
+export interface QualityIssue { cue_index: number; start_ms: number; end_ms: number; code: string; value: number; }
+export interface QualityReport { cue_count: number; affected_cues: number; issues: QualityIssue[]; }
+export interface TaskReviewSource { source_path: string; target_path: string | null; source_content: string; target_content: string | null; version: string; media_path: string | null; source_language: string; target_language: string; }
+export function inspectSubtitleQuality(cues: QualityCue[], sourceLanguage: string, targetLanguage: string): Promise<QualityReport> {
+  return invoke("inspect_subtitle_quality", { cues, sourceLanguage, targetLanguage });
+}
+export function getTaskReviewSource(taskId: string): Promise<TaskReviewSource> {
+  return invoke("get_task_review_source", { taskId });
+}
+export function publishTaskReview(taskId: string, cues: QualityCue[], expectedVersion: string): Promise<string> {
+  return invoke("publish_task_review", { taskId, cues, expectedVersion });
+}
+export function repairSubtitleTranslation(text: string, sourceLanguage: string, targetLanguage: string): Promise<string> {
+  return invoke("repair_subtitle_translation", { text, sourceLanguage, targetLanguage });
 }
 
 export interface TaskDeletedPayload {
@@ -1014,6 +1034,7 @@ export interface CreateTaskRequest {
   target_language?: string;
   translation_content_mode?: TranslationContentMode;
   output_format?: string;
+  output_formats?: string[];
   output_name?: string;
   strip_chinese_punctuation?: boolean;
   review_required?: boolean;
@@ -1029,6 +1050,7 @@ export interface TaskRecipeSnapshot {
   target_language: string;
   translation_content_mode: TranslationContentMode;
   output_format: string;
+  output_formats?: string[];
   output_name: string;
   strip_chinese_punctuation: boolean;
   review_required: boolean;
@@ -1423,6 +1445,7 @@ export interface Settings {
   source_language: string;
   target_language: string;
   translate_provider: string;
+  translate_fallback_providers?: string[];
   translate_endpoints: Record<string, string>;
   translate_models: Record<string, string>;
   translate_retry_times: number;
@@ -1636,6 +1659,7 @@ function createMockSettings(): Settings {
     source_language: "auto",
     target_language: "zh",
     translate_provider: "ollama",
+    translate_fallback_providers: [],
     translate_endpoints: {
       ollama: "http://localhost:11434",
       deeplx: "https://api.deeplx.org",
@@ -2188,6 +2212,7 @@ function createMockTask(): Task {
     target_language: "zh",
     translation_content_mode: "target-only",
     output_format: "srt",
+    output_formats: ["srt"],
     output_name: null,
     strip_chinese_punctuation: false,
     review_required: false,
@@ -2197,6 +2222,7 @@ function createMockTask(): Task {
     progress: 1,
     status_message: "已完成",
     output_path: "/Users/example/Movies/demo.finalsub.zh.srt",
+    output_paths: ["/Users/example/Movies/demo.finalsub.zh.srt"],
     error: null,
     created_at: now,
     updated_at: now,

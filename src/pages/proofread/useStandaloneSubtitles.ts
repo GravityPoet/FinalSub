@@ -42,6 +42,8 @@ export interface PlayerSubtitleTrack {
 }
 
 interface StandaloneSubtitlesConfig {
+  reviewSourceContent?: string;
+  reviewTargetContent?: string;
   videoPath?: string;
   sourceSubtitlePath?: string;
   targetSubtitlePath?: string;
@@ -107,8 +109,13 @@ export const useStandaloneSubtitles = (
   const shouldShowTranslation = !!config.targetSubtitlePath;
 
   // 读取字幕文件并解析为 Subtitle 格式
+  const readContent = (path: string): Promise<string> => {
+    if (path === config.sourceSubtitlePath && config.reviewSourceContent !== undefined) return Promise.resolve(config.reviewSourceContent);
+    if (path === config.targetSubtitlePath && config.reviewTargetContent !== undefined) return Promise.resolve(config.reviewTargetContent);
+    return readTextFilePath(path);
+  };
   const readSubtitleFile = async (filePath: string): Promise<Subtitle[]> => {
-    const content = await readTextFilePath(filePath);
+    const content = await readContent(filePath);
     const format = detectSubtitleFormat(filePath);
     const entries = parseSubtitleEntries(content, format);
     if (content.trim() !== '' && entries.length === 0) {
@@ -137,7 +144,7 @@ export const useStandaloneSubtitles = (
   ): Promise<PlayerSubtitleTrack | null> => {
     if (!srtPath) return null;
     try {
-      const content = await readTextFilePath(srtPath);
+      const content = await readContent(srtPath);
       const fromFormat = detectSubtitleFormat(srtPath);
       const vttContent = convertSubtitleContentForPlayer(
         content,

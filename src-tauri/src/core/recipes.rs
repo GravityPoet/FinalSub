@@ -38,6 +38,8 @@ pub struct TaskRecipeSnapshot {
     pub target_language: String,
     pub translation_content_mode: String,
     pub output_format: String,
+    #[serde(default)]
+    pub output_formats: Vec<String>,
     pub output_name: String,
     pub strip_chinese_punctuation: bool,
     pub review_required: bool,
@@ -195,6 +197,14 @@ fn validate_snapshot(snapshot: &TaskRecipeSnapshot) -> Result<(), String> {
     ) {
         return Err("Task recipe uses an unsupported task type".into());
     }
+    if snapshot.output_formats.len() > 5
+        || snapshot
+            .output_formats
+            .iter()
+            .any(|format| !matches!(format.as_str(), "srt" | "vtt" | "ass" | "lrc" | "txt"))
+    {
+        return Err("Task recipe uses unsupported output formats".into());
+    }
     if !matches!(
         snapshot.translation_content_mode.as_str(),
         "target-only" | "source-and-target" | "target-and-source"
@@ -308,6 +318,7 @@ mod tests {
             target_language: "zh".into(),
             translation_content_mode: "source-and-target".into(),
             output_format: "srt".into(),
+            output_formats: vec!["srt".into()],
             output_name: String::new(),
             strip_chinese_punctuation: false,
             review_required: true,
