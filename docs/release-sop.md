@@ -1243,6 +1243,23 @@ lipo: unknown architecture specification flag: .../FinalSub.app/Contents/MacOS/f
 
 - 所有 macOS 架构验证统一改为 `lipo <file> -verify_arch <arch>`，每个架构单独调用；本次失败未创建 Tag、Draft 或公开资产。Quality 必须对修复后的新 SHA 重新全量通过后才能发布。
 
+### 2026-10-01：Git SSH 推送认证失效，CLI 登录仍可用
+
+现象：
+
+```text
+git@ssh.github.com: Permission denied (publickey).
+fatal: Could not read from remote repository.
+```
+
+原因与恢复：
+
+- SSH 推送失败时，`gh auth status` 仍确认目标 GitHub 账户处于有效登录状态。保留本地提交，通过 `gh auth setup-git` 配置已登录 CLI 的 credential helper，再使用单次 `git -c url."https://github.com/".insteadOf="git@github.com:" push origin main` 完成推送，不修改仓库 remote，也不读取或回显 token。
+
+发布脚本防复发：
+
+- 发布前必须验证实际 Git transport 可读写；当 SSH 不可用而 CLI 凭据已验证可用时，为整个发布进程设置 `GIT_CONFIG_COUNT=1`、`GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf`、`GIT_CONFIG_VALUE_0=git@github.com:`，使脚本中的 tag 探测与推送使用同一 HTTPS 凭据通道。恢复后核对本地 SHA、upstream SHA 与 GitHub API 的分支 SHA 一致。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：
