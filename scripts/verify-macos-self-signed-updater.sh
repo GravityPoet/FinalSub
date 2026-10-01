@@ -58,7 +58,8 @@ if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
   exit 1
 fi
 for binary in finalsubtauri ffmpeg whisper-cli; do
-  lipo "$APP_PATH/Contents/MacOS/$binary" -verify_arch arm64 x86_64
+  lipo -verify_arch arm64 "$APP_PATH/Contents/MacOS/$binary"
+  lipo -verify_arch x86_64 "$APP_PATH/Contents/MacOS/$binary"
 done
 
 printf 'updater_signature=verified\n'

@@ -93,7 +93,7 @@ if [ "$(plutil -extract CFBundleIdentifier raw "$SOURCE_APP/Contents/Info.plist"
   exit 1
 fi
 for arch in arm64 x86_64; do
-  lipo "$SOURCE_APP/Contents/MacOS/$BINARY_NAME" -verify_arch "$arch"
+  lipo -verify_arch "$arch" "$SOURCE_APP/Contents/MacOS/$BINARY_NAME"
 done
 
 rm -rf "$STAGE_APP" "$DISPLACED_APP"
@@ -137,7 +137,7 @@ if [ "$(plutil -extract CFBundleIdentifier raw "$DEST_APP/Contents/Info.plist")"
   exit 1
 fi
 for arch in arm64 x86_64; do
-  lipo "$DEST_APP/Contents/MacOS/$BINARY_NAME" -verify_arch "$arch"
+  lipo -verify_arch "$arch" "$DEST_APP/Contents/MacOS/$BINARY_NAME"
 done
 "$LSREGISTER" -f "$DEST_APP" >/dev/null 2>&1 || true
 
