@@ -83,6 +83,10 @@ if [ ! -d "$DEST_APP" ]; then
   echo "Missing installed app: $DEST_APP" >&2
   exit 1
 fi
+# macOS may expose the same temporary mount through both /var and /private/var.
+# Keep one physical spelling so the source bundle is not mistaken for a second
+# installed copy during the uniqueness checks below.
+SOURCE_APP="$(cd "$SOURCE_APP" && pwd -P)"
 
 mkdir -p "$TARGET_DIR" "$BACKUP_DIR"
 : > "$TARGET_DIR/.metadata_never_index"
@@ -176,7 +180,8 @@ physical_paths="$(
   done | while IFS= read -r -d '' app; do
     plist="$app/Contents/Info.plist"
     [ -f "$plist" ] || continue
-    if [ "$app" = "$SOURCE_APP" ]; then
+    app_real="$(cd "$app" 2>/dev/null && pwd -P || true)"
+    if [ "$app" = "$SOURCE_APP" ] || [ "$app_real" = "$SOURCE_APP" ]; then
       continue
     fi
     if [ "$(plutil -extract CFBundleIdentifier raw "$plist" 2>/dev/null || true)" = "$BUNDLE_ID" ]; then
@@ -213,8 +218,11 @@ fi
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   spotlight_matches="$(
-    mdfind 'kMDItemCFBundleIdentifier == "com.gravitypoet.finalsub"c' | sort | while IFS= read -r match; do
-      [ "$match" = "$SOURCE_APP" ] || printf '%s\n' "$match"
+  mdfind 'kMDItemCFBundleIdentifier == "com.gravitypoet.finalsub"c' | sort | while IFS= read -r match; do
+      match_real="$(cd "$match" 2>/dev/null && pwd -P || true)"
+      if [ "$match" != "$SOURCE_APP" ] && [ "$match_real" != "$SOURCE_APP" ]; then
+        printf '%s\n' "$match"
+      fi
     done
   )"
   if [ "$spotlight_matches" = "$DEST_APP" ]; then
@@ -236,7 +244,10 @@ remaining_launchservices_paths="$(
     let urls = (LSCopyApplicationURLsForBundleIdentifier(identifier, nil)?.takeRetainedValue() as? [URL]) ?? []
     for url in urls.sorted(by: { $0.path < $1.path }) { print(url.path) }
   ' | sort -u | while IFS= read -r registered_path; do
-    [ "$registered_path" = "$SOURCE_APP" ] || printf '%s\n' "$registered_path"
+    registered_real="$(cd "$registered_path" 2>/dev/null && pwd -P || true)"
+    if [ "$registered_path" != "$SOURCE_APP" ] && [ "$registered_real" != "$SOURCE_APP" ]; then
+      printf '%s\n' "$registered_path"
+    fi
   done
 )"
 if [ "$remaining_launchservices_paths" != "$DEST_APP" ]; then
