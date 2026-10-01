@@ -333,23 +333,15 @@ export default function ProofreadEditor({
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => handleExportClick(shouldShowTranslation ? 'ass' : 'srt')}
-              title={shouldShowTranslation ? t('proofread.editor.bilibiliAssHint') : undefined}
+              onClick={() => handleExportClick('srt')}
             >
               <Download className="w-4 h-4 text-text-secondary" />
               {t('proofread.editor.exportSubtitle')}
             </Button>
-            <div className={`absolute right-0 mt-1.5 hidden group-hover:block bg-surface border border-border-default rounded-xl shadow-lg z-50 overflow-hidden backdrop-blur-md ${shouldShowTranslation ? 'w-64' : 'w-32'}`}>
-              {shouldShowTranslation && (
-                <div className="flex items-start gap-1.5 border-b border-border-subtle px-3 py-2 text-[10px] leading-4 text-warning" role="status">
-                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-                  <span>{t('proofread.editor.bilibiliAssHint')}</span>
-                </div>
-              )}
+            <div className="absolute right-0 mt-1.5 hidden w-32 group-hover:block overflow-hidden rounded-xl border border-border-default bg-surface shadow-lg z-50 backdrop-blur-md">
               <button
                 type="button"
                 onClick={() => handleExportClick('srt')}
-                title={shouldShowTranslation ? t('proofread.editor.bilibiliAssHint') : undefined}
                 className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
               >
                 {t('proofread.editor.formatSrt')}

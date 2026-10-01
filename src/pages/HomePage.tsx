@@ -131,7 +131,9 @@ function defaultOutputFormatForTranslation(
   mode: TranslationContentMode,
   configuredFormat: string,
 ): string {
-  return mode !== "target-only" && configuredFormat !== "ass" ? "ass" : configuredFormat;
+  // B 站字幕入口只接受 SRT。双语内容已经由字幕序列化器写成真实换行，
+  // 因此不再把双语任务自动切到 ASS；仅把历史遗留的 ASS 默认值迁回 SRT。
+  return mode !== "target-only" && configuredFormat === "ass" ? "srt" : configuredFormat;
 }
 
 function cloneSourceSelection(snapshot: SourceSelectionSnapshot): SourceSelectionSnapshot {
@@ -309,8 +311,8 @@ export default function HomePage() {
     setTranslationContentMode(mode);
     rememberTranslationContentDefault(mode);
     if (mode !== "target-only") {
-      setOutputFormat("ass");
-      setSelectedOutputFormats((current) => current.includes("ass") ? current : ["ass", ...current]);
+      setOutputFormat("srt");
+      setSelectedOutputFormats((current) => current.includes("srt") ? current : ["srt", ...current]);
     }
   }, []);
 
@@ -1161,11 +1163,10 @@ export default function HomePage() {
         : "zh",
     );
     setTranslationContentMode(snapshot.translation_content_mode);
-    setOutputFormat(
-      outputFormats.some(({ value }) => value === snapshot.output_format)
-        ? snapshot.output_format
-        : "srt",
-    );
+    const normalizedRecipeFormat = outputFormats.some(({ value }) => value === snapshot.output_format)
+      ? defaultOutputFormatForTranslation(snapshot.translation_content_mode, snapshot.output_format)
+      : "srt";
+    setOutputFormat(normalizedRecipeFormat);
     setSelectedOutputFormats(snapshot.output_formats?.length ? snapshot.output_formats : [snapshot.output_format]);
     setOutputName(snapshot.output_name);
     setStripChinesePunctuation(snapshot.strip_chinese_punctuation);
@@ -1317,8 +1318,8 @@ export default function HomePage() {
   );
 
   return (
-    <div className="page-shell space-y-5">
-      <section className="flex flex-col gap-4 px-1 sm:flex-row sm:items-end sm:justify-between">
+    <div className="page-shell new-task-page space-y-5">
+      <section className="new-task-header flex flex-col gap-4 px-1 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0 max-w-3xl">
           <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-brand">
             <Sparkles size={13} />
@@ -1401,37 +1402,60 @@ export default function HomePage() {
         </div>
       )}
 
-      <div className="grid items-start gap-5 min-[1100px]:grid-cols-[minmax(0,1fr)_19rem]">
+      <div className="grid items-start gap-5 min-[1440px]:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-5">
-          <Card className="p-5 sm:p-6">
-            <section className="mb-5 rounded-[1.15rem] border border-brand/15 bg-brand/[0.045] p-4 sm:p-5" aria-labelledby="task-goal-title">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.goalLabel")}</p>
-                  <h3 id="task-goal-title" className="mt-1 text-base font-bold text-text-primary">{t("home.goalTitle")}</h3>
-                  <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.goalHint")}</p>
+          <Card className="new-task-flow-card p-5 sm:p-7">
+            <div className="task-stepper mb-6" aria-label={`${t("home.goalLabel")} → ${t("home.sourceStep")} → ${t("home.summaryStep")}`}>
+              <span className="task-step task-step-active"><span className="task-step-number">1</span><span>{t("home.goalLabel")}</span></span>
+              <span className="task-step-line" aria-hidden="true" />
+              <span className={`task-step ${selectedPath ? "task-step-active" : ""}`}><span className="task-step-number">2</span><span>{t("home.sourceStep")}</span></span>
+              <span className="task-step-line" aria-hidden="true" />
+              <span className={`task-step ${selectedPath ? "task-step-active" : ""}`}><span className="task-step-number">3</span><span>{t("home.summaryStep")}</span></span>
+            </div>
+
+            <section className="task-goal-section mb-7" aria-labelledby="task-goal-title">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <p className="step-label">{t("home.goalLabel")}</p>
+                  <h3 id="task-goal-title" className="mt-2 font-display text-[1.3rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.goalTitle")}</h3>
                 </div>
-                <div className="w-full shrink-0 sm:w-[15rem]">
-                  <label htmlFor="task-goal" className="sr-only">{t("home.goalLabel")}</label>
-                  <Select id="task-goal" data-testid="task-goal" value={taskType} onChange={(event) => handleTaskTypeChange(event.target.value)}>
-                    {taskTypes.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}
-                  </Select>
-                </div>
+                <span className="text-xs text-text-tertiary">{t("home.goalHint")}</span>
               </div>
-              {activeTaskType && <p className="mt-3 border-t border-brand/10 pt-3 text-xs leading-5 text-text-secondary">{t(activeTaskType.descKey)}</p>}
+              <div className="task-goal-grid" role="radiogroup" aria-labelledby="task-goal-title">
+                {taskTypes.map(({ value, labelKey, descKey, icon: Icon }) => {
+                  const selected = taskType === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => handleTaskTypeChange(value)}
+                      className={`task-goal-option ${selected ? "task-goal-option-active" : ""}`}
+                    >
+                      <span className="task-goal-icon"><Icon size={17} /></span>
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block text-sm font-semibold text-text-primary">{t(labelKey)}</span>
+                        <span className="mt-1 block text-xs leading-5 text-text-tertiary">{t(descKey)}</span>
+                      </span>
+                      {selected && <CheckCircle size={16} className="task-goal-check" aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+              </div>
+              <label htmlFor="task-goal" className="sr-only">{t("home.goalLabel")}</label>
+              <Select id="task-goal" data-testid="task-goal" value={taskType} onChange={(event) => handleTaskTypeChange(event.target.value)} className="sr-only !h-px !w-px">
+                {taskTypes.map((item) => <option key={item.value} value={item.value}>{t(item.labelKey)}</option>)}
+              </Select>
             </section>
 
             <div className="min-w-0 space-y-4">
               <div className="min-w-0">
-                <div className="mb-5">
+                <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
                   <span className="step-label">{t("home.sourceStep")}</span>
-                  <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">
-                    {t("home.importTitle")}
-                  </h3>
-                  <p className="mt-1.5 text-sm leading-6 text-text-secondary">
-                    {t("home.importHint")}
-                  </p>
+                  <span className="text-xs text-text-tertiary">{t("home.importHint")}</span>
                 </div>
+                <h3 className="mb-3 font-display text-[1.3rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.importTitle")}</h3>
 
                 <div
                   id="task-source-input"
@@ -1457,7 +1481,9 @@ export default function HomePage() {
                       <p className={`${selectedPath ? "truncate" : "leading-6"} font-semibold text-text-primary`}>
                         {selectedPaths.length > 1
                           ? t("home.batchSelected", { count: selectedPaths.length })
-                          : (selectedPath ? fileNameFromPath(selectedPath) : `${t("home.noFileSelected")} · ${selectedFileKind}`)}
+                          : (selectedPath
+                            ? fileNameFromPath(selectedPath)
+                            : (displayedInputKind === "subtitle" ? t("home.selectSubtitleFile") : t("home.selectMediaFile")))}
                       </p>
                       <p className={`mt-1 font-mono text-xs leading-5 text-text-tertiary ${selectedPath ? "truncate" : ""}`} title={selectedPath || undefined}>
                         {selectedPath || t("home.sourcePathHint")}
@@ -1691,9 +1717,9 @@ export default function HomePage() {
                     </section>
                   )}
 
-                  {!selectedPath && (
-                    <p className="mt-4 border-t border-dashed border-border-subtle pt-4 text-center text-xs text-text-tertiary">
-                      {dragActive ? t("home.dropNow") : t("home.dragPasteHint")}
+                  {!selectedPath && dragActive && (
+                    <p className="mt-4 border-t border-dashed border-border-subtle pt-4 text-center text-xs font-semibold text-brand">
+                      {t("home.dropNow")}
                     </p>
                   )}
                 </div>
@@ -1955,16 +1981,15 @@ export default function HomePage() {
             <div className="fixed inset-x-4 bottom-24 z-40 sm:hidden">{compactActionBar}</div>,
             document.body,
           )}
-          <div className="sticky bottom-3 z-30 hidden sm:block min-[1100px]:!hidden">{compactActionBar}</div>
+          <div className="sticky bottom-3 z-30 hidden sm:block min-[1440px]:!hidden">{compactActionBar}</div>
 
-          <Card className="overflow-hidden p-0">
+          <Card className="new-task-output-card overflow-hidden p-0">
             <details id="task-output-options" className="group/output">
-              <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-6 sm:py-5">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand/12 text-brand"><Film size={18} /></span>
+              <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:px-6 sm:py-4.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand"><Film size={17} /></span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.advancedOptions")}</span>
-                  <span className="mt-1 block text-base font-bold text-text-primary">{t("home.outputTitle")}</span>
-                  <span className="mt-0.5 block truncate text-xs text-text-tertiary">{t("home.outputHint")}</span>
+                  <span className="mt-0.5 block text-[0.95rem] font-bold text-text-primary">{t("home.outputTitle")}</span>
                 </span>
                 <span className="hidden rounded-full border border-border-subtle bg-surface-overlay px-2.5 py-1 text-xs font-semibold text-text-tertiary sm:block">{deliveryTargets}</span>
                 <ChevronDown size={17} className="shrink-0 text-text-tertiary transition-transform duration-200 group-open/output:rotate-180" aria-hidden="true" />
@@ -1972,8 +1997,8 @@ export default function HomePage() {
               <div className="border-t border-border-subtle p-5 sm:p-6">
                 <div className="mb-5">
                   <span className="step-label">{t("home.workflowStep")}</span>
-                  <h3 className="mt-3 font-display text-[1.42rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.taskConfig")}</h3>
-                  <p className="mt-1.5 text-sm leading-6 text-text-secondary">{t("home.workflowDesc")}</p>
+                  <h3 className="mt-2 font-display text-[1.28rem] font-bold tracking-[-0.025em] text-text-primary">{t("home.taskConfig")}</h3>
+                  <p className="mt-1 text-xs leading-5 text-text-secondary">{t("home.workflowDesc")}</p>
                 </div>
 
             <div className="space-y-5">
@@ -2358,25 +2383,6 @@ export default function HomePage() {
                     ))}
                   </div>
                   <p className="mt-1.5 text-xs leading-5 text-text-tertiary">{t("home.outputFormatsHint")}</p>
-                  {bilingualTranslation && (
-                    <p
-                      className={`mt-2 flex items-start gap-1.5 text-xs leading-5 ${outputFormat === "ass" ? "text-success" : "text-warning"}`}
-                      role="status"
-                    >
-                      <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                      <span>{outputFormat === "ass" ? t("home.bilibiliAssReady") : t("home.bilibiliAssHint")}</span>
-                      {outputFormat !== "ass" && (
-                        <button
-                          type="button"
-                          onClick={() => setOutputFormat("ass")}
-                          className="shrink-0 font-semibold underline decoration-warning/45 underline-offset-2 transition hover:text-warning/80"
-                          data-testid="use-ass-for-bilibili"
-                        >
-                          {t("home.useAssForBilibili")}
-                        </button>
-                      )}
-                    </p>
-                  )}
                 </div>
                 <div>
                   <label htmlFor="task-output-name" className="mb-2 block text-sm font-medium text-text-secondary">{t("home.outputName")}</label>
@@ -2454,7 +2460,7 @@ export default function HomePage() {
           </Card>
         </div>
 
-        <aside className="hidden space-y-5 min-[1100px]:sticky min-[1100px]:top-0 min-[1100px]:block">
+        <aside className="hidden space-y-5 min-[1440px]:sticky min-[1440px]:top-0 min-[1440px]:block">
           <Card className="relative overflow-hidden p-5">
             <span className="pipeline-glow" />
             <div className="relative z-10">

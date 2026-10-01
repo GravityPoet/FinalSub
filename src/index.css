@@ -302,6 +302,118 @@ select {
     animation: page-enter var(--duration-slow) var(--ease-out) both;
   }
 
+  .new-task-page {
+    max-width: 92rem;
+  }
+
+  .new-task-header {
+    padding-block: 0.35rem 0.15rem;
+  }
+
+  .new-task-flow-card {
+    background: color-mix(in srgb, var(--content-panel) 94%, white);
+  }
+
+  .task-stepper {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: var(--color-text-tertiary);
+    font-size: 0.72rem;
+    font-weight: 650;
+  }
+
+  .task-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    white-space: nowrap;
+  }
+
+  .task-step-number {
+    display: inline-flex;
+    width: 1.45rem;
+    height: 1.45rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-border-default);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
+    color: var(--color-text-tertiary);
+    font-size: 0.68rem;
+    font-weight: 720;
+  }
+
+  .task-step-active {
+    color: var(--color-text-primary);
+  }
+
+  .task-step-active .task-step-number {
+    border-color: color-mix(in srgb, var(--color-brand) 34%, var(--color-border-default));
+    background: color-mix(in srgb, var(--color-brand) 12%, var(--color-surface-raised));
+    color: var(--color-brand-text);
+  }
+
+  .task-step-line {
+    width: min(4.25rem, 12vw);
+    height: 1px;
+    background: var(--color-border-default);
+  }
+
+  .task-goal-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .task-goal-option {
+    display: flex;
+    min-height: 4.9rem;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.85rem;
+    text-align: left;
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.95rem;
+    background: color-mix(in srgb, var(--color-surface-overlay) 56%, transparent);
+    transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out), box-shadow var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+  }
+
+  .task-goal-option:hover {
+    border-color: color-mix(in srgb, var(--color-brand) 34%, var(--color-border-default));
+    background: color-mix(in srgb, var(--color-brand) 4%, var(--color-surface-overlay));
+    transform: translateY(-1px);
+  }
+
+  .task-goal-option:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-brand) 72%, white);
+    outline-offset: 2px;
+  }
+
+  .task-goal-option-active {
+    border-color: color-mix(in srgb, var(--color-brand) 48%, var(--glass-border));
+    background: color-mix(in srgb, var(--color-brand) 10%, var(--color-surface-raised));
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--color-brand) 11%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  }
+
+  .task-goal-icon {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.7rem;
+    background: color-mix(in srgb, var(--color-brand) 10%, var(--color-surface-raised));
+    color: var(--color-brand);
+  }
+
+  .task-goal-check {
+    flex: 0 0 auto;
+    margin-top: 0.15rem;
+    color: var(--color-brand);
+  }
+
   .liquid-shell {
     background: var(--glass-fill);
     border: 1px solid var(--glass-border);
@@ -607,6 +719,20 @@ select {
 }
 
 @media (max-width: 639px) {
+  .task-stepper {
+    gap: 0.45rem;
+    font-size: 0.68rem;
+  }
+
+  .task-step-line {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .task-goal-grid {
+    grid-template-columns: 1fr;
+  }
+
   .content-scroll {
     border: 0;
     background: color-mix(in srgb, var(--content-canvas) 84%, transparent);
