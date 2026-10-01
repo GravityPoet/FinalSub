@@ -1342,13 +1342,22 @@ export default function HomePage() {
             {workspaceStatusLabel}
           </span>
           {bootstrapState === "error" && (
-            <button
-              type="button"
-              onClick={() => void loadWorkspace()}
-              className="status-chip text-xs font-semibold text-brand transition hover:border-brand/35 hover:text-brand"
-            >
-              {t("home.retrySetup")}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => navigate("/models")}
+                className="status-chip text-xs font-semibold text-brand transition hover:border-brand/35 hover:text-brand"
+              >
+                {t("home.openModelManage")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadWorkspace()}
+                className="status-chip text-xs font-semibold text-brand transition hover:border-brand/35 hover:text-brand"
+              >
+                {t("home.retrySetup")}
+              </button>
+            </>
           )}
         </div>
       </section>
@@ -2006,8 +2015,7 @@ export default function HomePage() {
                 <legend className="sr-only">{t("home.deliveryTargets")}</legend>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.1em] text-brand">{t("home.deliveryTargets")}</p>
-                    <h4 className="mt-1 text-base font-bold text-text-primary">{t("home.chooseDeliverables")}</h4>
+                    <h4 className="text-base font-bold text-text-primary">{t("home.chooseDeliverables")}</h4>
                     <p className="mt-1 text-xs leading-5 text-text-tertiary">{t("home.deliveryTargetsHint")}</p>
                   </div>
                   <span className="rounded-full border border-brand/15 bg-surface-overlay px-3 py-1.5 text-xs font-semibold text-brand">
