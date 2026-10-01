@@ -148,6 +148,7 @@ export default function TasksPage() {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeLogTaskId, setActiveLogTaskId] = useState<string | null>(null);
   const [logsText, setLogsText] = useState("");
   const [copied, setCopied] = useState(false);
@@ -196,9 +197,13 @@ export default function TasksPage() {
 
   const refresh = () => {
     setLoading(true);
+    setLoadError(null);
     listTasks()
       .then((nextTasks) => setTasks(sortTasks(nextTasks)))
-      .catch(console.error)
+      .catch((error) => {
+        setLoadError(errorMessage(error));
+        console.error("Failed to load tasks", error);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -450,9 +455,19 @@ export default function TasksPage() {
         </div>
       )}
 
+      {loadError && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/20 bg-danger/10 px-3.5 py-3 text-sm text-danger" role="alert">
+          <span>{t("tasks.loadFailed")}: {loadError}</span>
+          <Button type="button" onClick={refresh} variant="secondary" size="sm" disabled={loading}>
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            {t("tasks.retryLoad")}
+          </Button>
+        </div>
+      )}
+
       {loading && tasks.length === 0 ? (
         <div className="text-text-tertiary py-16 text-center text-sm">{t("tasks.loading")}</div>
-      ) : tasks.length === 0 ? (
+      ) : tasks.length === 0 && !loadError ? (
         <Card className="py-16 px-6 text-center border-dashed">
           <p className="text-lg font-semibold text-text-primary">{t("tasks.noTasks")}</p>
           <p className="mt-2 text-sm leading-6 text-text-tertiary">
