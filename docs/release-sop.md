@@ -1260,6 +1260,24 @@ fatal: Could not read from remote repository.
 
 - 发布前必须验证实际 Git transport 可读写；当 SSH 不可用而 CLI 凭据已验证可用时，为整个发布进程设置 `GIT_CONFIG_COUNT=1`、`GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf`、`GIT_CONFIG_VALUE_0=git@github.com:`，使脚本中的 tag 探测与推送使用同一 HTTPS 凭据通道。恢复后核对本地 SHA、upstream SHA 与 GitHub API 的分支 SHA 一致。
 
+### 2026-10-01：DMG 挂载路径别名导致本机安装器误报重复 App
+
+现象：
+
+```text
+FinalSub still has duplicate app bundles on disk:
+/Applications/FinalSub.app
+/var/folders/.../finalsub-release-install.XXXXXX/FinalSub.app
+```
+
+原因：
+
+- macOS 对临时 DMG 挂载点可能同时返回 `/var/folders/...` 与 `/private/var/folders/...` 两种路径拼写；安装器原先用字符串比较排除输入 App，因而把同一只读输入误判为第二份安装。
+
+处理与防复发：
+
+- 安装器先将 `SOURCE_APP` 解析为 `pwd -P` 的物理路径，并在磁盘、Spotlight 与 LaunchServices 唯一性检查中同时比较输入路径和物理规范路径。DMG 安装验收必须使用真实挂载点，并覆盖 `/var` 与 `/private/var` 别名场景。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：
