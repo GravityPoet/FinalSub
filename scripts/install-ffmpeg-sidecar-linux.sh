@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-ARCHIVE_NAME="ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz"
-ARCHIVE_SHA256="24c50bdf392cc3273f89b28f2ffad43d07037f90460be7ebd1a089f9bc16c0b4"
-ARCHIVE_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-14-13-16/${ARCHIVE_NAME}"
+ARCHIVE_NAME="ffmpeg-N-127021-ge0c94b2d1c-linux64-gpl.tar.xz"
+ARCHIVE_SHA256="3a2a94e704752287833604501a79505c2319ad1d8b2f5577c63f2b1b7a6f2b66"
+ARCHIVE_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/${ARCHIVE_NAME}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

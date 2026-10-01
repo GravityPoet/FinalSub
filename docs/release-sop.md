@@ -1154,6 +1154,59 @@ write_stdin failed: Unknown process id 12760
 
 - 发布观察会话中断后禁止直接重跑创建/上传命令；先审计远端目标，按“缺哪一步补哪一步”恢复，避免重复 Tag、资产或 Release。
 
+### 2026-10-01：Quality Linux sidecar 固定 FFmpeg 资产失效
+
+现象：
+
+```text
+curl: (22) The requested URL returned error: 404
+scripts/install-ffmpeg-sidecar-linux.sh
+```
+
+原因：
+
+- `ARCHIVE_URL` 仍指向已被 BtbN 清理的 `autobuild-2026-08-14-13-16` 资产；业务代码、Rust 测试和 macOS 构建均未执行到。
+
+处理：
+
+- 改用官方仍存在的 `autobuild-2026-09-30-13-08/ffmpeg-N-127021-ge0c94b2d1c-linux64-gpl.tar.xz`，并从同一 Release 的 `checksums.sha256` 固定 `3a2a94e704752287833604501a79505c2319ad1d8b2f5577c63f2b1b7a6f2b66`。
+
+防复发：
+
+- Release 前先用官方 Release API 检查固定资产存在，再核对官方 checksum；Quality 的 Linux sidecar 下载失败时不得创建 Tag 或 Draft Release。
+
+### 2026-10-01：zsh 发布探测未引用带问号的 API 路径
+
+现象：
+
+```text
+zsh:1: no matches found: repos/BtbN/FFmpeg-Builds/releases?per_page=20
+```
+
+原因：
+
+- zsh 将未加引号的 `?` 当作通配符，命令在请求 GitHub API 前就被 shell 拦截。
+
+处理与防复发：
+
+- 对包含 query string 的 `gh api` 路径始终使用单引号包裹，并在发布脚本/探测命令中保持该写法。
+
+### 2026-10-01：jq 资产查询把数组与字符串直接相加
+
+现象：
+
+```text
+cannot add: array (...) and string (...)
+```
+
+原因：
+
+- 查询表达式先构造了双元素数组，再直接加上 `join()` 返回的字符串，类型不匹配。
+
+处理与防复发：
+
+- 将资产列表先 `join()` 成字符串，再整体放入数组输出；Release 资产探测必须先让 jq 自身通过，再使用结果做碰撞或存在性判断。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：
