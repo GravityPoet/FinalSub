@@ -66,8 +66,8 @@ No Python setup is required for the bundled Native engines. On Apple Silicon,
 Parakeet MLX V2 can optionally reuse an existing local cache through `uv`.
 
 1. **Download:** Grab the macOS Universal DMG/App from our [Releases Page](https://github.com/GravityPoet/FinalSub/releases).
-2. **Import:** Drag and drop your video or audio file.
-3. **Run:** Select your model (Local Whisper or Cloud API) and click **"Start Task"**.
+2. **Import:** Drag in your video, audio, or existing subtitle file.
+3. **Run:** Choose the deliverable, confirm the language and subtitle content, then click **"Start processing"**.
 
 That's it. Watch your high-quality, translated subtitles render in real-time.
 
