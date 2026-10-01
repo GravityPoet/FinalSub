@@ -1217,15 +1217,31 @@ lipo: -verify_arch requires exactly one input file
 
 原因：
 
-- 自签名 DMG 和内部 App 的签名、Universal 架构前置检查均已通过，但 `verify-macos-self-signed-package.sh` 仍使用旧版 `lipo <file> -verify_arch arm64 x86_64` 写法；当前 Xcode 要求每次 `-verify_arch` 只接受一个架构，并把输入文件放在参数末尾。
+- 自签名 DMG 和内部 App 的签名、Universal 架构前置检查均已通过，但验收脚本在不同 Xcode 上混用了 `lipo -verify_arch <arch> <file>` 与旧版参数顺序；macOS 15 Intel runner 的 Xcode 16.4 会把文件路径误判为架构参数。
 
 处理：
 
-- 更新自签名包、updater、Intel 验证和本机安装器中的所有架构检查为 `lipo -verify_arch <arch> <file>`，每个架构单独执行；本次失败未创建 Tag、Draft 或公开资产。
+- 更新自签名包、updater、Intel 验证、本机安装器和 Universal sidecar 准备脚本中的所有架构检查为跨版本稳定的 `lipo <file> -verify_arch <arch>`，每个架构单独执行；本次失败未创建 Tag、Draft 或公开资产。
 
 防复发：
 
-- macOS 发布验收脚本统一使用拆分后的新 Xcode 语法；任何 `lipo` 改动必须在真实 DMG/App 验收前先运行脚本语法和双架构检查。
+- macOS 发布验收脚本统一使用输入文件在前、单架构检查的写法；任何 `lipo` 改动必须在真实 DMG/App 验收前先运行脚本语法和双架构检查，并在 macOS Intel 与 Apple silicon runner 上各跑一次。
+
+### 2026-10-01：Intel Quality runner 的 lipo 参数顺序不兼容
+
+现象：
+
+```text
+lipo: unknown architecture specification flag: .../FinalSub.app/Contents/MacOS/finalsubtauri
+```
+
+原因：
+
+- `macos-15-intel` 使用的 Xcode 16.4 不接受本机 Xcode 27 所能接受的 `lipo -verify_arch <arch> <file>` 顺序；同一候选提交的构建、签名和前置架构检查均已通过，失败点只在 Intel 验收脚本。
+
+处理与防复发：
+
+- 所有 macOS 架构验证统一改为 `lipo <file> -verify_arch <arch>`，每个架构单独调用；本次失败未创建 Tag、Draft 或公开资产。Quality 必须对修复后的新 SHA 重新全量通过后才能发布。
 
 ### 追加模板
 
