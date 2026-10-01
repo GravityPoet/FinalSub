@@ -1207,6 +1207,26 @@ cannot add: array (...) and string (...)
 
 - 将资产列表先 `join()` 成字符串，再整体放入数组输出；Release 资产探测必须先让 jq 自身通过，再使用结果做碰撞或存在性判断。
 
+### 2026-10-01：自签名包验收沿用旧 lipo 参数顺序
+
+现象：
+
+```text
+lipo: -verify_arch requires exactly one input file
+```
+
+原因：
+
+- 自签名 DMG 和内部 App 的签名、Universal 架构前置检查均已通过，但 `verify-macos-self-signed-package.sh` 仍使用旧版 `lipo <file> -verify_arch arm64 x86_64` 写法；当前 Xcode 要求每次 `-verify_arch` 只接受一个架构，并把输入文件放在参数末尾。
+
+处理：
+
+- 更新自签名包、updater、Intel 验证和本机安装器中的所有架构检查为 `lipo -verify_arch <arch> <file>`，每个架构单独执行；本次失败未创建 Tag、Draft 或公开资产。
+
+防复发：
+
+- macOS 发布验收脚本统一使用拆分后的新 Xcode 语法；任何 `lipo` 改动必须在真实 DMG/App 验收前先运行脚本语法和双架构检查。
+
 ### 追加模板
 
 后续遇到新问题，按这个格式追加：

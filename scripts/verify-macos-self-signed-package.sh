@@ -160,7 +160,8 @@ fi
 
 for binary in finalsubtauri ffmpeg whisper-cli; do
   binary_path="$APP_PATH/Contents/MacOS/$binary"
-  lipo "$binary_path" -verify_arch arm64 x86_64
+  lipo -verify_arch arm64 "$binary_path"
+  lipo -verify_arch x86_64 "$binary_path"
 done
 if [ "$(xcrun vtool -show-build "$APP_PATH/Contents/MacOS/finalsubtauri" | awk '/minos/{print $2}' | sort -u)" != "12.0" ]; then
   echo "FinalSub minimum macOS deployment target changed." >&2

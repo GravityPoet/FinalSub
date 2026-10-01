@@ -93,7 +93,7 @@ for binary_path in "${MAIN_BINARY}" "${FFMPEG_BINARY}" "${WHISPER_BINARY}"; do
     echo "Missing executable in Intel app: ${binary_path}" >&2
     exit 1
   fi
-  lipo "${binary_path}" -verify_arch x86_64
+  lipo -verify_arch x86_64 "${binary_path}"
 done
 
 if [ "$(xcrun vtool -show-build "${MAIN_BINARY}" | awk '/minos/{print $2; exit}')" != "12.0" ]; then
