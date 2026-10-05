@@ -47,6 +47,9 @@ pub struct ProgressUpdate {
 pub type ProgressSink = tokio::sync::mpsc::Sender<ProgressUpdate>;
 
 #[async_trait]
+// async-trait 0.1.89 adds must_use to its boxed Future methods. Rust 1.99
+// reports that generated attribute as redundant; callers still must use Future.
+#[allow(clippy::double_must_use)]
 pub trait AsrEngine: Send + Sync {
     fn id(&self) -> &'static str;
     fn capabilities(&self) -> AsrCapabilities;
