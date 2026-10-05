@@ -395,7 +395,7 @@ Only respond with the translated/improved text, nothing else.`;
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-6 py-2 bg-surface/50 backdrop-blur-md border-b border-border-subtle flex-shrink-0 relative">
+    <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 sm:px-6 bg-surface/50 backdrop-blur-md border-b border-border-subtle flex-shrink-0 relative">
       {/* 撤销/重做 */}
       <button
         onClick={onUndo}

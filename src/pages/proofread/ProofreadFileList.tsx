@@ -268,8 +268,8 @@ export default function ProofreadFileList({
   return (
     <div className="space-y-6">
       {/* 顶部工具栏 */}
-      <Card className="flex items-center justify-between p-4 bg-surface">
-        <div className="flex items-center gap-4">
+      <Card className="flex flex-wrap items-center justify-between gap-3 p-4 bg-surface">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           {/* 任务名称编辑 */}
           {editingName ? (
             <div className="flex items-center gap-2">
@@ -314,7 +314,7 @@ export default function ProofreadFileList({
           )}
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <Button
             onClick={handleAppendFiles}
             variant="secondary"
@@ -351,8 +351,8 @@ export default function ProofreadFileList({
       </Card>
 
       {/* 文件列表表格 */}
-      <Card className="p-0 overflow-hidden shadow-md">
-        <table className="w-full text-left border-collapse">
+      <Card className="max-w-full overflow-x-auto p-0 shadow-md">
+        <table className="w-full min-w-[640px] text-left border-collapse">
           <thead>
             <tr className="bg-surface-raised border-b border-border-subtle text-xs font-semibold text-text-secondary uppercase tracking-wider">
               <th className="py-4.5 px-6 w-32">{t('proofread.list.thStatus')}</th>

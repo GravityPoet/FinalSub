@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useWorkspaceCloseFlush } from "../lib/workspaceDraft";
+import { lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { AudioLines, Bot, ChevronDown, Edit3, FileVideo2, Film, Languages, ListTodo, ScrollText, Settings, PanelLeftClose, PanelLeftOpen, UserRound, Wrench } from "lucide-react";
@@ -6,6 +7,14 @@ import { useI18n } from "../lib/i18n";
 import { ActivityCenter, CommandPalette, WorkspaceOverlays } from "./WorkspaceOverlays";
 import { Card } from "./ui/Card";
 import brandIcon from "../../src-tauri/icons/icon.png";
+
+const ProofreadPage = lazy(() => import("../pages/proofread/ProofreadPage"));
+const SubtitleMergePage = lazy(() => import("../pages/SubtitleMergePage"));
+function RetainedWorkspace({ active, children }: { active: boolean; children: ReactNode }) {
+  const [visited, setVisited] = useState(active);
+  useEffect(() => { if (active) setVisited(true); }, [active]);
+  return active || visited ? <div hidden={!active} className="h-full">{children}</div> : null;
+}
 
 const navItems = [
   { to: "/", key: "nav.tasks", icon: FileVideo2 },
@@ -30,6 +39,7 @@ const Logo = () => <img className="brand-logo" src={brandIcon} alt="" aria-hidde
 
 export default function Layout() {
   const location = useLocation();
+  useWorkspaceCloseFlush();
   const { t } = useI18n();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("finalsub:nav-collapsed") === "true");
   const [toolsOpen, setToolsOpen] = useState(() => toolNavItems.some(({ to }) => location.pathname === to));
@@ -119,7 +129,7 @@ export default function Layout() {
         <div className={`absolute right-4 top-[1.1rem] z-[55] sm:static sm:block sm:border-b sm:border-border-subtle ${collapsed ? "sm:px-0 sm:py-2.5" : "sm:p-3"}`}>
           <ActivityCenter compact={collapsed} />
         </div>
-        <nav className={`hidden gap-1 overflow-x-hidden p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sidebar-nav-collapsed overflow-y-auto sm:px-0 sm:py-3" : "overflow-hidden sm:p-3"}`}>
+        <nav className={`hidden gap-1 overflow-x-hidden p-2.5 sm:block sm:min-h-0 sm:flex-1 sm:space-y-1.5 ${collapsed ? "sidebar-nav-collapsed overflow-y-auto sm:px-0 sm:py-3" : "overflow-y-auto sm:p-3"}`}>
           {collapsed ? navItems.map((item) => renderNavLink(item)) : (
             <>
               {primaryNavItems.map((item) => renderNavLink(item))}
@@ -147,6 +157,8 @@ export default function Layout() {
       </aside>
       <main className="content-scroll relative z-10 min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 pb-24 pt-5 sm:rounded-[1.75rem] sm:px-7 sm:py-6 lg:px-9">
         <div className="content-stage">
+          <RetainedWorkspace active={location.pathname === "/proofread"}><ProofreadPage /></RetainedWorkspace>
+          <RetainedWorkspace active={location.pathname === "/subtitle-merge"}><SubtitleMergePage /></RetainedWorkspace>
           <Outlet />
         </div>
       </main>

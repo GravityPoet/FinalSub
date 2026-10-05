@@ -12,9 +12,7 @@ const TranslationPage = lazy(() => import("./pages/TranslationPage"));
 const DubbingPage = lazy(() => import("./pages/DubbingPage"));
 const VoiceProfilesPage = lazy(() => import("./pages/VoiceProfilesPage"));
 const LogsPage = lazy(() => import("./pages/LogsPage"));
-const SubtitleMergePage = lazy(() => import("./pages/SubtitleMergePage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
-const ProofreadPage = lazy(() => import("./pages/proofread/ProofreadPage"));
 
 function App() {
   return (
@@ -31,8 +29,8 @@ function App() {
                 <Route path="/voices" element={<VoiceProfilesPage />} />
                 <Route path="/logs" element={<LogsPage />} />
                 <Route path="/dubbing" element={<DubbingPage />} />
-                <Route path="/proofread" element={<ProofreadPage />} />
-                <Route path="/subtitle-merge" element={<SubtitleMergePage />} />
+                <Route path="/proofread" element={null} />
+                <Route path="/subtitle-merge" element={null} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Routes>

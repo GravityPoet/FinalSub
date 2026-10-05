@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useWorkspaceDraft } from "../lib/workspaceDraft";
+import { setComposeActivity } from "../lib/composeActivity";
+import { useState, useEffect, useCallback, type SetStateAction } from "react";
 import { Film, FolderOpen, AlertCircle, CheckCircle, Loader2, AudioLines, X, Cpu, Zap } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import {
@@ -15,6 +17,8 @@ import {
   generateSubtitlePreview,
   listen,
   openDialog,
+  openPath,
+  revealItemInDir,
   saveDialog,
   type VideoEncoderInfo,
   type VideoEncoderMode,
@@ -29,39 +33,67 @@ import { Input, Select } from "../components/ui/Input";
 import { Progress } from "../components/ui/Progress";
 import { SubtitleStylePresetManager } from "../components/SubtitleStylePresetManager";
 
+interface ComposeDraft {
+  videoPath: string; subtitlePath: string; outputPath: string; activePresetId: string | null;
+  fontName: string; fontSize: number; fontColor: string; outlineColor: string; outlineWidth: number;
+  shadow: number; backgroundColor: string; opaqueBackground: boolean; alignment: number; marginV: number;
+  crf: number; encodingPreset: string; encoderMode: VideoEncoderMode; softSubtitle: boolean;
+  audioPath: string; audioMode: ComposeAudioMode; subtitleLanguage: string; subtitleTitle: string;
+  audioLanguage: string; audioTitle: string; result: string; interrupted: boolean;
+}
+function validComposeDraft(value: unknown): value is ComposeDraft {
+  if (!value || typeof value !== 'object') return false;
+  const draft = value as Record<string, unknown>;
+  return ['videoPath', 'subtitlePath', 'outputPath', 'fontName', 'fontColor', 'outlineColor', 'backgroundColor', 'encodingPreset', 'audioPath', 'subtitleLanguage', 'subtitleTitle', 'audioLanguage', 'audioTitle', 'result'].every((key) => typeof draft[key] === 'string')
+    && ['fontSize', 'outlineWidth', 'shadow', 'alignment', 'marginV', 'crf'].every((key) => typeof draft[key] === 'number' && Number.isFinite(draft[key]))
+    && typeof draft.softSubtitle === 'boolean' && typeof draft.opaqueBackground === 'boolean' && typeof draft.interrupted === 'boolean'
+    && (draft.activePresetId === null || typeof draft.activePresetId === 'string')
+    && ['auto', 'cpu', 'hardware'].includes(String(draft.encoderMode)) && ['keep', 'replace', 'mix', 'add-track'].includes(String(draft.audioMode));
+}
+
 export default function SubtitleMergePage() {
   const { t } = useI18n();
-  const [videoPath, setVideoPath] = useState("");
-  const [subtitlePath, setSubtitlePath] = useState("");
-  const [outputPath, setOutputPath] = useState("");
-  const [activePresetId, setActivePresetId] = useState<string | null>("builtin:classic");
-  const [fontName, setFontName] = useState(DEFAULT_SUBTITLE_STYLE.font_name);
-  const [fontSize, setFontSize] = useState(DEFAULT_SUBTITLE_STYLE.font_size);
-  const [fontColor, setFontColor] = useState(DEFAULT_SUBTITLE_STYLE.font_color);
-  const [outlineColor, setOutlineColor] = useState(DEFAULT_SUBTITLE_STYLE.outline_color);
-  const [outlineWidth, setOutlineWidth] = useState(DEFAULT_SUBTITLE_STYLE.outline_width);
-  const [shadow, setShadow] = useState(DEFAULT_SUBTITLE_STYLE.shadow);
-  const [backgroundColor, setBackgroundColor] = useState(DEFAULT_SUBTITLE_STYLE.background_color);
-  const [opaqueBackground, setOpaqueBackground] = useState(DEFAULT_SUBTITLE_STYLE.opaque_background);
-  const [alignment, setAlignment] = useState(DEFAULT_SUBTITLE_STYLE.alignment);
-  const [marginV, setMarginV] = useState(DEFAULT_SUBTITLE_STYLE.margin_v);
-  const [crf, setCrf] = useState(20);
-  const [encodingPreset, setEncodingPreset] = useState("medium");
-  const [encoderMode, setEncoderMode] = useState<VideoEncoderMode>("auto");
+  const initial: ComposeDraft = { videoPath: '', subtitlePath: '', outputPath: '', activePresetId: 'builtin:classic',
+    fontName: DEFAULT_SUBTITLE_STYLE.font_name, fontSize: DEFAULT_SUBTITLE_STYLE.font_size,
+    fontColor: DEFAULT_SUBTITLE_STYLE.font_color, outlineColor: DEFAULT_SUBTITLE_STYLE.outline_color, outlineWidth: DEFAULT_SUBTITLE_STYLE.outline_width,
+    shadow: DEFAULT_SUBTITLE_STYLE.shadow, backgroundColor: DEFAULT_SUBTITLE_STYLE.background_color,
+    opaqueBackground: DEFAULT_SUBTITLE_STYLE.opaque_background, alignment: DEFAULT_SUBTITLE_STYLE.alignment, marginV: DEFAULT_SUBTITLE_STYLE.margin_v,
+    crf: 20, encodingPreset: 'medium', encoderMode: 'auto', softSubtitle: false, audioPath: '', audioMode: 'replace',
+    subtitleLanguage: 'und', subtitleTitle: t('merge.subtitleTrackDefaultTitle'), audioLanguage: 'und', audioTitle: t('merge.audioTrackDefaultTitle'), result: '', interrupted: false };
+  const { draft, setDraft, ready, error: draftError, retry } = useWorkspaceDraft('compose', initial, validComposeDraft);
+  const update = useCallback(<K extends keyof ComposeDraft>(key: K, value: SetStateAction<ComposeDraft[K]>) => setDraft((previous) => ({ ...previous, [key]: typeof value === 'function' ? (value as (old: ComposeDraft[K]) => ComposeDraft[K])(previous[key]) : value })), [setDraft]);
+  const { videoPath, subtitlePath, outputPath, activePresetId, fontName, fontSize, fontColor, outlineColor, outlineWidth, shadow, backgroundColor, opaqueBackground, alignment, marginV, crf, encodingPreset, encoderMode, softSubtitle, audioPath, audioMode, subtitleLanguage, subtitleTitle, audioLanguage, audioTitle, result } = draft;
+  const setVideoPath = (value: SetStateAction<ComposeDraft['videoPath']>) => update('videoPath', value);
+  const setSubtitlePath = (value: SetStateAction<ComposeDraft['subtitlePath']>) => update('subtitlePath', value);
+  const setOutputPath = (value: SetStateAction<ComposeDraft['outputPath']>) => update('outputPath', value);
+  const setActivePresetId = (value: SetStateAction<ComposeDraft['activePresetId']>) => update('activePresetId', value);
+  const setFontName = (value: SetStateAction<ComposeDraft['fontName']>) => update('fontName', value);
+  const setFontSize = (value: SetStateAction<ComposeDraft['fontSize']>) => update('fontSize', value);
+  const setFontColor = (value: SetStateAction<ComposeDraft['fontColor']>) => update('fontColor', value);
+  const setOutlineColor = (value: SetStateAction<ComposeDraft['outlineColor']>) => update('outlineColor', value);
+  const setOutlineWidth = (value: SetStateAction<ComposeDraft['outlineWidth']>) => update('outlineWidth', value);
+  const setShadow = (value: SetStateAction<ComposeDraft['shadow']>) => update('shadow', value);
+  const setBackgroundColor = (value: SetStateAction<ComposeDraft['backgroundColor']>) => update('backgroundColor', value);
+  const setOpaqueBackground = (value: SetStateAction<ComposeDraft['opaqueBackground']>) => update('opaqueBackground', value);
+  const setAlignment = (value: SetStateAction<ComposeDraft['alignment']>) => update('alignment', value);
+  const setMarginV = (value: SetStateAction<ComposeDraft['marginV']>) => update('marginV', value);
+  const setCrf = (value: SetStateAction<ComposeDraft['crf']>) => update('crf', value);
+  const setEncodingPreset = (value: SetStateAction<ComposeDraft['encodingPreset']>) => update('encodingPreset', value);
+  const setEncoderMode = (value: SetStateAction<ComposeDraft['encoderMode']>) => update('encoderMode', value);
+  const setSoftSubtitle = (value: SetStateAction<ComposeDraft['softSubtitle']>) => update('softSubtitle', value);
+  const setAudioPath = (value: SetStateAction<ComposeDraft['audioPath']>) => update('audioPath', value);
+  const setAudioMode = (value: SetStateAction<ComposeDraft['audioMode']>) => update('audioMode', value);
+  const setSubtitleLanguage = (value: SetStateAction<ComposeDraft['subtitleLanguage']>) => update('subtitleLanguage', value);
+  const setSubtitleTitle = (value: SetStateAction<ComposeDraft['subtitleTitle']>) => update('subtitleTitle', value);
+  const setAudioLanguage = (value: SetStateAction<ComposeDraft['audioLanguage']>) => update('audioLanguage', value);
+  const setAudioTitle = (value: SetStateAction<ComposeDraft['audioTitle']>) => update('audioTitle', value);
+  const setResult = (value: SetStateAction<ComposeDraft['result']>) => update('result', value);
   const [encoderInfo, setEncoderInfo] = useState<VideoEncoderInfo | null>(null);
   const [loadingEncoderInfo, setLoadingEncoderInfo] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [result, setResult] = useState("");
-  const [softSubtitle, setSoftSubtitle] = useState(false);
-  const [audioPath, setAudioPath] = useState("");
-  const [audioMode, setAudioMode] = useState<ComposeAudioMode>("replace");
-  const [subtitleLanguage, setSubtitleLanguage] = useState("und");
-  const [subtitleTitle, setSubtitleTitle] = useState(() => t("merge.subtitleTrackDefaultTitle"));
-  const [audioLanguage, setAudioLanguage] = useState("und");
-  const [audioTitle, setAudioTitle] = useState(() => t("merge.audioTrackDefaultTitle"));
 
   // Progress state
   const [progress, setProgress] = useState<number | null>(null);
@@ -87,6 +119,14 @@ export default function SubtitleMergePage() {
   const prerequisiteHint = missingInputs.length > 0
     ? t("merge.pleaseSelect", { items: missingInputs.join(t("merge.listSeparator")) })
     : "";
+
+  useEffect(() => {
+    if (ready && draft.interrupted) setNotice(t('merge.interrupted'));
+  }, [ready]);
+  useEffect(() => {
+    if (ready) setDraft((previous) => previous.interrupted === processing ? previous : { ...previous, interrupted: processing });
+    setComposeActivity(processing ? { progress, outputPath } : null);
+  }, [processing, progress, outputPath, ready, setDraft]);
 
   // Fetch video metadata when videoPath changes
   useEffect(() => {
@@ -332,9 +372,11 @@ export default function SubtitleMergePage() {
     }
   };
 
+  if (!ready) return <div className="space-y-3 p-4"><h2>{t('merge.title')}</h2>{draftError ? <div role="alert"><p>{t('workspace.loadFailed')}</p><p className="break-words text-sm">{draftError}</p><Button onClick={retry}>{t('common.retry')}</Button></div> : <p>{t('home.loading')}</p>}</div>;
   return (
     <div className="page-shell space-y-7">
-      <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("merge.title")}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("merge.title")}</h2><Button disabled={processing || previewing} onClick={() => { setDraft(initial); setNotice(''); setError(''); }}>{t('merge.restart')}</Button></div>
+      {draftError && <p role="alert" className="rounded-xl bg-danger/10 p-3 text-sm text-danger">{t('workspace.saveFailed')} {draftError}</p>}
 
       <div className="space-y-6">
         {/* 选择文件 */}
@@ -776,7 +818,7 @@ export default function SubtitleMergePage() {
           {result && (
             <div className="mb-4 flex items-start gap-2 rounded-xl border border-success/20 bg-success/10 px-3.5 py-3 text-sm leading-6 text-success">
               <CheckCircle className="mt-0.5 shrink-0" size={14} />
-              <span>{t("merge.burnCompleted").replace("{result}", result)}</span>
+              <div className="min-w-0 flex-1"><p className="break-all">{t("merge.burnCompleted").replace("{result}", result)}</p><div className="mt-3 flex flex-wrap gap-2"><Button size="sm" onClick={() => { void openPath(result).catch((failure) => setError(String(failure))); }}>{t('merge.openOutput')}</Button><Button size="sm" onClick={() => { void revealItemInDir(result).catch((failure) => setError(String(failure))); }}>{t('merge.revealOutput')}</Button></div></div>
             </div>
           )}
 

@@ -180,6 +180,63 @@ async fn delete_tasks_by_ids(
     Ok(unique_task_ids)
 }
 
+const PARAKEET_RUNTIME_CONTROL: &str = "parakeet-mlx-runtime";
+#[tauri::command]
+pub async fn get_parakeet_runtime(
+    state: State<'_, AppState>,
+) -> Result<crate::core::asr::parakeet::ParakeetRuntimeInfo, String> {
+    if state
+        .model_controls
+        .read()
+        .await
+        .contains_key(PARAKEET_RUNTIME_CONTROL)
+    {
+        return Ok(crate::core::asr::parakeet::ParakeetRuntimeInfo {
+            kind: "mlx",
+            ready: false,
+            preparing: true,
+        });
+    }
+    let models_dir = parakeet_models_dir(&state.app_config_dir)?;
+    Ok(crate::core::asr::parakeet::runtime_info(&models_dir).await)
+}
+#[tauri::command]
+pub async fn prepare_parakeet_runtime(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::core::asr::parakeet::ParakeetRuntimeInfo, String> {
+    let (sender, receiver) = tokio::sync::watch::channel(false);
+    {
+        let mut controls = state.model_controls.write().await;
+        if controls.contains_key(PARAKEET_RUNTIME_CONTROL) {
+            return Err("运行环境正在准备".into());
+        }
+        controls.insert(PARAKEET_RUNTIME_CONTROL.into(), sender);
+    }
+    let _lease = state.power_save.acquire("parakeet-runtime");
+    let result = crate::core::asr::parakeet::prepare_runtime(receiver).await;
+    state
+        .model_controls
+        .write()
+        .await
+        .remove(PARAKEET_RUNTIME_CONTROL);
+    let _ = app.emit("parakeet-runtime-updated", ());
+    result.map_err(|error| error.to_string())?;
+    get_parakeet_runtime(state).await
+}
+#[tauri::command]
+pub async fn cancel_parakeet_runtime(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(sender) = state
+        .model_controls
+        .read()
+        .await
+        .get(PARAKEET_RUNTIME_CONTROL)
+    {
+        let _ = sender.send(true);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_asr_models(state: State<'_, AppState>) -> Result<Vec<AsrModelInfo>, String> {
     scan_models_for_state(&state)
@@ -3493,6 +3550,26 @@ pub fn save_settings_cmd(
     Ok(new_settings)
 }
 
+#[derive(serde::Serialize)]
+pub struct SettingsRecovery {
+    settings: Settings,
+    backup_path: Option<String>,
+}
+#[tauri::command]
+pub fn recover_settings(state: State<'_, AppState>) -> Result<SettingsRecovery, String> {
+    let (current, backup) =
+        settings::recover_settings(&state.app_config_dir).map_err(|error| error.to_string())?;
+    update_state_semaphore(&state, current.max_concurrent_tasks);
+    state
+        .power_save
+        .set_enabled(current.prevent_sleep_during_tasks);
+    crate::set_telemetry_enabled(current.enable_telemetry);
+    Ok(SettingsRecovery {
+        settings: current,
+        backup_path: backup.map(|path| path.to_string_lossy().into_owned()),
+    })
+}
+
 #[tauri::command]
 pub fn reset_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let new_settings =
@@ -4197,6 +4274,108 @@ pub(crate) fn resolve_sidecar(_app: &tauri::AppHandle, name: &str) -> Result<Pat
             ))
         }
     }
+}
+
+fn workspace_file_paths(key: &str, envelope: &serde_json::Value) -> Vec<PathBuf> {
+    let value = &envelope["value"];
+    let mut paths = Vec::new();
+    if key == "proofread" {
+        if let Some(files) = value["pendingFiles"].as_array() {
+            for file in files {
+                for field in ["selectedSource", "selectedTarget", "videoPath"] {
+                    if let Some(path) = file[field].as_str() {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+            }
+        }
+    } else if key == "compose" {
+        for field in ["videoPath", "subtitlePath", "audioPath"] {
+            if let Some(path) = value[field].as_str().filter(|path| !path.is_empty()) {
+                paths.push(PathBuf::from(path));
+            }
+        }
+    }
+    paths
+}
+
+#[tauri::command]
+pub async fn load_workspace_draft(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<Option<String>, String> {
+    let root = state.app_config_dir.clone();
+    let data = tokio::task::spawn_blocking(move || crate::core::workspace::load(&root, &key))
+        .await
+        .map_err(|error| error.to_string())??;
+    if let Some(raw) = &data {
+        let envelope: serde_json::Value =
+            serde_json::from_str(raw).map_err(|error| error.to_string())?;
+        if let Some(paths) = envelope["authorized_paths"].as_array() {
+            for path in paths.iter().filter_map(|path| path.as_str()) {
+                // These exact files were in the picker scope when the native draft
+                // was saved. Do not restore a parent directory or recursive scope.
+                if let Ok(path) = std::fs::canonicalize(path) {
+                    app.fs_scope()
+                        .allow_file(path)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        }
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn save_workspace_draft(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+    data: String,
+) -> Result<(), String> {
+    if data.len() > 100 * 1024 * 1024 {
+        return Err("Workspace draft exceeds 100 MB".into());
+    }
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(&data).map_err(|error| error.to_string())?;
+    let allowed: Vec<String> = workspace_file_paths(&key, &envelope)
+        .into_iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .filter(|path| app.fs_scope().is_allowed(path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let object = envelope.as_object_mut().ok_or("Invalid workspace draft")?;
+    object.insert("authorized_paths".into(), serde_json::json!(allowed));
+    let data = serde_json::to_string(&envelope).map_err(|error| error.to_string())?;
+    let root = state.app_config_dir.clone();
+    tokio::task::spawn_blocking(move || crate::core::workspace::save(&root, &key, &data))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_proofread_files(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mut edits: Vec<subtitle_review::OriginalSubtitleEdit>,
+) -> Result<Vec<String>, String> {
+    if edits.is_empty() || edits.len() > 2 {
+        return Err("Invalid subtitle writeback count".into());
+    }
+    let _lock = state.proofread_io.lock().await;
+    for edit in &mut edits {
+        let path = std::fs::canonicalize(&edit.path).map_err(|error| error.to_string())?;
+        validate_subtitle_input_file(&path)?;
+        if !app.fs_scope().is_allowed(&path) {
+            return Err("Subtitle file has not been authorized by the file picker".into());
+        }
+        edit.path = path.to_string_lossy().into_owned();
+    }
+    let root = state.app_config_dir.clone();
+    tokio::task::spawn_blocking(move || subtitle_review::write_originals(&root, &edits))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
