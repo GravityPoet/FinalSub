@@ -49,7 +49,7 @@ import {
   listSubtitleStylePresets,
   openDialog,
   saveDialog,
-  openPath,
+  openUrl,
   saveTaskRecipe,
   type AppUpdateEvent,
   type AsrModelInfo,
@@ -972,7 +972,7 @@ export default function HomePage() {
     setUpdateError("");
     if (!updateInfo.install_supported) {
       try {
-        await openPath(updateInfo.url);
+        await openUrl(updateInfo.url);
       } catch (openError) {
         setUpdateError(openError instanceof Error ? openError.message : String(openError));
       }

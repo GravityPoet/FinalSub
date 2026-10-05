@@ -16,7 +16,7 @@ import {
   checkForUpdate,
   downloadAndInstallUpdate,
   openDialog,
-  openPath,
+  openUrl,
   saveDialog,
   type AppUpdateEvent,
   type Settings,
@@ -348,7 +348,7 @@ export default function SettingsPage() {
     if (!availableUpdate) return;
     if (!availableUpdate.install_supported) {
       try {
-        await openPath(availableUpdate.url);
+        await openUrl(availableUpdate.url);
       } catch (err) {
         showMsg("err", `${t("settings.updateOpenFailed")}${err}`);
       }
