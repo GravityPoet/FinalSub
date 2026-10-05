@@ -27,3 +27,5 @@
 完整安装态验收在 `/Applications/FinalSub.app` 执行，门禁为 `install-app-after-major-change --auto --repo <repo> --strict`；新鲜结果记录在本次交付聊天与门禁日志。使用临时合成素材，不修改用户既有项目、配置和模型。云端配音/克隆真实账号、Windows/Linux/Intel 实机及长任务稳定性不由本轮本机修复代替验收。
 
 CI 编译器差异：Linux stable 已使用 Rust/Clippy 1.99，`async_trait 0.1.89` 自动给 boxed Future 方法添加 `must_use`，触发重复属性 lint。兼容范围仅为 `AsrEngine` 接口，保留全局 `-D warnings`；本机 1.94 的验证不能替代该远端检查。
+
+安装态成品打开：`opener:default` 在 opener 2.5.4 中仅含网址打开与目录定位，不含本地 `open_path`。现在仅为字幕、文本与成品音视频扩展名增加默认应用打开权限，保留凭据目录拒绝规则，不授予任意程序选择或可执行文件打开。手动更新页 URL 使用 `openUrl`。该行为必须在安装版点击验证，浏览器 mock 不能证明原生 ACL 通过。
