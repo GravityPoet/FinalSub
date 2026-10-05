@@ -28,7 +28,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run dev -- --host 127.0.0.1
 
 说明：Vite 浏览器预览启用开发 mock，可用于 UI 排布、路由、表单状态和响应式 QA；它不能替代 Tauri native API 验收，文件权限、系统 dialog、事件、sidecar、签名和系统打开文件必须用 Tauri smoke 或打包产物验证。
 
-### 截取 7 个主导航页面
+### 检查 10 个主要页面
 
 | 路由 | 截图命令（Playwright） |
 |------|----------------------|
@@ -38,6 +38,9 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run dev -- --host 127.0.0.1
 | `/translation` | `page.goto('http://127.0.0.1:5173/translation')` |
 | `/proofread` | `page.goto('http://127.0.0.1:5173/proofread')` |
 | `/subtitle-merge` | `page.goto('http://127.0.0.1:5173/subtitle-merge')` |
+| `/dubbing` | `page.goto('http://127.0.0.1:5173/dubbing')` |
+| `/voices` | `page.goto('http://127.0.0.1:5173/voices')` |
+| `/logs` | `page.goto('http://127.0.0.1:5173/logs')` |
 | `/settings` | `page.goto('http://127.0.0.1:5173/settings')` |
 
 ### 响应式验收
@@ -50,7 +53,7 @@ cd /Users/moonlitpoet/Tools/AI-tools/FinalSub && npm run dev -- --host 127.0.0.1
 ### 验收标准
 
 - [ ] 中文界面，无英文骨架文案
-- [ ] 7 个主导航入口全部可见
+- [ ] 10 个主要页面均可从导航进入（工具分组展开后）
 - [ ] 1280px 无横向溢出
 - [ ] 390px 无横向滚动
 - [ ] 当前路由高亮正确
@@ -165,3 +168,17 @@ test -z "$(find src-tauri/target -type d -path '*/bundle/macos/FinalSub.app' -pr
 ```
 
 发布打包、覆盖安装、平台产物深度验收和历史踩坑记录见 [Release SOP](release-sop.md)。
+
+## 2026-10-05 审查修复回归（1.0.14）
+
+- `npm run test:subtitle-document`：验证 ASS 原文档字节保持、样式/标签编辑与拆分、VTT 元数据、LRC offset。
+- 校对导入临时字幕，编辑当前行后立即撤销/重做；经侧栏、快捷键、刷新、退出/重开后核对草稿。保存原文件时验证恢复副本与外部修改冲突，双文件第二项写入失败必须回滚第一项。
+- 390px 窗口加载校对列表与编辑器，主按钮不裁切；1200×700 展开工具后设置和日志可滚动到达。
+- 键盘操作导出格式与简繁菜单（方向键、Enter、Escape）；音色弹窗打开后焦点进入、Tab 循环、Escape 关闭并恢复焦点。
+- 快速命令筛选视频后仍显示和执行 ⌘9；不显示 ⌘10。
+- 浏览器故障夹具：`/settings?qa=settings-load-error` 显示可重试错误；点击侧栏设置清除夹具参数，再点击重试恢复表单；也可验证“恢复默认并保留旧配置”。后端回归必须确认损坏配置副本完整、健康配置不被重置。该夹具仅在开发 mock 中生效。
+- 视频合成选择素材、模式和输出，切页/刷新后恢复；运行中从任务动态回到进度/取消，成功后打开成品和所在目录。安装版必须实跑并解码 MP4/MKV。
+- Parakeet 分别核对模型权重和运行环境；准备环境后用固定 WAV 在离线缓存运行。标准源、清华镜像和阿里云镜像的离线缓存均可复用；网络错误不要求修改用户代理/DNS 设置。
+- 无视频/暂停时显示当前行，实际播放且命中该行时显示播放中；离开校对页暂停视频。
+
+开发 mock 的健康质量报告只用于界面回归，规则正确性仍由 Rust 测试和安装版 IPC 验证。

@@ -12,6 +12,8 @@ import { useI18n } from '../../../lib/i18n';
 interface SubtitleListProps {
   mergedSubtitles: Subtitle[];
   currentSubtitleIndex: number;
+  isPlaying: boolean;
+  playbackTime: number;
   shouldShowTranslation: boolean;
   handleSubtitleClick: (index: number) => void;
   handleSubtitleChange: (
@@ -31,7 +33,8 @@ interface SubtitleListProps {
 const SubtitleList: React.FC<SubtitleListProps> = ({
   mergedSubtitles,
   currentSubtitleIndex,
-  shouldShowTranslation,
+  isPlaying,
+  playbackTime,  shouldShowTranslation,
   handleSubtitleClick,
   handleSubtitleChange,
   isTranslationFailed,
@@ -139,7 +142,7 @@ const SubtitleList: React.FC<SubtitleListProps> = ({
                   </span>
                   {isCurrent && (
                     <span className="text-[9px] bg-brand-subtle text-brand-text border border-border-default px-1 py-0.2 rounded ml-1">
-                      {t('proofread.list.playing')}
+                      {t(isPlaying && playbackTime >= (subtitle.startTimeInSeconds ?? 0) && playbackTime < (subtitle.endTimeInSeconds ?? 0) ? 'proofread.list.playing' : 'proofread.list.current')}
                     </span>
                   )}
                   {isFailed && (

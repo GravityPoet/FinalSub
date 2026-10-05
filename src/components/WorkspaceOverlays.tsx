@@ -1,3 +1,4 @@
+import { useComposeActivity } from "../lib/composeActivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -65,6 +66,7 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
       if ((event.metaKey || event.ctrlKey) && /^[1-9]$/.test(event.key)) {
         event.preventDefault();
         navigate(commands[Number(event.key) - 1].path);
+        setOpen(false);
       }
       if (event.key === "Escape") setOpen(false);
     };
@@ -116,8 +118,9 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
               </button>
             </div>
             <div className="max-h-[calc(84vh-4.75rem)] overscroll-contain overflow-y-auto p-2 sm:max-h-[55vh] sm:p-2.5">
-              {visibleCommands.map((command, index) => {
+              {visibleCommands.map((command) => {
                 const Icon = command.icon;
+                const shortcut = commands.findIndex((item) => item.path === command.path) + 1;
                 return (
                   <button
                     key={command.path}
@@ -133,7 +136,7 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
                       <span className="block truncate whitespace-nowrap text-sm font-semibold text-text-primary">{t(command.label)}</span>
                       <span className="mt-0.5 block truncate text-xs text-text-tertiary">{t(command.hint)}</span>
                     </span>
-                    <kbd className="whitespace-nowrap font-mono text-[10px] text-text-tertiary">⌘{index + 1}</kbd>
+                    {shortcut <= 9 && <kbd className="whitespace-nowrap font-mono text-[10px] text-text-tertiary">⌘{shortcut}</kbd>}
                   </button>
                 );
               })}
@@ -148,6 +151,7 @@ function CommandPalette({ compact = false }: { compact?: boolean }) {
 }
 
 export function ActivityCenter({ compact = false }: { compact?: boolean }) {
+  const composeActivity = useComposeActivity();
   const { t } = useI18n();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -191,7 +195,7 @@ export function ActivityCenter({ compact = false }: { compact?: boolean }) {
 
   const activeCount = tasks.filter(
     (task) => task.status === "running" || task.status === "pending" || task.status === "review",
-  ).length;
+  ).length + (composeActivity ? 1 : 0);
   const recent = [...tasks]
     .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
     .slice(0, 6);
@@ -235,6 +239,7 @@ export function ActivityCenter({ compact = false }: { compact?: boolean }) {
             <button type="button" onClick={() => setOpen(false)} className="rounded-lg p-1 text-text-tertiary hover:bg-surface-overlay" aria-label={t("common.close")}><X size={15} /></button>
           </div>
           <div className="space-y-1">
+            {composeActivity && <button type="button" onClick={() => { navigate('/subtitle-merge'); setOpen(false); }} className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left hover:bg-surface-overlay"><Film size={16} className="text-brand" /><span className="min-w-0 flex-1"><span className="block text-xs font-semibold">{t('merge.title')}</span><span className="block truncate text-xs text-text-tertiary">{t('merge.processing')}</span></span><span className="font-mono text-xs">{Math.round(composeActivity.progress ?? 0)}%</span></button>}
             {recent.map((task) => (
               <button
                 key={task.id}
@@ -250,7 +255,7 @@ export function ActivityCenter({ compact = false }: { compact?: boolean }) {
                 <span className="font-mono text-[10px] text-text-tertiary">{Math.round(task.progress * 100)}%</span>
               </button>
             ))}
-            {recent.length === 0 && <p className="px-2 py-7 text-center text-xs text-text-tertiary">{t("activity.empty")}</p>}
+            {recent.length === 0 && !composeActivity && <p className="px-2 py-7 text-center text-xs text-text-tertiary">{t("activity.empty")}</p>}
           </div>
           <Button type="button" onClick={() => { navigate("/tasks"); setOpen(false); }} variant="secondary" size="sm" className="mt-2 w-full">
             {t("activity.openQueue")}

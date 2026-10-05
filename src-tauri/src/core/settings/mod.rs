@@ -507,6 +507,29 @@ pub fn reset_settings(app_config_dir: &Path) -> Result<Settings> {
     Ok(settings)
 }
 
+/// Recover only an unreadable configuration; a healthy configuration is never
+/// reset by this error-state action. The unreadable original is kept verbatim.
+pub fn recover_settings(app_config_dir: &Path) -> Result<(Settings, Option<PathBuf>)> {
+    if let Ok(current) = load_settings(app_config_dir) {
+        return Ok((current, None));
+    }
+    let source = settings_path(app_config_dir);
+    let backup = if source.exists() {
+        let backup =
+            app_config_dir.join(format!("settings.unreadable-{}.json", uuid::Uuid::new_v4()));
+        std::fs::copy(&source, &backup)?;
+        if std::fs::read(&source)? != std::fs::read(&backup)? {
+            return Err(crate::error::FinalSubError::Validation(
+                "Configuration backup verification failed".into(),
+            ));
+        }
+        Some(backup)
+    } else {
+        None
+    };
+    Ok((reset_settings(app_config_dir)?, backup))
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigExport {
     pub version: u32,
@@ -1300,5 +1323,28 @@ mod tests {
             "correct horse battery staple",
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn recovery_preserves_bad_original_and_does_not_reset_healthy_settings() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(settings_path(root.path()), "{broken configuration").unwrap();
+        let (_, backup) = recover_settings(root.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(backup.unwrap()).unwrap(),
+            "{broken configuration"
+        );
+        let mut current = load_settings(root.path()).unwrap();
+        current.max_concurrent_tasks = 3;
+        save_settings(root.path(), &current).unwrap();
+        let original = std::fs::read(settings_path(root.path())).unwrap();
+        let (restored, backup) = recover_settings(root.path()).unwrap();
+        assert_eq!(restored.max_concurrent_tasks, 3);
+        assert!(backup.is_none());
+        assert_eq!(std::fs::read(settings_path(root.path())).unwrap(), original);
     }
 }

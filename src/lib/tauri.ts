@@ -107,6 +107,24 @@ export async function saveDialog(options?: SaveDialogOptions): Promise<string | 
   throw new Error("Tauri dialog runtime is unavailable for save dialog");
 }
 
+export type WorkspaceKey = "proofread" | "compose";
+export async function recoverSettings(): Promise<{ settings: Settings; backup_path: string | null }> {
+  if (!isTauriRuntime() && import.meta.env.DEV) return { settings: currentMockSettings(), backup_path: null };
+  return invoke("recover_settings");
+}
+export async function loadWorkspaceDraft(key: WorkspaceKey): Promise<string | null> {
+  if (!isTauriRuntime() && import.meta.env.DEV) return localStorage.getItem(`finalsub:workspace:${key}`);
+  return invoke("load_workspace_draft", { key });
+}
+export async function saveWorkspaceDraft(key: WorkspaceKey, data: string): Promise<void> {
+  if (!isTauriRuntime() && import.meta.env.DEV) { localStorage.setItem(`finalsub:workspace:${key}`, data); return; }
+  return invoke("save_workspace_draft", { key, data });
+}
+export async function saveProofreadFiles(edits: Array<{ path: string; content: string; expected_content: string }>): Promise<string[]> {
+  if (!isTauriRuntime() && import.meta.env.DEV) return [];
+  return invoke("save_proofread_files", { edits });
+}
+
 export async function readTextFilePath(path: string): Promise<string> {
   if (isTauriRuntime()) {
     return tauriReadTextFile(path);
@@ -269,6 +287,17 @@ function mockOpenDialogPath(options?: OpenDialogOptions): string {
 
   return "/Users/example/Downloads/finalsub-demo.file";
 }
+
+export interface ParakeetRuntimeInfo { kind: "mlx" | "native"; ready: boolean; preparing: boolean }
+export async function getParakeetRuntime(): Promise<ParakeetRuntimeInfo> {
+  if (!isTauriRuntime() && import.meta.env.DEV) return { kind: "mlx", ready: true, preparing: false };
+  return invoke("get_parakeet_runtime");
+}
+export async function prepareParakeetRuntime(): Promise<ParakeetRuntimeInfo> {
+  if (!isTauriRuntime() && import.meta.env.DEV) return { kind: "mlx", ready: true, preparing: false };
+  return invoke("prepare_parakeet_runtime");
+}
+export async function cancelParakeetRuntime(): Promise<void> { return invoke("cancel_parakeet_runtime"); }
 
 export interface AppInfo {
   version: string;
@@ -2280,9 +2309,14 @@ function savedSettingsFromArgs(args: InvokeArgs): Settings {
 
 function mockInvokeResult(command: string, args?: InvokeArgs): unknown {
   switch (command) {
+    case "inspect_subtitle_quality":
+      // Healthy fixture: rule correctness is covered by the native quality tests.
+      return { cue_count: Array.isArray(args?.cues) ? args.cues.length : 0, affected_cues: 0, issues: [] } satisfies QualityReport;
     case "get_app_info":
-      return { name: "FinalSub", version: "1.0.12" } satisfies AppInfo;
+      return { name: "FinalSub", version: "1.0.14" } satisfies AppInfo;
     case "get_settings":
+      // Fault fixture for documented browser QA; native IPC never uses mocks.
+      if (new URLSearchParams(window.location.search).get("qa") === "settings-load-error") throw new Error("Synthetic settings read failure");
       return currentMockSettings();
     case "get_storage_layout":
       return mockStorageLayout();

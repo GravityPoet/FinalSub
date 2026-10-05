@@ -1,3 +1,4 @@
+import type { SubtitleDraft } from './useStandaloneSubtitles';
 /**
  * 字幕校对相关的工具函数
  * 封装公共的字幕检测、创建 PendingFile 等逻辑
@@ -25,6 +26,7 @@ function generateUUID(): string {
 
 // 待校对文件项
 export interface PendingFile {
+  draft?: SubtitleDraft;
   originTaskId?: string;
   originTaskVersion?: string;
   reviewSourceContent?: string;

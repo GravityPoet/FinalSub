@@ -44,16 +44,12 @@ export const useVideoPlayer = (
     setDuration(e.currentTarget.duration);
   };
 
+  const handlePlaybackState = (event: React.SyntheticEvent<HTMLVideoElement>) => setIsPlaying(!event.currentTarget.paused && !event.currentTarget.ended);
   const togglePlay = () => {
-    if (playerRef.current) {
-      if (isPlaying) {
-        playerRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        playerRef.current.play().catch(console.error);
-        setIsPlaying(true);
-      }
-    }
+    const player = playerRef.current;
+    if (!player) return;
+    if (!player.paused) player.pause();
+    else void player.play().catch(console.error);
   };
 
   // 点击字幕跳转到对应时间点
@@ -122,6 +118,7 @@ export const useVideoPlayer = (
     handleLoadedMetadata,
     handleRateChange,
     togglePlay,
+    handlePlaybackState,
     handleSubtitleClick,
     goToNextSubtitle,
     goToPreviousSubtitle,

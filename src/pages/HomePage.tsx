@@ -1,3 +1,4 @@
+import { getParakeetRuntime, listen, type ParakeetRuntimeInfo } from "../lib/tauri";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -221,6 +222,7 @@ function sourceInputKindForTaskType(taskType: string): SourceInputKind {
 export default function HomePage() {
   const navigate = useNavigate();
   const [ffmpegVersion, setFfmpegVersion] = useState<string>("detecting");
+  const [parakeetRuntime, setParakeetRuntime] = useState<ParakeetRuntimeInfo | null>(null);
   const [models, setModels] = useState<AsrModelInfo[]>([]);
   const [ttsModels, setTtsModels] = useState<TtsModelInfo[]>([]);
   const [ttsProviders, setTtsProviders] = useState<TtsProviderProfile[]>([]);
@@ -694,9 +696,10 @@ export default function HomePage() {
   const inputTypeMismatchHint = inputTypeMismatch
     ? (taskType === "translate-only" ? t("home.inputMismatchSubtitle") : t("home.inputMismatchMedia"))
     : "";
-  const modelReady = !taskNeedsAsr || Boolean(
+  const runtimeReady = engineId !== 'parakeet-mlx' || Boolean(parakeetRuntime?.ready);
+  const modelReady = !taskNeedsAsr || (runtimeReady && Boolean(
     activeModel && (engineId === "custom-command" || activeModel.status === "downloaded")
-  );
+  ));
   const canStartTask = bootstrapState === "ready"
     && (!taskNeedsAsr || sourceLanguageSupported)
     && modelReady
@@ -715,6 +718,14 @@ export default function HomePage() {
     }
   }, [sourceLanguageSupported]);
 
+  useEffect(() => {
+    if (engineId !== 'parakeet-mlx' || !taskNeedsAsr) return;
+    let active = true;
+    const refresh = () => { void getParakeetRuntime().then((runtime) => { if (active) setParakeetRuntime(runtime); }).catch(() => { if (active) setParakeetRuntime({ kind: 'mlx', ready: false, preparing: false }); }); };
+    refresh();
+    const stop = listen('parakeet-runtime-updated', refresh);
+    return () => { active = false; void stop.then((unlisten) => unlisten()); };
+  }, [engineId, taskNeedsAsr]);
   const selectedFileKind = (selectedInputKind ?? sourceInputKindForTaskType(taskType)) === "subtitle"
     ? t("home.subFile")
     : t("home.mediaFile");
@@ -723,7 +734,7 @@ export default function HomePage() {
   const missingFileHint = !selectedPath
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
     : "";
-  const modelPrerequisiteHint = selectedPath && !modelReady ? t("home.prereqModel") : "";
+  const modelPrerequisiteHint = selectedPath && !modelReady ? t(engineId === 'parakeet-mlx' && activeModel?.status === 'downloaded' ? (parakeetRuntime ? 'models.runtimeNeedsSetup' : 'models.runtimeChecking') : 'home.prereqModel') : '';
   const pipelinePrerequisiteHint = !composeSourceReady
     // 元数据探测失败时给出真实原因，而不是误导性的“需要有画面的源”。
     ? (mediaMetadataError

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDialogFocus } from "../lib/useDialogFocus";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -369,9 +370,12 @@ function CreateVoiceDialog({
   );
   const previewUrl = prepared ? fileAssetUrl(prepared.audio_path) : "";
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, () => { void close(); }, dialogRef);
+
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 backdrop-blur-xl" role="dialog" aria-modal="true" aria-labelledby="create-voice-title" onMouseDown={(event) => { if (event.target === event.currentTarget) void close(); }}>
+    <div ref={dialogRef} tabIndex={-1} className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 backdrop-blur-xl" role="dialog" aria-modal="true" aria-labelledby="create-voice-title" onMouseDown={(event) => { if (event.target === event.currentTarget) void close(); }}>
       <Card className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden border border-border-default bg-surface-raised p-0 shadow-2xl">
         <div className="z-10 flex shrink-0 items-start justify-between gap-4 border-b border-border-subtle bg-surface-raised px-5 py-4">
           <div>
@@ -660,9 +664,12 @@ function CloudVoiceRecoveryDialog({
     }
   };
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, () => { if (!busy) onClose(); }, dialogRef);
+
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[72] flex items-center justify-center bg-black/50 p-3 backdrop-blur-xl" role="dialog" aria-modal="true" aria-labelledby="recover-cloud-voice-title" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <div ref={dialogRef} tabIndex={-1} className="fixed inset-0 z-[72] flex items-center justify-center bg-black/50 p-3 backdrop-blur-xl" role="dialog" aria-modal="true" aria-labelledby="recover-cloud-voice-title" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
       <Card className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden border border-border-default bg-surface-raised p-0 shadow-2xl">
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border-subtle px-5 py-4">
           <div>
@@ -742,6 +749,11 @@ export default function VoiceProfilesPage() {
   const [deleting, setDeleting] = useState<VoiceProfile | null>(null);
   const [deleteRemote, setDeleteRemote] = useState(false);
   const [busyId, setBusyId] = useState("");
+
+  const renameDialogRef = useRef<HTMLDivElement>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(Boolean(renaming), () => { if (!busyId) setRenaming(null); }, renameDialogRef);
+  useDialogFocus(Boolean(deleting), () => { if (!busyId) { setDeleting(null); setDeleteRemote(false); } }, deleteDialogRef);
 
   const refresh = () => {
     setLoading(true);
@@ -940,9 +952,9 @@ export default function VoiceProfilesPage() {
       <CreateVoiceDialog providers={providers} open={wizardOpen} onClose={() => setWizardOpen(false)} onCreated={(profile) => { setProfiles((current) => [profile, ...current]); setMessage({ type: "ok", text: t("voices.created", { name: profile.name }) }); }} />
       <CloudVoiceRecoveryDialog providers={providers} linkedProfiles={profiles} open={recoveryOpen} onClose={() => setRecoveryOpen(false)} onLinked={(profile) => { setProfiles((current) => [profile, ...current]); setMessage({ type: "ok", text: t("voices.linked", { name: profile.name }) }); }} />
 
-      {renaming && <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="rename-voice-title"><Card className="w-full max-w-md border border-border-default bg-surface-raised p-5 shadow-2xl"><h3 id="rename-voice-title" className="font-display text-h2 font-semibold text-text-primary">{t("voices.renameTitle")}</h3><label htmlFor="rename-voice-input" className="sr-only">{t("voices.renameTitle")}</label><Input id="rename-voice-input" className="mt-4" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} maxLength={60} autoFocus /><div className="mt-5 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setRenaming(null)}>{t("common.cancel")}</Button><Button type="button" variant="primary" onClick={handleRename} disabled={!renameDraft.trim() || busyId === renaming.id}>{busyId === renaming.id && <LoaderCircle size={14} className="animate-spin" />} {t("common.save")}</Button></div></Card></div>}
+      {renaming && <div ref={renameDialogRef} tabIndex={-1} className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="rename-voice-title"><Card className="w-full max-w-md border border-border-default bg-surface-raised p-5 shadow-2xl"><h3 id="rename-voice-title" className="font-display text-h2 font-semibold text-text-primary">{t("voices.renameTitle")}</h3><label htmlFor="rename-voice-input" className="sr-only">{t("voices.renameTitle")}</label><Input id="rename-voice-input" className="mt-4" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} maxLength={60} autoFocus /><div className="mt-5 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setRenaming(null)}>{t("common.cancel")}</Button><Button type="button" variant="primary" onClick={handleRename} disabled={!renameDraft.trim() || busyId === renaming.id}>{busyId === renaming.id && <LoaderCircle size={14} className="animate-spin" />} {t("common.save")}</Button></div></Card></div>}
 
-      {deleting && <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="delete-voice-title"><Card className="w-full max-w-md border border-border-default bg-surface-raised p-5 shadow-2xl"><span className="grid h-10 w-10 place-items-center rounded-full bg-danger/10 text-danger"><Trash2 size={18} /></span><h3 id="delete-voice-title" className="mt-4 font-display text-h2 font-semibold text-text-primary">{deleting.engine === "zipvoice" ? t("voices.deleteTitle") : t("voices.unlinkTitle")}</h3><p className="mt-2 text-sm leading-6 text-text-secondary">{deleting.engine === "zipvoice" ? t("voices.deleteDesc", { name: deleting.name }) : t("voices.unlinkDesc", { name: deleting.name })}</p>{deleting.engine === "elevenlabs" && <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-danger/20 bg-danger/5 p-3 text-xs leading-5 text-text-secondary"><input type="checkbox" checked={deleteRemote} onChange={(event) => setDeleteRemote(event.target.checked)} className="mt-1 h-4 w-4 accent-danger" /><span><strong className="block text-text-primary">{t("voices.remoteDeleteTitle")}</strong>{t("voices.remoteDeleteDesc")}</span></label>}<div className="mt-5 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => { setDeleting(null); setDeleteRemote(false); }}>{t("common.cancel")}</Button><Button type="button" variant="danger" onClick={handleDelete} disabled={busyId === deleting.id}>{busyId === deleting.id && <LoaderCircle size={14} className="animate-spin" />} {deleting.engine === "zipvoice" ? t("common.delete") : t("voices.unlinkAction")}</Button></div></Card></div>}
+      {deleting && <div ref={deleteDialogRef} tabIndex={-1} className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="delete-voice-title"><Card className="w-full max-w-md border border-border-default bg-surface-raised p-5 shadow-2xl"><span className="grid h-10 w-10 place-items-center rounded-full bg-danger/10 text-danger"><Trash2 size={18} /></span><h3 id="delete-voice-title" className="mt-4 font-display text-h2 font-semibold text-text-primary">{deleting.engine === "zipvoice" ? t("voices.deleteTitle") : t("voices.unlinkTitle")}</h3><p className="mt-2 text-sm leading-6 text-text-secondary">{deleting.engine === "zipvoice" ? t("voices.deleteDesc", { name: deleting.name }) : t("voices.unlinkDesc", { name: deleting.name })}</p>{deleting.engine === "elevenlabs" && <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl border border-danger/20 bg-danger/5 p-3 text-xs leading-5 text-text-secondary"><input type="checkbox" checked={deleteRemote} onChange={(event) => setDeleteRemote(event.target.checked)} className="mt-1 h-4 w-4 accent-danger" /><span><strong className="block text-text-primary">{t("voices.remoteDeleteTitle")}</strong>{t("voices.remoteDeleteDesc")}</span></label>}<div className="mt-5 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => { setDeleting(null); setDeleteRemote(false); }}>{t("common.cancel")}</Button><Button type="button" variant="danger" onClick={handleDelete} disabled={busyId === deleting.id}>{busyId === deleting.id && <LoaderCircle size={14} className="animate-spin" />} {deleting.engine === "zipvoice" ? t("common.delete") : t("voices.unlinkAction")}</Button></div></Card></div>}
     </div>
   );
 }

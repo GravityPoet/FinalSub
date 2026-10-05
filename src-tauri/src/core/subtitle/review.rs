@@ -37,6 +37,115 @@ fn read(path: &Path) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
+#[derive(serde::Deserialize)]
+pub struct OriginalSubtitleEdit {
+    pub path: String,
+    pub expected_content: String,
+    pub content: String,
+}
+
+/// Independent proofreading uses the same backup/atomic-replacement discipline
+/// as task publication, with a content guard against edits made in another app.
+pub fn write_originals(root: &Path, edits: &[OriginalSubtitleEdit]) -> Result<Vec<String>, String> {
+    if edits.is_empty() || edits.len() > 2 {
+        return Err("Invalid subtitle writeback count".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for edit in edits {
+        let path = Path::new(&edit.path);
+        if !path.is_absolute()
+            || !seen.insert(path)
+            || edit.content.len() as u64 > MAX_SUBTITLE_FILE_BYTES
+        {
+            return Err("Invalid subtitle writeback".into());
+        }
+        if read(path)? != edit.expected_content {
+            return Err("finalsub:subtitle-save-conflict".into());
+        }
+        if fs::metadata(path)
+            .map_err(|error| error.to_string())?
+            .permissions()
+            .readonly()
+        {
+            return Err("字幕文件只读，请另存为新文件".into());
+        }
+    }
+    let changed: Vec<_> = edits
+        .iter()
+        .filter(|edit| edit.content != edit.expected_content)
+        .collect();
+    if changed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let backup_dir = root
+        .join("proofread-backups")
+        .join(uuid::Uuid::new_v4().to_string());
+    fs::create_dir_all(&backup_dir).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&backup_dir, fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
+    }
+    let mut originals = Vec::new();
+    for (index, edit) in changed.iter().enumerate() {
+        let backup = backup_dir.join(format!(
+            "{index}-{}",
+            Path::new(&edit.path).file_name().unwrap().to_string_lossy()
+        ));
+        fs::copy(&edit.path, &backup).map_err(|error| error.to_string())?;
+        if read(&backup)? != edit.expected_content {
+            return Err("finalsub:subtitle-save-conflict".into());
+        }
+        originals.push(backup);
+    }
+    for (replaced, edit) in changed.iter().enumerate() {
+        let path = Path::new(&edit.path);
+        let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let result = (|| -> Result<(), String> {
+            if read(path)? != edit.expected_content {
+                return Err("finalsub:subtitle-save-conflict".into());
+            }
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|error| error.to_string())?;
+            file.write_all(edit.content.as_bytes())
+                .map_err(|error| error.to_string())?;
+            file.set_permissions(
+                fs::metadata(path)
+                    .map_err(|error| error.to_string())?
+                    .permissions(),
+            )
+            .map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+            fs::rename(&temporary, path).map_err(|error| error.to_string())
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&temporary);
+            for (original, backup) in changed.iter().zip(&originals).take(replaced) {
+                let restore = Path::new(&original.path)
+                    .with_extension(format!("{}.restore", uuid::Uuid::new_v4()));
+                if fs::copy(backup, &restore)
+                    .and_then(|_| fs::rename(&restore, &original.path))
+                    .is_err()
+                {
+                    return Err(format!(
+                        "{error}; restore original files from {}",
+                        backup_dir.display()
+                    ));
+                }
+            }
+            return Err(error);
+        }
+    }
+    Ok(originals
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect())
+}
+
 fn paths(root: &Path, task: &Task) -> Vec<PathBuf> {
     let mut paths = vec![
         root.join("review-source.srt"),
@@ -342,4 +451,69 @@ pub fn publish(
     task.status_message = "校对已保存，全部字幕格式已更新".into();
     publication.task = task;
     Ok(publication)
+}
+
+#[cfg(test)]
+mod original_tests {
+    use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn a_second_file_io_failure_rolls_back_the_first_original() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        let first = root.path().join("source.srt");
+        let second = locked.join("target.srt");
+        fs::write(&first, "source before").unwrap();
+        fs::write(&second, "target before").unwrap();
+        let edits = [
+            OriginalSubtitleEdit {
+                path: first.to_string_lossy().into_owned(),
+                expected_content: "source before".into(),
+                content: "source after".into(),
+            },
+            OriginalSubtitleEdit {
+                path: second.to_string_lossy().into_owned(),
+                expected_content: "target before".into(),
+                content: "target after".into(),
+            },
+        ];
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = write_originals(root.path(), &edits);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(first).unwrap(), "source before");
+        assert_eq!(fs::read_to_string(second).unwrap(), "target before");
+    }
+    #[test]
+    fn writeback_keeps_backup_and_rejects_external_change_and_duplicate_path() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("original.ass");
+        fs::write(&source, "original style").unwrap();
+        let edit = OriginalSubtitleEdit {
+            path: source.to_string_lossy().into_owned(),
+            expected_content: "original style".into(),
+            content: "edited style".into(),
+        };
+        let backups = write_originals(root.path(), &[edit]).unwrap();
+        assert_eq!(fs::read_to_string(&backups[0]).unwrap(), "original style");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "edited style");
+        let stale = || OriginalSubtitleEdit {
+            path: source.to_string_lossy().into_owned(),
+            expected_content: "original style".into(),
+            content: "stale edit".into(),
+        };
+        assert!(write_originals(root.path(), &[stale()])
+            .unwrap_err()
+            .contains("conflict"));
+        assert_eq!(fs::read_to_string(&source).unwrap(), "edited style");
+        let current = || OriginalSubtitleEdit {
+            path: source.to_string_lossy().into_owned(),
+            expected_content: "edited style".into(),
+            content: "second edit".into(),
+        };
+        assert!(write_originals(root.path(), &[current(), current()]).is_err());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "edited style");
+    }
 }

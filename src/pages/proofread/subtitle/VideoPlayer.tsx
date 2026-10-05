@@ -15,6 +15,7 @@ interface VideoPlayerProps {
     label: string;
   }>;
   togglePlay: () => void;
+  handlePlaybackState: (event: React.SyntheticEvent<HTMLVideoElement>) => void;
   goToNextSubtitle: () => void;
   goToPreviousSubtitle: () => void;
   seekVideo: (seconds: number) => void;
@@ -33,6 +34,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   handleTimeUpdate,
   handleLoadedMetadata,
   handleRateChange,
+  handlePlaybackState,
 }) => {
   const { t } = useI18n();
   const videoUrl = videoPath ? fileAssetUrl(videoPath) : '';
@@ -43,6 +45,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {videoUrl ? (
           <video
             ref={playerRef}
+            onPlay={handlePlaybackState}
+            onPause={handlePlaybackState}
+            onEnded={handlePlaybackState}
             src={videoUrl}
             className="w-full h-full object-contain max-h-[38.5vh]"
             controls

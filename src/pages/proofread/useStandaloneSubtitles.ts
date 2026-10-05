@@ -1,10 +1,11 @@
+import { editSubtitleDocument } from './subtitleDocument';
 /**
  * 独立校对模式的字幕管理 Hook
  * 不依赖 Electron IFiles，直接接收文件路径并使用前端的 srt 解析/序列化和薄 fs IPC 命令
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { readTextFilePath, writeTextFilePath } from '../../lib/tauri';
+import { readTextFilePath, writeTextFilePath, saveProofreadFiles } from '../../lib/tauri';
 import {
   detectSubtitleFormat,
   parseSubtitleEntries,
@@ -18,6 +19,8 @@ import { useI18n } from '../../lib/i18n';
 
 export interface Subtitle {
   id: string;
+  originalId?: string;
+  targetOriginalId?: string;
   startEndTime: string;
   content: string[];
   sourceContent?: string;
@@ -26,6 +29,22 @@ export interface Subtitle {
   endTimeInSeconds?: number;
   isEditing?: boolean;
 }
+
+export interface SubtitleDraft {
+  subtitles: Subtitle[];
+  lastSavedSubtitles: Subtitle[];
+  originalContents: Record<string, string>;
+  dirty: boolean;
+  reviewVersion?: string;
+  backups?: string[];
+}
+export function isSubtitleDraft(value: unknown): value is SubtitleDraft {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as Partial<SubtitleDraft>;
+  const cues = (items: unknown): items is Subtitle[] => Array.isArray(items) && items.every((cue) => cue && typeof cue.id === 'string' && typeof cue.startEndTime === 'string' && Array.isArray(cue.content) && cue.content.every((line: unknown) => typeof line === 'string') && (cue.sourceContent === undefined || typeof cue.sourceContent === 'string') && (cue.targetContent === undefined || typeof cue.targetContent === 'string'));
+  return cues(data.subtitles) && cues(data.lastSavedSubtitles) && typeof data.dirty === 'boolean' && !!data.originalContents && typeof data.originalContents === 'object' && Object.values(data.originalContents).every((text) => typeof text === 'string');
+}
+const copyCues = (cues: Subtitle[]) => cues.map((cue) => ({ ...cue, content: [...cue.content] }));
 
 export interface SubtitleStats {
   total: number;
@@ -42,6 +61,7 @@ export interface PlayerSubtitleTrack {
 }
 
 interface StandaloneSubtitlesConfig {
+  draft?: SubtitleDraft;
   reviewSourceContent?: string;
   reviewTargetContent?: string;
   videoPath?: string;
@@ -78,6 +98,7 @@ const parseTimeRange = (timeRange: string): { start: number; end: number } => {
 export const useStandaloneSubtitles = (
   config: StandaloneSubtitlesConfig,
   isOpen: boolean,
+  onDraftChange?: (draft: SubtitleDraft) => void,
 ) => {
   const { showToast } = useToast();
   const { t } = useI18n();
@@ -85,13 +106,13 @@ export const useStandaloneSubtitles = (
   const [mergedSubtitles, setMergedSubtitles] = useState<Subtitle[]>([]);
   const [videoPath, setVideoPath] = useState<string>('');
   const [currentSubtitleIndex, setCurrentSubtitleIndex] = useState(-1);
-  const [previousSubtitleIndex, setPreviousSubtitleIndex] = useState(-1);
   const [videoInfo, setVideoInfo] = useState({ fileName: '', extension: '' });
   const [hasTranslationFile, setHasTranslationFile] = useState(false);
   const [subtitleTracksForPlayer, setSubtitleTracksForPlayer] = useState<
     PlayerSubtitleTrack[]
   >([]);
   const [isLoading, setIsLoading] = useState(Boolean(isOpen && config.sourceSubtitlePath));
+  const [saveBackups, setSaveBackups] = useState<string[]>(config.draft?.backups ?? []);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // 撤销/重做历史
@@ -100,7 +121,15 @@ export const useStandaloneSubtitles = (
   const maxHistoryLength = 50;
 
   // 记录编辑前的快照（用于失焦记录）
-  const [editSnapshot, setEditSnapshot] = useState<Subtitle[] | null>(null);
+  const historyRef = useRef<Subtitle[][]>([]);
+  const historyIndexRef = useRef(-1);
+  const editGroup = useRef<{ key: string; at: number } | null>(null);
+  const originalContents = useRef(new Map(Object.entries(config.draft?.originalContents ?? {})));
+  const lastSaved = useRef<Subtitle[]>([]);
+  const latestCues = useRef(mergedSubtitles);
+  latestCues.current = mergedSubtitles;
+  const draftCallback = useRef(onDraftChange);
+  draftCallback.current = onDraftChange;
 
   // 光标位置（用于拆分功能）
   const cursorPositionRef = useRef(0);
@@ -109,10 +138,13 @@ export const useStandaloneSubtitles = (
   const shouldShowTranslation = !!config.targetSubtitlePath;
 
   // 读取字幕文件并解析为 Subtitle 格式
-  const readContent = (path: string): Promise<string> => {
-    if (path === config.sourceSubtitlePath && config.reviewSourceContent !== undefined) return Promise.resolve(config.reviewSourceContent);
-    if (path === config.targetSubtitlePath && config.reviewTargetContent !== undefined) return Promise.resolve(config.reviewTargetContent);
-    return readTextFilePath(path);
+  const readContent = async (path: string): Promise<string> => {
+    if (config.draft && originalContents.current.has(path)) return originalContents.current.get(path)!;
+    const content = path === config.sourceSubtitlePath && config.reviewSourceContent !== undefined ? config.reviewSourceContent
+      : path === config.targetSubtitlePath && config.reviewTargetContent !== undefined ? config.reviewTargetContent
+      : await readTextFilePath(path);
+    if (!originalContents.current.has(path)) originalContents.current.set(path, content);
+    return content;
   };
   const readSubtitleFile = async (filePath: string): Promise<Subtitle[]> => {
     const content = await readContent(filePath);
@@ -125,6 +157,7 @@ export const useStandaloneSubtitles = (
       const { start, end } = parseTimeRange(e.startEndTime);
       return {
         id: e.id,
+        originalId: e.id,
         startEndTime: e.startEndTime,
         content: e.content,
         sourceContent: e.content.join('\n'),
@@ -177,7 +210,9 @@ export const useStandaloneSubtitles = (
     setIsDirty(false);
     setHistory([]);
     setHistoryIndex(-1);
-    setEditSnapshot(null);
+    historyRef.current = [];
+    historyIndexRef.current = -1;
+    editGroup.current = null;
     try {
       if (config.videoPath) {
         setVideoPath(config.videoPath);
@@ -230,6 +265,7 @@ export const useStandaloneSubtitles = (
         return {
           ...sub,
           sourceContent: sub.content.join('\n'),
+          targetOriginalId: translated?.originalId,
           targetContent: translated ? translated.sourceContent || translated.content.join('\n') : '',
           isEditing: false,
           startTimeInSeconds: start,
@@ -237,7 +273,16 @@ export const useStandaloneSubtitles = (
         };
       });
 
-      setMergedSubtitles(merged);
+      lastSaved.current = copyCues(config.draft?.lastSavedSubtitles ?? merged);
+      const restored = config.draft?.subtitles ?? merged;
+      setMergedSubtitles(restored);
+      setIsDirty(config.draft?.dirty ?? false);
+      if (config.draft?.dirty) {
+        historyRef.current = [copyCues(lastSaved.current), copyCues(restored)];
+        historyIndexRef.current = 1;
+        setHistory(historyRef.current);
+        setHistoryIndex(1);
+      }
     } catch (error) {
       console.error('Error loading files:', error);
       setLoadError(error instanceof Error ? error.message : String(error));
@@ -283,18 +328,11 @@ export const useStandaloneSubtitles = (
     field: 'sourceContent' | 'targetContent',
     value: string,
   ) => {
-    if (!editSnapshot) {
-      setEditSnapshot(JSON.parse(JSON.stringify(mergedSubtitles)));
-    }
-
-    const newSubtitles = [...mergedSubtitles];
-    newSubtitles[index][field] = value;
-    newSubtitles[index].content =
-      field === 'sourceContent'
-        ? value.split('\n')
-        : newSubtitles[index].content;
+    const newSubtitles = mergedSubtitles.map((subtitle, at) => at === index ? {
+      ...subtitle, [field]: value, ...(field === 'sourceContent' ? { content: value.split('\n') } : {}),
+    } : subtitle);
+    pushToHistory(mergedSubtitles, newSubtitles, `${index}:${field}`);
     setMergedSubtitles(newSubtitles);
-    setIsDirty(true);
   };
 
   // 保存字幕文件
@@ -320,49 +358,29 @@ export const useStandaloneSubtitles = (
         return targetVal;
       };
 
-      // 保存源字幕
-      if (config.sourceSubtitlePath) {
-        const format = detectSubtitleFormat(config.sourceSubtitlePath);
-        const entries = mergedSubtitles.map((sub) => ({
-          id: sub.id,
-          startEndTime: sub.startEndTime,
-          text: buildText(sub, 'source'),
-        }));
-        const content = serializeSubtitleEntries(entries, format);
-        await writeTextFilePath(config.sourceSubtitlePath, content);
-      }
-
-      // 保存翻译字幕
-      if (config.targetSubtitlePath && shouldShowTranslation) {
-        const format = detectSubtitleFormat(config.targetSubtitlePath);
-        const entries = mergedSubtitles.map((sub) => ({
-          id: sub.id,
-          startEndTime: sub.startEndTime,
-          text: buildText(sub, 'onlyTranslate'),
-        }));
-        const content = serializeSubtitleEntries(entries, format);
-        await writeTextFilePath(config.targetSubtitlePath, content);
-      }
-
-      // 保存到目标翻译文件（如双语）
-      if (config.finalTargetSubtitlePath && shouldShowTranslation) {
-        const format = detectSubtitleFormat(config.finalTargetSubtitlePath);
-        const contentType = config.translateContent || 'onlyTranslate';
-        const entries = mergedSubtitles.map((sub) => ({
-          id: sub.id,
-          startEndTime: sub.startEndTime,
-          text: buildText(sub, contentType),
-        }));
-        const content = serializeSubtitleEntries(entries, format);
-        await writeTextFilePath(config.finalTargetSubtitlePath, content);
-      }
-
-      setIsDirty(false);
+      const edits = [
+        { path: config.sourceSubtitlePath, kind: 'source' },
+        ...(shouldShowTranslation ? [{ path: config.targetSubtitlePath, kind: 'onlyTranslate' }] : []),
+      ].filter((entry): entry is { path: string; kind: string } => Boolean(entry.path)).map(({ path, kind }) => {
+        const template = originalContents.current.get(path);
+        if (template === undefined) throw new Error('Original subtitle snapshot is missing. Export a new file instead.');
+        const document = (cues: Subtitle[]) => editSubtitleDocument(template, detectSubtitleFormat(path), cues.map((sub) => ({
+          id: sub.id, originalId: kind === 'source' ? sub.originalId : sub.targetOriginalId,
+          startEndTime: sub.startEndTime, text: buildText(sub, kind),
+        })));
+        // Anchors belong to the imported document, including rows restored by
+        // undo after a save. Keep that template immutable across every write.
+        return { path, content: document(mergedSubtitles), expected_content: document(lastSaved.current) };
+      });
+      const backups = await saveProofreadFiles(edits);
+      if (backups.length) setSaveBackups(backups);
+      const currentSaved = markSaved();
+      if (backups.length) showToast('info', t('proofread.standalone.saveBackups', { paths: backups.join(' · ') }));
       showToast('success', t('proofread.standalone.saveSuccess'));
-      return true;
+      return currentSaved;
     } catch (error) {
       console.error('Error saving subtitles:', error);
-      showToast('error', t('proofread.standalone.saveFailed'));
+      showToast('error', String(error).includes('finalsub:subtitle-save-conflict') ? t('proofread.standalone.saveConflict') : `${t('proofread.standalone.saveFailed')} ${String(error)}`);
       return false;
     }
   };
@@ -476,27 +494,20 @@ export const useStandaloneSubtitles = (
   };
 
   // 保存到历史记录（用于撤销/重做）
-  const pushToHistory = useCallback(
-    (oldState: Subtitle[], newState: Subtitle[]) => {
-      setHistory((prev) => {
-        const newHistory = prev.slice(0, historyIndex + 1);
-        if (newHistory.length === 0) {
-          newHistory.push(JSON.parse(JSON.stringify(oldState)));
-        }
-        newHistory.push(JSON.parse(JSON.stringify(newState)));
-        while (newHistory.length > maxHistoryLength) {
-          newHistory.shift();
-        }
-        return newHistory;
-      });
-      setHistoryIndex((prev) => {
-        if (prev === -1) return 1;
-        return Math.min(prev + 1, maxHistoryLength - 1);
-      });
-      setIsDirty(true);
-    },
-    [historyIndex],
-  );
+  const pushToHistory = useCallback((oldState: Subtitle[], newState: Subtitle[], key?: string) => {
+    const now = Date.now();
+    const current = historyRef.current.slice(0, historyIndexRef.current + 1);
+    if (current.length === 0) current.push(copyCues(oldState));
+    if (key && editGroup.current?.key === key && now - editGroup.current.at < 1000 && current.length > 1) current[current.length - 1] = copyCues(newState);
+    else current.push(copyCues(newState));
+    while (current.length > maxHistoryLength) current.shift();
+    editGroup.current = key ? { key, at: now } : null;
+    historyRef.current = current;
+    historyIndexRef.current = current.length - 1;
+    setHistory(current);
+    setHistoryIndex(current.length - 1);
+    setIsDirty(true);
+  }, []);
 
   // 更新字幕（带历史记录）
   const updateSubtitles = useCallback(
@@ -512,8 +523,9 @@ export const useStandaloneSubtitles = (
     if (historyIndex > 0 && history.length > 0) {
       const newIndex = historyIndex - 1;
       setHistoryIndex(newIndex);
+      historyIndexRef.current = newIndex;
       setMergedSubtitles(JSON.parse(JSON.stringify(history[newIndex])));
-      setEditSnapshot(null);
+      editGroup.current = null;
       setIsDirty(true);
     }
   }, [historyIndex, history]);
@@ -523,8 +535,9 @@ export const useStandaloneSubtitles = (
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1;
       setHistoryIndex(newIndex);
+      historyIndexRef.current = newIndex;
       setMergedSubtitles(JSON.parse(JSON.stringify(history[newIndex])));
-      setEditSnapshot(null);
+      editGroup.current = null;
       setIsDirty(true);
     }
   }, [historyIndex, history]);
@@ -533,22 +546,26 @@ export const useStandaloneSubtitles = (
   const canUndo = historyIndex > 0 && history.length > 1;
   const canRedo = historyIndex < history.length - 1 && historyIndex >= 0;
 
-  // 失焦记录
+  const makeDraft = (cues: Subtitle[], dirty: boolean): SubtitleDraft => ({
+    subtitles: copyCues(cues), lastSavedSubtitles: copyCues(lastSaved.current),
+    originalContents: Object.fromEntries(originalContents.current), dirty, backups: saveBackups,
+  });
+  const markSaved = () => {
+    lastSaved.current = copyCues(mergedSubtitles);
+    const changed = JSON.stringify(latestCues.current) !== JSON.stringify(mergedSubtitles);
+    setIsDirty(changed);
+    draftCallback.current?.(makeDraft(latestCues.current, changed));
+    return !changed;
+  };
+  const discardChanges = () => {
+    const cues = copyCues(lastSaved.current);
+    setMergedSubtitles(cues);
+    setIsDirty(false);
+    draftCallback.current?.(makeDraft(cues, false));
+  };
   useEffect(() => {
-    if (
-      previousSubtitleIndex !== -1 &&
-      previousSubtitleIndex !== currentSubtitleIndex &&
-      editSnapshot
-    ) {
-      const hasChanged =
-        JSON.stringify(editSnapshot) !== JSON.stringify(mergedSubtitles);
-      if (hasChanged) {
-        pushToHistory(editSnapshot, mergedSubtitles);
-      }
-      setEditSnapshot(null);
-    }
-    setPreviousSubtitleIndex(currentSubtitleIndex);
-  }, [currentSubtitleIndex, editSnapshot, mergedSubtitles, pushToHistory]);
+    if (!isLoading && !loadError && mergedSubtitles.length) draftCallback.current?.(makeDraft(mergedSubtitles, isDirty));
+  }, [mergedSubtitles, isDirty, isLoading, loadError, saveBackups]);
 
   // 秒数转时间戳字符串
   const secondsToTime = (seconds: number): string => {
@@ -599,11 +616,7 @@ export const useStandaloneSubtitles = (
         ...mergedSubtitles.slice(endIndex),
       ];
 
-      newSubtitles.forEach((sub, idx) => {
-        sub.id = String(idx + 1);
-      });
-
-      updateSubtitles(newSubtitles);
+      updateSubtitles(newSubtitles.map((sub, index) => ({ ...sub, id: String(index + 1) })));
     },
     [mergedSubtitles, updateSubtitles],
   );
@@ -662,11 +675,7 @@ export const useStandaloneSubtitles = (
         ...mergedSubtitles.slice(index + 1),
       ];
 
-      newSubtitles.forEach((sub, idx) => {
-        sub.id = String(idx + 1);
-      });
-
-      updateSubtitles(newSubtitles);
+      updateSubtitles(newSubtitles.map((sub, index) => ({ ...sub, id: String(index + 1) })));
     },
     [mergedSubtitles, updateSubtitles],
   );
@@ -712,5 +721,8 @@ export const useStandaloneSubtitles = (
     getCursorPosition,
     isDirty,
     setIsDirty,
+    saveBackups,
+    markSaved,
+    discardChanges,
   };
 };

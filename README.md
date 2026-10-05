@@ -7,7 +7,7 @@
 <h1 align="center">FinalSub</h1>
 
 <p align="center">
-  <strong>Stop paying for subtitle SaaS. The ultimate 100% offline, privacy-first AI workstation for bilingual subtitles and TTS dubbing.</strong>
+  <strong>A local-first workstation for bilingual subtitles and AI dubbing. Run local workflows offline after preparing models and runtimes, with optional cloud services.</strong>
 </p>
 
 <p align="center">
@@ -39,8 +39,8 @@ If you've ever tried to subtitle or dub a video, you know the drill:
 
 | 😭 Without FinalSub | 😎 With FinalSub |
 | :--- | :--- |
-| **SaaS Bills Drain Your Wallet:** Paying per-minute transcription & translation fees. Heavy creators waste hundreds of dollars a month. | **100% Free Forever:** Runs locally using your Mac's Metal GPU/CPU. Process unlimited videos for $0.00. |
-| **Leaking Intellectual Property:** Uploading corporate videos, confidential interviews, or private vlogs to remote servers. | **Vault-Grade Privacy:** 100% offline local processing. What happens on your Mac, stays on your Mac. |
+| **SaaS Bills Drain Your Wallet:** Paying per-minute transcription & translation fees. Heavy creators waste hundreds of dollars a month. | **No local API metering:** Use your Mac's GPU/CPU and Ollama for local translation. The app is free; optional cloud services follow their provider pricing. |
+| **Leaking Intellectual Property:** Uploading corporate videos, confidential interviews, or private vlogs to remote servers. | **A fully local workflow is available:** Local ASR, Ollama translation and local TTS process content on your device. Cloud services send the relevant audio or text to the selected provider. |
 | **Terminal & Dependency Hell:** Installing Python, Homebrew, CUDA, CMake, and Hugging Face dependencies just to run a model. | **Just Unzip & Run:** Pre-packaged universal binaries and FFmpeg sidecars. No terminal setups. No CLI errors. |
 | **Hallucinating Subtitles:** AI translations shift line numbers, drop timestamps, and break sync. | **JSON Schema Locked:** Translation lines are strictly mapped and aligned with glossaries automatically. |
 | **Cluttered App Switching:** Bouncing between transcribers, translator tabs, TTS scripts, and video editors. | **Unified AI Workstation:** Extraction ➔ Transcription ➔ AI Translation ➔ Proofread ➔ AI Dubbing ➔ Composition in one interface. |
@@ -49,8 +49,8 @@ If you've ever tried to subtitle or dub a video, you know the drill:
 
 ### 🔥 3 Killer Features (Your New AI Superpowers)
 
-#### 1. 100% Offline Local AI Power (Mac GPU Optimized)
-Run state-of-the-art ASR (Whisper.cpp, SenseVoice, Paraformer) and TTS (Kokoro, VITS, ZipVoice) locally. Whisper.cpp is fully optimized for **macOS Metal GPU acceleration** for blazing-fast transcription. Deep integration with local **Ollama** lets you translate subtitles for free using models like DeepSeek-R1 or Qwen—completely offline, zero API keys required.
+#### 1. Offline-capable Local AI Power (Mac GPU Optimized)
+Run state-of-the-art ASR (Whisper.cpp, SenseVoice, Paraformer) and TTS (Kokoro, VITS, ZipVoice) locally. Whisper.cpp is fully optimized for **macOS Metal GPU acceleration** for blazing-fast transcription. Deep integration with local **Ollama** lets you translate subtitles for free using models like DeepSeek-R1 or Qwen—offline after the model and runtime are ready, with no API key required. Parakeet MLX requires uv and Python dependencies; the model page checks runtime readiness and provides setup, cancellation and retry. Local TTS also requires its model files.
 
 #### 2. Bulletproof AI Translation & Glossary Alignment
 Say goodbye to broken subtitle files caused by LLM hallucinations. FinalSub locks your subtitle structure using strict JSON Schemas. It automatically scans your text against custom Terminology Glossaries, injects context-aware term hints, and matches source-echo similarities. If a translation drifts, it retries and repairs only the affected cues.
@@ -80,7 +80,7 @@ The current macOS download uses FinalSub's pinned self-signed certificate while 
 - 🎬 **Content Creators & YouTubers:** Localize your videos into multiple languages without paying hundreds of dollars to online SaaS platforms.
 - 🧑‍💻 **Developers & Tech Teams:** Protect your source files and build automated subtitle pipelines locally using reusable task recipes.
 - 🔐 **Privacy-First Professionals:** Translate and transcribe confidential interviews, corporate presentations, and legal depositions in a completely air-gapped environment.
-- 🎓 **Educators & Researchers:** Turn lectures and course materials into bilingual videos with zero setup hassle.
+- 🎓 **Educators & Researchers:** Turn lectures and course materials into bilingual videos with guided model and runtime setup.
 
 ---
 
@@ -95,9 +95,9 @@ The current macOS download uses FinalSub's pinned self-signed certificate while 
 
 ### 🔒 The Privacy Promise
 
-- FinalSub is a local client. Subtitles, audio chunks, and video files stay on your machine.
+- Local workflows process subtitles, audio and video on your machine. Optional cloud services send the corresponding audio or text to your configured endpoint.
 - Local models process everything in memory and on disk offline.
-- Cloud APIs (ASR, Translation, TTS) are **strictly opt-in**. Audio is only uploaded in VAD-segmented chunks after you save endpoint credentials and grant explicit consent.
+- Cloud ASR/TTS require endpoint configuration and explicit upload consent. Cloud ASR segments audio locally with VAD; cloud translation and TTS send text. Optional error telemetry is disabled by default.
 - On macOS, secrets are stored in an app-private XChaCha20-Poly1305 encrypted vault with owner-only permissions, avoiding recurring system password prompts. Windows and Linux use their native credential stores. Plaintext secrets are never returned to the front end or written to logs.
 
 ---

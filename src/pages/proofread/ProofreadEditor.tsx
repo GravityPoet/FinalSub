@@ -1,7 +1,8 @@
-import { useMemo, useState, useCallback, useRef } from 'react';
-import { ArrowLeft, Check, Save, Loader2, AlertTriangle, Download, Languages } from 'lucide-react';
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import { ArrowLeft, Check, Save, Loader2, AlertTriangle, Download, Languages, ChevronDown } from 'lucide-react';
 import { useToast } from './Toast';
 import { Button } from '../../components/ui/Button';
+import { ActionMenu } from '../../components/ui/ActionMenu';
 
 import { useStandaloneSubtitles } from './useStandaloneSubtitles';
 import { useVideoPlayer } from './useVideoPlayer';
@@ -12,17 +13,21 @@ import SubtitleList from './subtitle/SubtitleList';
 import SubtitleEditToolbar from './subtitle/SubtitleEditToolbar';
 import { PendingFile } from './proofreadUtils';
 import { useI18n } from '../../lib/i18n';
-import { convertStringsOpencc, saveDialog, publishTaskReview } from '../../lib/tauri';
+import { convertStringsOpencc, saveDialog, publishTaskReview, revealItemInDir } from '../../lib/tauri';
 import QualityPanel from './QualityPanel';
 
 interface ProofreadEditorProps {
   file: PendingFile;
+  active: boolean;
+  onDraftChange: (draft: import('./useStandaloneSubtitles').SubtitleDraft) => void;
   onMarkComplete: () => void;
   onBack: () => void;
 }
 
 export default function ProofreadEditor({
   file,
+  active,
+  onDraftChange,
   onMarkComplete,
   onBack,
 }: ProofreadEditorProps) {
@@ -31,6 +36,7 @@ export default function ProofreadEditor({
   // 构建配置
   const config = useMemo(
     () => ({
+      draft: file.draft,
       videoPath: file.videoPath,
       sourceSubtitlePath: file.selectedSource,
       targetSubtitlePath: file.selectedTarget,
@@ -78,7 +84,10 @@ export default function ProofreadEditor({
     getCursorPosition,
     isDirty,
     setIsDirty,
-  } = useStandaloneSubtitles(config, true);
+    saveBackups,
+    discardChanges,
+    markSaved,
+  } = useStandaloneSubtitles(config, true, (draft) => onDraftChange({ ...draft, reviewVersion: reviewVersion.current }));
 
   // 使用视频播放器 hook
   const {
@@ -91,6 +100,7 @@ export default function ProofreadEditor({
     handleLoadedMetadata,
     handleRateChange,
     togglePlay,
+    handlePlaybackState,
     handleSubtitleClick,
     goToNextSubtitle,
     goToPreviousSubtitle,
@@ -103,6 +113,7 @@ export default function ProofreadEditor({
     setCurrentSubtitleIndex,
   );
 
+  useEffect(() => { if (!active) playerRef.current?.pause(); }, [active, playerRef]);
   // 是否有视频
   const hasVideo = !!videoPath;
 
@@ -115,7 +126,7 @@ export default function ProofreadEditor({
   const [isCompleting, setIsCompleting] = useState(false);
 
   const { showToast } = useToast();
-  const reviewVersion = useRef(file.originTaskVersion);
+  const reviewVersion = useRef(file.draft?.reviewVersion ?? file.originTaskVersion);
   const handleSave = async () => {
     if (file.originTaskId) {
       try {
@@ -127,11 +138,11 @@ export default function ProofreadEditor({
         }));
         if (!reviewVersion.current) throw new Error(t('quality.changed'));
         reviewVersion.current = await publishTaskReview(file.originTaskId, cues, reviewVersion.current);
-        setIsDirty(false);
+        const currentSaved = markSaved();
         showToast('success', t('proofread.standalone.saveSuccess'));
+        return currentSaved;
       }
       catch (error) { setIsDirty(true); showToast('error', String(error)); return false; }
-      return true;
     }
     return saveSubtitleDraft();
   };
@@ -230,9 +241,9 @@ export default function ProofreadEditor({
 
   const handleDiscardAndExit = useCallback(() => {
     setShowUnsavedDialog(false);
-    setIsDirty(false);
+    discardChanges();
     onBack();
-  }, [onBack, setIsDirty]);
+  }, [onBack, discardChanges]);
 
   const handleMarkCompleteClick = useCallback(async () => {
     setIsCompleting(true);
@@ -305,8 +316,8 @@ export default function ProofreadEditor({
   return (
     <div className="h-full flex flex-col bg-app-bg text-text-primary overflow-hidden relative">
       {/* 顶部工具栏 */}
-      <div className="flex items-center justify-between px-6 py-4 bg-surface/50 border-b border-border-subtle flex-shrink-0 backdrop-blur-md">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-4 sm:px-6 bg-surface/50 border-b border-border-subtle flex-shrink-0 backdrop-blur-md">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           <Button
             variant="secondary"
             onClick={handleBackClick}
@@ -315,11 +326,11 @@ export default function ProofreadEditor({
             <ArrowLeft className="w-4 h-4" />
             {t('proofread.editor.backToList')}
           </Button>
-          <div className="text-sm font-medium text-text-secondary truncate max-w-[320px]" title={file.fileName}>
+          <div className="text-sm font-medium text-text-secondary truncate max-w-[min(320px,calc(100vw-4rem))]" title={file.fileName}>
             {file.fileName}
           </div>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <Button
             variant="secondary"
             onClick={handleSave}
@@ -329,80 +340,16 @@ export default function ProofreadEditor({
             {t('proofread.editor.saveChanges')}
           </Button>
           
-          <div className="relative group">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => handleExportClick('srt')}
-            >
-              <Download className="w-4 h-4 text-text-secondary" />
-              {t('proofread.editor.exportSubtitle')}
-            </Button>
-            <div className="absolute right-0 mt-1.5 hidden w-32 group-hover:block overflow-hidden rounded-xl border border-border-default bg-surface shadow-lg z-50 backdrop-blur-md">
-              <button
-                type="button"
-                onClick={() => handleExportClick('srt')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.formatSrt')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleExportClick('vtt')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.formatVtt')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleExportClick('ass')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.formatAss')}
-              </button>
-            </div>
-          </div>
-
-          <div className="relative group">
-            <Button
-              variant="secondary"
-              size="sm"
-            >
-              <Languages className="w-4 h-4 text-text-secondary" />
-              {t('proofread.editor.openccConvert')}
-            </Button>
-            <div className="absolute right-0 mt-1.5 hidden group-hover:block bg-surface border border-border-default rounded-xl shadow-lg z-50 w-36 overflow-hidden backdrop-blur-md">
-              <button
-                type="button"
-                onClick={() => handleOpenccConvert('s2t')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.openccS2t')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenccConvert('t2s')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.openccT2s')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenccConvert('s2twp')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.openccS2twp')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenccConvert('s2hk')}
-                className="w-full text-left px-4 py-2.5 text-xs hover:bg-surface-raised text-text-primary transition-colors cursor-pointer font-medium"
-              >
-                {t('proofread.editor.openccS2hk')}
-              </button>
-            </div>
-          </div>
-
+          <Button variant="secondary" size="sm" onClick={() => void handleExportClick('srt')}><Download size={16} />{t('proofread.editor.exportSubtitle')}</Button>
+          <ActionMenu label={t('proofread.editor.exportFormats')} items={['srt', 'vtt', 'ass', 'lrc', 'txt'].map((format) => ({
+            label: format.toUpperCase(), action: () => void handleExportClick(format as 'srt' | 'vtt' | 'ass' | 'lrc' | 'txt'),
+          }))}><ChevronDown size={16} /></ActionMenu>
+          <ActionMenu label={t('proofread.editor.openccConvert')} items={[
+            { label: t('proofread.editor.openccS2t'), action: () => void handleOpenccConvert('s2t') },
+            { label: t('proofread.editor.openccT2s'), action: () => void handleOpenccConvert('t2s') },
+            { label: t('proofread.editor.openccS2twp'), action: () => void handleOpenccConvert('s2twp') },
+            { label: t('proofread.editor.openccS2hk'), action: () => void handleOpenccConvert('s2hk') },
+          ]}><Languages size={16} />{t('proofread.editor.openccConvert')}</ActionMenu>
           <Button
             variant="primary"
             onClick={handleMarkCompleteClick}
@@ -433,12 +380,13 @@ export default function ProofreadEditor({
         onTriggerHandled={handleTriggerHandled}
       />
 
+      {saveBackups.length > 0 && <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs text-text-secondary"><span>{t('proofread.standalone.backupReady')}</span><Button variant="ghost" size="sm" onClick={() => { void revealItemInDir(saveBackups[0]).catch((error) => showToast('error', String(error))); }}>{t('proofread.standalone.openBackup')}</Button></div>}
       {/* 主内容区 */}
       <QualityPanel subtitles={mergedSubtitles} sourceLanguage={file.sourceLanguage || 'auto'} targetLanguage={file.targetLanguage || 'zh'} bilingual={shouldShowTranslation} onChange={updateSubtitles}
         onLocate={(index, play) => { handleSubtitleClick(index); if (play && playerRef.current) { playerRef.current.currentTime = Math.max(0, (mergedSubtitles[index]?.startTimeInSeconds || 0) - 0.5); void playerRef.current.play().catch(() => undefined); } }}
         onSplit={handleSplitClick} onMerge={(index) => handleMergeSubtitles(index, index + 2)} />
       <div
-        className={`grid gap-4 flex-1 overflow-hidden min-h-0 p-6 ${
+        className={`grid gap-4 flex-1 overflow-hidden min-h-0 p-3 sm:p-6 ${
           hasVideo ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'
         }`}
       >
@@ -452,6 +400,7 @@ export default function ProofreadEditor({
               isPlaying={isPlaying}
               playbackRate={playbackRate}
               togglePlay={togglePlay}
+              handlePlaybackState={handlePlaybackState}
               goToNextSubtitle={goToNextSubtitle}
               goToPreviousSubtitle={goToPreviousSubtitle}
               seekVideo={seekVideo}
@@ -489,6 +438,8 @@ export default function ProofreadEditor({
           <SubtitleList
             mergedSubtitles={mergedSubtitles}
             currentSubtitleIndex={currentSubtitleIndex}
+            isPlaying={hasVideo && isPlaying}
+            playbackTime={currentTime}
             shouldShowTranslation={shouldShowTranslation}
             handleSubtitleClick={handleSubtitleClick}
             handleSubtitleChange={handleSubtitleChange}

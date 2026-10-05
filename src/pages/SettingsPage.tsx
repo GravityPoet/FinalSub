@@ -1,3 +1,4 @@
+import { recoverSettings } from "../lib/tauri";
 import { useEffect, useRef, useState } from "react";
 import { Settings as SettingsIcon, Save, RotateCcw, Download, Upload, FolderOpen, AlertCircle, LockKeyhole, Palette, Sun, Moon, Laptop, RefreshCw, BatteryCharging } from "lucide-react";
 import { type TranslationKey, useI18n } from "../lib/i18n";
@@ -134,14 +135,18 @@ export default function SettingsPage() {
   const [updateProgress, setUpdateProgress] = useState<AppUpdateEvent | null>(null);
   const [powerSaveStatus, setPowerSaveStatus] = useState<PowerSaveStatus | null>(null);
 
+  const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => {
+    let active = true;
+    setLoadError("");
     Promise.all([getSettings(), getStorageLayout()])
       .then(([nextSettings, nextStorageLayout]) => {
-        setSettings(nextSettings);
-        setStorageLayout(nextStorageLayout);
+        if (active) { setSettings(nextSettings); setStorageLayout(nextStorageLayout); }
       })
-      .catch(console.error);
-  }, []);
+      .catch((error) => { if (active) setLoadError(String(error)); });
+    return () => { active = false; };
+  }, [loadAttempt]);
 
   const refreshStorageLayout = () => {
     getStorageLayout().then(setStorageLayout).catch(console.error);
@@ -363,7 +368,15 @@ export default function SettingsPage() {
     return (
       <div className="page-shell space-y-6">
         <h2 className="font-display text-display font-bold tracking-tight text-text-primary">{t("settings.title")}</h2>
-        <p className="text-text-tertiary text-sm">{t("home.loading")}</p>
+        {loadError ? <div role="alert" className="space-y-3 rounded-xl border border-danger/20 bg-danger/10 p-4">
+          <p>{t("settings.loadFailed")}</p><p className="break-words text-sm text-danger">{loadError}</p>
+          <div className="flex flex-wrap gap-2"><Button disabled={saving} onClick={() => setLoadAttempt((value) => value + 1)}>{t("common.retry")}</Button><Button disabled={saving} onClick={async () => {
+            setSaving(true);
+            try { const recovered = await recoverSettings(); setSettings(recovered.settings); setLoadError(''); refreshStorageLayout(); showMsg('ok', recovered.backup_path ? t('settings.recoveredBackup', { path: recovered.backup_path }) : t('settings.saved')); window.dispatchEvent(new CustomEvent('settings-changed')); }
+            catch (error) { setLoadError(String(error)); }
+            finally { setSaving(false); }
+          }}>{t('settings.recoverDefaults')}</Button></div>
+        </div> : <p className="text-text-tertiary text-sm">{t("home.loading")}</p>}
       </div>
     );
   }

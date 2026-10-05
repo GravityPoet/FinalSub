@@ -22,6 +22,110 @@ const PARAKEET_MLX_REPO_DIR: &str = "models--mlx-community--parakeet-tdt-0.6b-v2
 const PARAKEET_MLX_MIN_WEIGHT_BYTES: u64 = 1_000_000_000;
 const PARAKEET_MLX_PYTHON: &str = "3.11";
 const PARAKEET_MLX_PACKAGE: &str = "parakeet-mlx==0.5.2";
+static MLX_RUNTIME_READY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+#[derive(serde::Serialize)]
+pub struct ParakeetRuntimeInfo {
+    pub kind: &'static str,
+    pub ready: bool,
+    pub preparing: bool,
+}
+
+fn runtime_attempts(online: bool) -> Vec<(bool, Option<&'static str>)> {
+    let mut attempts = vec![(true, None)];
+    if !has_user_index_override() {
+        attempts.extend(
+            PARAKEET_MLX_MIRROR_INDEXES
+                .iter()
+                .map(|mirror| (true, Some(*mirror))),
+        );
+    }
+    if online {
+        attempts.push((false, None));
+        if !has_user_index_override() {
+            attempts.extend(
+                PARAKEET_MLX_MIRROR_INDEXES
+                    .iter()
+                    .map(|mirror| (false, Some(*mirror))),
+            );
+        }
+    }
+    attempts
+}
+
+async fn check_runtime_attempt(
+    offline: bool,
+    index: Option<&str>,
+    cancel: Option<tokio::sync::watch::Receiver<bool>>,
+) -> bool {
+    let uv = default_uv_bin();
+    if !command_available(&uv) {
+        return false;
+    }
+    let mut command = tokio::process::Command::new(uv);
+    command.args(["run", "--no-project"]);
+    if offline {
+        command.arg("--offline");
+    }
+    if let Some(index) = index {
+        command.args(["--default-index", index]);
+    }
+    command.args(["--python", PARAKEET_MLX_PYTHON, "--with", PARAKEET_MLX_PACKAGE, "python", "-c", "from importlib.metadata import version; import parakeet_mlx; assert version('parakeet-mlx') == '0.5.2'"])
+        .stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let Ok(child) = command.spawn() else {
+        return false;
+    };
+    // Cancelling or timing out drops the process through the existing worker
+    // control path; no unbounded installer can keep the UI waiting.
+    matches!(tokio::time::timeout(std::time::Duration::from_secs(if offline { 15 } else { 180 }), wait_for_process(child, cancel)).await, Ok(Ok(output)) if output.status.success())
+}
+
+pub async fn runtime_info(models_dir: &Path) -> ParakeetRuntimeInfo {
+    let native = ParakeetNativeEngine::is_model_installed_at(&models_dir.join(PARAKEET_MODEL_ID));
+    if !mlx_runtime_supported() || !is_mlx_model_installed_at(models_dir) {
+        return ParakeetRuntimeInfo {
+            kind: "native",
+            ready: native,
+            preparing: false,
+        };
+    }
+    for (offline, index) in runtime_attempts(false) {
+        if check_runtime_attempt(offline, index, None).await {
+            MLX_RUNTIME_READY.store(1, std::sync::atomic::Ordering::Relaxed);
+            return ParakeetRuntimeInfo {
+                kind: "mlx",
+                ready: true,
+                preparing: false,
+            };
+        }
+    }
+    MLX_RUNTIME_READY.store(2, std::sync::atomic::Ordering::Relaxed);
+    ParakeetRuntimeInfo {
+        kind: if native { "native" } else { "mlx" },
+        ready: native,
+        preparing: false,
+    }
+}
+
+pub async fn prepare_runtime(cancel: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+    if !mlx_runtime_supported() || !command_available(&default_uv_bin()) {
+        return Err(FinalSubError::Validation(
+            "Parakeet MLX 需要 Apple Silicon 和 uv；也可下载无需 Python 的 Native 模型".into(),
+        ));
+    }
+    for (offline, index) in runtime_attempts(true) {
+        if *cancel.borrow() {
+            return Err(FinalSubError::Validation("运行环境准备已取消".into()));
+        }
+        if check_runtime_attempt(offline, index, Some(cancel.clone())).await {
+            MLX_RUNTIME_READY.store(1, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
+        }
+    }
+    Err(FinalSubError::Validation(
+        "运行环境准备失败，请检查网络后重试。原有模型和配置已保留".into(),
+    ))
+}
 
 /// MLX 仅在 Apple Silicon 上可用；Native sherpa-onnx 仍作为跨平台兜底。
 pub fn mlx_runtime_supported() -> bool {
@@ -348,17 +452,7 @@ impl AsrEngine for ParakeetMlxEngine {
         // 离线优先 + 镜像兜底：先试本地 uv 缓存，失败再联网，联网失败再换镜像。
         // CLI flag（--offline / --default-index）优先于 env，用户已配
         // UV_DEFAULT_INDEX / UV_INDEX_URL 等时不再自动换源。
-        let allow_mirror = !has_user_index_override();
-        let mut attempts: Vec<(bool, Option<&str>)> = vec![(true, None)];
-        if allow_mirror {
-            attempts.push((true, Some(PARAKEET_MLX_MIRROR_INDEXES[0])));
-        }
-        attempts.push((false, None));
-        if allow_mirror {
-            for mirror in PARAKEET_MLX_MIRROR_INDEXES {
-                attempts.push((false, Some(mirror)));
-            }
-        }
+        let attempts = runtime_attempts(true);
 
         let mut last_output: Option<std::process::Output> = None;
         let mut last_attempt_desc = String::new();
@@ -387,7 +481,7 @@ impl AsrEngine for ParakeetMlxEngine {
                 .ok();
 
             let mut command = tokio::process::Command::new(&self.uv_bin);
-            command.arg("run");
+            command.args(["run", "--no-project"]);
             if *offline {
                 command.arg("--offline");
             }
@@ -461,7 +555,7 @@ impl AsrEngine for ParakeetMlxEngine {
                     || detail.to_lowercase().contains("dns")
                     || detail.to_lowercase().contains("lookup")
                 {
-                    message.push_str("（当前网络无法访问 pypi.org，已自动尝试离线缓存与国内镜像仍失败。请检查 DNS/代理，或设置 UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple 后重试；也可先在模型管理下载 Native 兜底模型）");
+                    message.push_str("（当前网络无法访问 pypi.org，已自动尝试离线缓存与国内镜像仍失败。请在模型管理重试准备运行环境，或下载无需 Python 的 Native 兜底模型）");
                 }
                 return Err(FinalSubError::Validation(message));
             }
@@ -566,7 +660,11 @@ impl ParakeetEngine {
         let native_available =
             ParakeetNativeEngine::is_model_installed_at(&models_dir.join(PARAKEET_MODEL_ID));
         let mlx_available = mlx_runtime_supported() && is_mlx_model_installed_at(&models_dir);
-        if mlx_available && (mlx_script.is_some() || !native_available) {
+        let runtime_missing = MLX_RUNTIME_READY.load(std::sync::atomic::Ordering::Relaxed) == 2;
+        if mlx_available
+            && (mlx_script.is_some() || !native_available)
+            && (!native_available || !runtime_missing)
+        {
             return Self::Mlx(ParakeetMlxEngine::new(
                 default_uv_bin(),
                 mlx_script

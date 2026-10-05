@@ -1,3 +1,4 @@
+import { getParakeetRuntime, prepareParakeetRuntime, cancelParakeetRuntime, type ParakeetRuntimeInfo } from "../lib/tauri";
 import { useEffect, useState } from "react";
 import { useI18n } from "../lib/i18n";
 import {
@@ -138,8 +139,18 @@ export default function ModelsPage() {
     return labels[engineId] ?? engineId;
   };
 
+  const [parakeetRuntime, setParakeetRuntime] = useState<ParakeetRuntimeInfo | null>(null);
+  const refreshRuntime = () => { void getParakeetRuntime().then(setParakeetRuntime).catch((reason) => setMessage({ type: 'err', text: String(reason) })); };
+  useEffect(() => { refreshRuntime(); const subscription = listen('parakeet-runtime-updated', refreshRuntime); return () => { void subscription.then((stop) => stop()); }; }, []);
+  useEffect(() => { if (!parakeetRuntime?.preparing) return; const timer = window.setInterval(refreshRuntime, 1500); return () => window.clearInterval(timer); }, [parakeetRuntime?.preparing]);
+  const prepareRuntime = async () => {
+    setParakeetRuntime({ kind: 'mlx', ready: false, preparing: true });
+    try { setParakeetRuntime(await prepareParakeetRuntime()); setMessage({ type: 'ok', text: t('models.runtimeReady') }); }
+    catch (reason) { setMessage({ type: 'err', text: String(reason) }); refreshRuntime(); }
+  };
   const refresh = () => {
     setLoading(true);
+    refreshRuntime();
     Promise.all([scanModels(), getSettings(), getStorageLayout()])
       .then(([nextModels, settings, nextStorageLayout]) => {
         setModels(nextModels);
@@ -512,6 +523,9 @@ export default function ModelsPage() {
                     </div>
                     <div className="flex flex-col items-start justify-between gap-3 lg:items-end lg:pt-1">
                       <StatusBadge status={model.status} downloadInfo={downloadInfo} />
+                      {model.engine_id === 'parakeet-mlx' && model.status === 'downloaded' && <div className="space-y-2 text-xs text-text-secondary" role="status"><p>{!parakeetRuntime ? t('models.runtimeChecking') : parakeetRuntime.ready ? t(parakeetRuntime.kind === 'native' ? 'models.nativeRuntimeReady' : 'models.runtimeReady') : t('models.runtimeNeedsSetup')}</p>
+                        {!parakeetRuntime?.ready && <><p className="max-w-xs text-text-tertiary">{t('models.runtimeHint')}</p><Button size="sm" onClick={() => void prepareRuntime()} disabled={!parakeetRuntime || parakeetRuntime.preparing}>{t(parakeetRuntime?.preparing ? 'models.runtimePreparing' : 'models.prepareRuntime')}</Button>{parakeetRuntime?.preparing && <Button size="sm" onClick={() => { void cancelParakeetRuntime().catch((reason) => setMessage({ type: 'err', text: String(reason) })); }}>{t('common.cancel')}</Button>}</>}
+                      </div>}
                       <div className="flex w-full flex-wrap items-center justify-start gap-2 lg:justify-end">
                         {model.size_mb && (
                           <span className="mr-1.5 shrink-0 font-mono text-sm text-text-tertiary">{model.size_mb} MB</span>
