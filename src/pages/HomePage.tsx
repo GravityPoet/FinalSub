@@ -1,4 +1,4 @@
-import { getParakeetRuntime, listen, type ParakeetRuntimeInfo } from "../lib/tauri";
+import { getParakeetRuntime, listen, prepareParakeetRuntime, type ParakeetRuntimeInfo } from "../lib/tauri";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -700,6 +700,18 @@ export default function HomePage() {
   const modelReady = !taskNeedsAsr || (runtimeReady && Boolean(
     activeModel && (engineId === "custom-command" || activeModel.status === "downloaded")
   ));
+  const runtimeNeedsSetup = Boolean(
+    taskNeedsAsr
+      && engineId === "parakeet-mlx"
+      && activeModel?.status === "downloaded"
+      && parakeetRuntime
+      && !parakeetRuntime.ready,
+  );
+  const runtimeOnlyBlock = runtimeNeedsSetup
+    && bootstrapState === "ready"
+    && sourceLanguageSupported
+    && pipelineReady
+    && !inputTypeMismatch;
   const canStartTask = bootstrapState === "ready"
     && (!taskNeedsAsr || sourceLanguageSupported)
     && modelReady
@@ -734,7 +746,7 @@ export default function HomePage() {
   const missingFileHint = !selectedPath
     ? (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia"))
     : "";
-  const modelPrerequisiteHint = selectedPath && !modelReady ? t(engineId === 'parakeet-mlx' && activeModel?.status === 'downloaded' ? (parakeetRuntime ? 'models.runtimeNeedsSetup' : 'models.runtimeChecking') : 'home.prereqModel') : '';
+  const modelPrerequisiteHint = selectedPath && !modelReady ? t(engineId === 'parakeet-mlx' && activeModel?.status === 'downloaded' ? (parakeetRuntime?.preparing ? 'models.runtimePreparing' : parakeetRuntime ? 'models.runtimeNeedsSetup' : 'models.runtimeChecking') : 'home.prereqModel') : '';
   const pipelinePrerequisiteHint = !composeSourceReady
     // 元数据探测失败时给出真实原因，而不是误导性的“需要有画面的源”。
     ? (mediaMetadataError
@@ -866,6 +878,24 @@ export default function HomePage() {
     });
   };
 
+  const ensureParakeetRuntime = useCallback(async (): Promise<boolean> => {
+    if (!runtimeNeedsSetup) return true;
+    if (parakeetRuntime?.preparing) return false;
+    setParakeetRuntime({ kind: "mlx", ready: false, preparing: true });
+    try {
+      const runtime = await prepareParakeetRuntime();
+      setParakeetRuntime(runtime);
+      if (!runtime.ready) {
+        setError(t("models.runtimeNeedsSetup"));
+      }
+      return runtime.ready;
+    } catch (reason) {
+      setParakeetRuntime({ kind: "mlx", ready: false, preparing: false });
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    }
+  }, [parakeetRuntime?.preparing, runtimeNeedsSetup, t]);
+
   const handleCreate = async () => {
     if (!selectedPath) {
       setError(missingFileHint || (taskType === "translate-only" ? t("home.prereqSub") : t("home.prereqMedia")));
@@ -877,7 +907,7 @@ export default function HomePage() {
       revealTaskIssue("task-source-input");
       return;
     }
-    if (!canStartTask) {
+    if (!canStartTask && !runtimeOnlyBlock) {
       setError(modelPrerequisiteHint || pipelinePrerequisiteHint || t("home.prereqModel"));
       revealTaskIssue(modelPrerequisiteHint ? "task-recognition-core" : "task-delivery-options");
       return;
@@ -885,6 +915,10 @@ export default function HomePage() {
     setCreating(true);
     setError("");
     try {
+      if (!canStartTask && !(await ensureParakeetRuntime())) {
+        revealTaskIssue("task-recognition-core");
+        return;
+      }
       const requests = selectedPaths.map((mediaPath, index) => {
         const resolvedOutputName = outputName.trim()
           ? outputName.trim().split("{index}").join(String(index + 1).padStart(2, "0"))
@@ -1799,13 +1833,13 @@ export default function HomePage() {
                         {engineId === "cloud-asr" ? t("home.coreCloud") : t("home.coreLocal")}
                       </Badge>
                       {activeModel && (
-                        <span className={`inline-flex items-center gap-1 text-xs font-semibold ${activeModel.status === "downloaded" || engineId === "custom-command" ? "text-success" : "text-warning"}`}>
-                          {activeModel.status === "downloaded" || engineId === "custom-command" ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
-                          {activeModel.status === "downloaded" || engineId === "custom-command" ? t("home.coreReady") : t("home.coreNeedsSetup")}
+                        <span className={`inline-flex items-center gap-1 text-xs font-semibold ${modelReady || engineId === "custom-command" ? "text-success" : "text-warning"}`}>
+                          {modelReady || engineId === "custom-command" ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+                          {modelReady || engineId === "custom-command" ? t("home.coreReady") : t("home.coreNeedsSetup")}
                         </span>
                       )}
                     </div>
-                    {activeModel && activeModel.status !== "downloaded" && engineId !== "custom-command" && (
+                    {activeModel && (!modelReady || activeModel.status !== "downloaded") && engineId !== "custom-command" && (
                       <button
                         type="button"
                         onClick={() => navigate("/models")}
