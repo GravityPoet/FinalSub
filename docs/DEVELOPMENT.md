@@ -11,7 +11,7 @@
 生成 Tauri 全平台图标时执行：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/app-icon-source.png
+cd "$(git rev-parse --show-toplevel)" && npx tauri icon src-tauri/icons/app-icon-source.png
 ```
 
 ## 当前发布边界（更新于 2026-07-22）
@@ -21,9 +21,9 @@ cd $HOME/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/app-icon-sour
 ## 验收命令
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run build
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
-cd $HOME/Tools/AI-tools/FinalSub && npm run build:universal
+cd "$(git rev-parse --show-toplevel)" && npm run build
+cd "$(git rev-parse --show-toplevel)/src-tauri" && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
+cd "$(git rev-parse --show-toplevel)" && npm run build:universal
 ```
 
 `npm run build:universal` 会在构建前清掉旧残留，生成并验签 arm64 + x86_64 Universal 应用与 DMG，再在成功、失败或可捕获中断后真实删除仓库 `target` 中的构建 `.app`，最终只保留 DMG。构建期间 `target/.metadata_never_index` 仅作为第二道防线，避免临时 App 被 Spotlight 收录；即使上次进程被强制终止，下一次构建也会先物理清场。需要构建后直接覆盖本机唯一应用时使用 `npm run build:install:universal`；它会安装到 `/Applications/FinalSub.app`，再清理全部构建 `.app`。

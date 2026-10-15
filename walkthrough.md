@@ -41,7 +41,7 @@ ASR (语音转文字) 运行时已完成全部的自包含化、通用包打包�
 
 ### 3.1 写死路径扫描
 ```bash
-$ rg -n '$HOME|/opt/homebrew/bin/whisper|/opt/homebrew/Cellar' src-tauri/src/
+$ rg -n '<USER_PATH>|/opt/homebrew/bin/whisper|/opt/homebrew/Cellar' src-tauri/src/
 # (无输出)
 ```
 > ⚠️ 复核修正：该正则未覆盖 `/opt/homebrew/bin/uv`，存在假阴性。全仓扫描见第 6 节，残留项已修复。
@@ -160,10 +160,10 @@ works perfectly.
     *   **Intel 架构兼容**：由于采用了 Universal macOS 二进制文件架构，在 x86_64 平台上，由于缺乏 Apple Silicon GPU，sidecar 会自动无 panic 优雅地安全退避（Fallback）到 CPU 或者是 Rosetta 加速运行。
 *   **WP12: 消除前端原生 alert/confirm 体验债与收敛 Tauri 权限**
     *   **弹窗重构**：经全量代码扫描，前端代码已全数迁移为基于 React 状态和 vanilla CSS 渲染的高颜值、非阻塞自定义弹窗 Dialog（如 `ProofreadEditor.tsx` 中的 `showUnsavedDialog` 弹窗），彻底消除了原生的 `window.alert()` 和 `window.confirm()` 带来的阻塞式体验债。
-    *   **权限收敛**：由于前端已无阻塞式弹窗，我们收敛了 [default.json](file://$HOME/Tools/AI-tools/FinalSub/src-tauri/capabilities/default.json) 里的授权配置文件权限，完全剔除了 dialog 插件的 `allow-alert` 与 `allow-confirm` 授权，仅保留必要的 `dialog:allow-open` 与 `dialog:allow-save`，在物理和系统架构层极力收缩了安全边界。
+    *   **权限收敛**：由于前端已无阻塞式弹窗，我们收敛了 [default.json](./src-tauri/capabilities/default.json) 里的授权配置文件权限，完全剔除了 dialog 插件的 `allow-alert` 与 `allow-confirm` 授权，仅保留必要的 `dialog:allow-open` 与 `dialog:allow-save`，在物理和系统架构层极力收缩了安全边界。
 *   **WP13: macOS 生产包 Hardened Runtime 代码签名与公证配置**
-    *   **添加 Entitlements**：我们在 `src-tauri` 目录下新建了 [Entitlements.plist](file://$HOME/Tools/AI-tools/FinalSub/src-tauri/Entitlements.plist) 授权配置文件，显式配置了 Hardened Runtime 必备的豁免项：允许 JIT (`com.apple.security.cs.allow-jit`)、允许未签名内存 (`com.apple.security.cs.allow-unsigned-executable-memory`)、允许 dyld 环境变量 (`com.apple.security.cs.allow-dyld-environment-variables`) 以及禁用库验证 (`com.apple.security.cs.disable-library-validation`)，解决了 sidecars 与 外部 Python 转录环境在公证后的加载限制。
-    *   **配置 Tauri 捆绑参数**：在 [tauri.conf.json](file://$HOME/Tools/AI-tools/FinalSub/src-tauri/tauri.conf.json) 中，我们为 macOS 捆绑包显式配置了 `"hardenedRuntime": true` 与 `"entitlements": "Entitlements.plist"`，并将 `"signingIdentity"` 配置为 `null`（使用默认的钥匙串证书签名或者通过环境变量 `APPLE_SIGNING_IDENTITY` 统一签发），为生产包公证（Notarization）奠定了完整的架构支撑。
+    *   **添加 Entitlements**：我们在 `src-tauri` 目录下新建了 [Entitlements.plist](./src-tauri/Entitlements.plist) 授权配置文件，显式配置了 Hardened Runtime 必备的豁免项：允许 JIT (`com.apple.security.cs.allow-jit`)、允许未签名内存 (`com.apple.security.cs.allow-unsigned-executable-memory`)、允许 dyld 环境变量 (`com.apple.security.cs.allow-dyld-environment-variables`) 以及禁用库验证 (`com.apple.security.cs.disable-library-validation`)，解决了 sidecars 与 外部 Python 转录环境在公证后的加载限制。
+    *   **配置 Tauri 捆绑参数**：在 [tauri.conf.json](./src-tauri/tauri.conf.json) 中，我们为 macOS 捆绑包显式配置了 `"hardenedRuntime": true` 与 `"entitlements": "Entitlements.plist"`，并将 `"signingIdentity"` 配置为 `null`（使用默认的钥匙串证书签名或者通过环境变量 `APPLE_SIGNING_IDENTITY` 统一签发），为生产包公证（Notarization）奠定了完整的架构支撑。
 
 ---
 
@@ -196,7 +196,7 @@ dist/assets/index-CIpZpJJg.js   476.00 kB
 ### 2.3 阶段三 whisper-cli 实跑日志验证 (GPU 加速)
 在 M4 Mac 上，whisper-cli 运行 `ggml-tiny.bin` 实跑输出中抓取的 GPU 初始化与 System Info 日志，证实了 Metal 加速在真机下的完美调用：
 ```text
-whisper_init_from_file_with_params_no_state: loading model from '$HOME/Tools/Local-LLM/whisper-models/ggml-tiny.bin'
+whisper_init_from_file_with_params_no_state: loading model from '$LOCAL_LLM_ROOT/whisper-models/ggml-tiny.bin'
 whisper_init_with_params_no_state: use gpu    = 1
 whisper_init_with_params_no_state: flash attn = 1
 whisper_init_with_params_no_state: gpu_device = 0

@@ -208,7 +208,7 @@ SmartSub 的 `faster-whisper` 没有作为独立 Python/CTranslate2 运行时复
 - 签名 updater：使用一次性测试密钥真实生成 `.app.tar.gz` 与 `.sig`，验证 release 配置、官方签名器及产物链路后已物理清理测试密钥、生成配置和临时更新包；生产根密钥仍保持 P0 门控。
 - `/Applications/FinalSub.app`：版本 1.0.10，bundle id `com.gravitypoet.finalsub`，`x86_64 arm64`、deep strict 签名有效，真实启动路径与安装路径一致；文件系统只保留这一份产品 App。
 - 本轮安装前备份：`~/Library/Application Support/FinalSub/Backups/20260719-163534/FinalSub.app.zip`，压缩数据与解压后的回滚应用深度签名均已验证。
-- 真实应用 UI：`1312439` 对应 Universal 构建已安装并从 `/Applications/FinalSub.app` 真实启动；CoreGraphics 读到 1200×770 的可见 FinalSub 窗口。模型管理继续把 `$HOME/Tools/Local-LLM/parakeet-models/parakeet-tdt-0.6b-v2` 判定为本地可用，不触发重复下载；生产前端已包含“模型与在线服务”分区和“配音工作台”路由。
+- 真实应用 UI：`1312439` 对应 Universal 构建已安装并从 `/Applications/FinalSub.app` 真实启动；CoreGraphics 读到 1200×770 的可见 FinalSub 窗口。模型管理继续把 `$LOCAL_LLM_ROOT/parakeet-models/parakeet-tdt-0.6b-v2` 判定为本地可用，不触发重复下载；生产前端已包含“模型与在线服务”分区和“配音工作台”路由。
 
 ## 13. 仍不能宣称完成的事项
 

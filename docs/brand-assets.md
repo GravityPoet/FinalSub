@@ -2,9 +2,9 @@
 
 ## App 图标
 
-唯一母版：`$HOME/Tools/AI-tools/FinalSub/src-tauri/icons/app-icon-source.png`
+唯一母版：`<repo-root>/src-tauri/icons/app-icon-source.png`
 
-用户指定源图：`$HOME/Downloads/ChatGPT Image 2026年6月19日 04_36_58.png`
+用户指定源图：`<source-image.png>`
 
 当前规则：
 
@@ -14,12 +14,12 @@
 生成命令：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npx tauri icon src-tauri/icons/app-icon-source.png
+cd "$(git rev-parse --show-toplevel)" && npx tauri icon src-tauri/icons/app-icon-source.png
 ```
 
 Tauri 平台图标产物（由母版经 `npx tauri icon` 生成于 `src-tauri/icons/`）：
 
 - macOS：`icon.icns`
 - Windows：`icon.ico`
-- 通用 PNG：`icon.png`、`32x32.png`、`64x64.png`、`128x128.png`、`128x128@2x.png`
+- 通用 PNG：`icon.png`、`32x32.png`、`64x64.png`、`128x128.png`，以及对应的 Retina 版本
 - 移动端：`android/`、`ios/`、`Square*Logo.png`、`StoreLogo.png`

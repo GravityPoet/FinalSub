@@ -105,14 +105,14 @@ ZipVoice 额外要求：
 ## 最小验收
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run build
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib core::tts && cargo clippy --all-targets --all-features -- -D warnings
+cd "$(git rev-parse --show-toplevel)" && npm run build
+cd "$(git rev-parse --show-toplevel)/src-tauri" && cargo fmt --check && cargo test --lib core::tts && cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 受管下载的官方资产布局验收（不改变默认测试的离线性质）可用真实 Release 工件显式运行：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri
+cd "$(git rev-parse --show-toplevel)/src-tauri"
 FINALSUB_TTS_VITS_ARCHIVE=/path/to/vits.tar.bz2 \
   cargo test --lib core::tts::download::tests::official_vits_archive_installs_with_real_release_layout -- --ignored
 FINALSUB_TTS_ZIPVOICE_ARCHIVE=/path/to/zipvoice.tar.bz2 \
@@ -123,7 +123,7 @@ FINALSUB_TTS_VOCODER=/path/to/vocos_24khz.onnx \
 Edge TTS 的真实在线验收（会访问 Microsoft Edge Read Aloud 试用通道，并需要本机 FFmpeg）：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub
+cd "$(git rev-parse --show-toplevel)"
 FINALSUB_EDGE_FFMPEG="$(command -v ffmpeg)" \
   cargo test --manifest-path src-tauri/Cargo.toml --lib \
   core::tts::providers::tests::edge_provider_real_synthesis_writes_pcm_wav -- --ignored

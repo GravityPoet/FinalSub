@@ -80,10 +80,10 @@ WINDOWS_TIMESTAMP_URL         # 证书服务商提供的 RFC 3161 时间戳地�
 ## 通用发布前检查
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && git status --short --branch
-cd $HOME/Tools/AI-tools/FinalSub && git remote -v
-cd $HOME/Tools/AI-tools/FinalSub && git tag --sort=-version:refname | head -20
-cd $HOME/Tools/AI-tools/FinalSub && node -v && npm -v && cargo --version && rustc --version
+cd "$(git rev-parse --show-toplevel)" && git status --short --branch
+cd "$(git rev-parse --show-toplevel)" && git remote -v
+cd "$(git rev-parse --show-toplevel)" && git tag --sort=-version:refname | head -20
+cd "$(git rev-parse --show-toplevel)" && node -v && npm -v && cargo --version && rustc --version
 ```
 
 确认点：
@@ -98,22 +98,22 @@ cd $HOME/Tools/AI-tools/FinalSub && node -v && npm -v && cargo --version && rust
 ### Install
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm ci
+cd "$(git rev-parse --show-toplevel)" && npm ci
 ```
 
 ### Verify
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run build
-cd $HOME/Tools/AI-tools/FinalSub && npm run test:release-preflight
-cd $HOME/Tools/AI-tools/FinalSub && npm run test:windows-signing-config
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
+cd "$(git rev-parse --show-toplevel)" && npm run build
+cd "$(git rev-parse --show-toplevel)" && npm run test:release-preflight
+cd "$(git rev-parse --show-toplevel)" && npm run test:windows-signing-config
+cd "$(git rev-parse --show-toplevel)/src-tauri" && cargo fmt --check && cargo test --lib && cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ### Checksums
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && shasum -a 256 <artifact> > <artifact>.sha256
+cd "$(git rev-parse --show-toplevel)" && shasum -a 256 <artifact> > <artifact>.sha256
 ```
 
 ## Windows / Linux 非公开安装包验证
@@ -129,8 +129,8 @@ cd $HOME/Tools/AI-tools/FinalSub && shasum -a 256 <artifact> > <artifact>.sha256
 触发和观察：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && gh workflow run platform-validation.yml --ref main
-cd $HOME/Tools/AI-tools/FinalSub && gh run list --workflow "Platform Package Validation" --limit 5
+cd "$(git rev-parse --show-toplevel)" && gh workflow run platform-validation.yml --ref main
+cd "$(git rev-parse --show-toplevel)" && gh run list --workflow "Platform Package Validation" --limit 5
 ```
 
 验收范围：
@@ -152,9 +152,9 @@ cd $HOME/Tools/AI-tools/FinalSub && gh run list --workflow "Platform Package Val
 ### 发布前检查
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && git status --short --branch
-cd $HOME/Tools/AI-tools/FinalSub && node -v && npm -v && cargo --version && rustc --version
-cd $HOME/Tools/AI-tools/FinalSub && plutil -p src-tauri/tauri.conf.json | sed -n '1,120p'
+cd "$(git rev-parse --show-toplevel)" && git status --short --branch
+cd "$(git rev-parse --show-toplevel)" && node -v && npm -v && cargo --version && rustc --version
+cd "$(git rev-parse --show-toplevel)" && plutil -p src-tauri/tauri.conf.json | sed -n '1,120p'
 ```
 
 确认点：
@@ -168,7 +168,7 @@ cd $HOME/Tools/AI-tools/FinalSub && plutil -p src-tauri/tauri.conf.json | sed -n
 ### 标准打包流程
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run build:universal
+cd "$(git rev-parse --show-toplevel)" && npm run build:universal
 ```
 
 基础产物：
@@ -180,8 +180,8 @@ Tauri 生成的 `.app` 是临时打包输入：脚本在构建前先清旧残留
 基础验收（完整 App 内容从 DMG 挂载后检查）：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && hdiutil verify "src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_<version>_universal.dmg"
-cd $HOME/Tools/AI-tools/FinalSub && test -z "$(find src-tauri/target -type d -path '*/bundle/macos/FinalSub.app' -prune -print)"
+cd "$(git rev-parse --show-toplevel)" && hdiutil verify "src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_<version>_universal.dmg"
+cd "$(git rev-parse --show-toplevel)" && test -z "$(find src-tauri/target -type d -path '*/bundle/macos/FinalSub.app' -prune -print)"
 ```
 
 ### 验证 DMG 内部 App
@@ -189,7 +189,7 @@ cd $HOME/Tools/AI-tools/FinalSub && test -z "$(find src-tauri/target -type d -pa
 Tauri 现在会在制作 DMG 前签名 `.app`，不再需要二次制作镜像。仍必须挂载 DMG 验证内部 `.app`，因为只运行 `hdiutil verify` 不能证明应用签名、架构和最低系统版本正确。
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
+cd "$(git rev-parse --show-toplevel)" && /bin/bash <<'EOF'
 set -euo pipefail
 
 DMG="$(ls -1 src-tauri/target/universal-apple-darwin/release/bundle/dmg/FinalSub_*_universal.dmg | tail -1)"
@@ -243,7 +243,7 @@ EOF
 Tag / Release 碰撞检查必须使用当前 `gh release list` 实际支持的字段；Release URL 只在目标存在时通过 `gh release view` 读取：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && TAG="v<version>-self-signed.<revision>" && \
+cd "$(git rev-parse --show-toplevel)" && TAG="v<version>-self-signed.<revision>" && \
   git tag --list "$TAG" && \
   git ls-remote --tags origin "refs/tags/$TAG" && \
   gh release list --limit 100 --json tagName,isDraft,isPrerelease | \
@@ -255,7 +255,7 @@ cd $HOME/Tools/AI-tools/FinalSub && TAG="v<version>-self-signed.<revision>" && \
 构建：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && \
+cd "$(git rev-parse --show-toplevel)" && \
   FINALSUB_SELF_SIGNED_REVISION=1 npm run package:release:self-signed:macos
 ```
 
@@ -285,7 +285,7 @@ src-tauri/target/self-signed-release/v<version>-self-signed.<revision>/
 发布命令只在目标 commit、Tag、版本和资产已经由上述门禁确定后执行。脚本会创建 Draft、上传 updater 资产、按 GitHub asset ID 生成 `latest.json`、重新下载验收后再公开：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && \
+cd "$(git rev-parse --show-toplevel)" && \
   FINALSUB_SELF_SIGNED_REVISION=<revision> npm run release:self-signed:macos
 ```
 
@@ -300,8 +300,8 @@ cd $HOME/Tools/AI-tools/FinalSub && \
 PKG 需要临时 `.app`，因此先运行 `npm run build:universal:bundle`；下方脚本的退出处理会在成功或失败时物理删除该 App：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run build:universal:bundle
-cd $HOME/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
+cd "$(git rev-parse --show-toplevel)" && npm run build:universal:bundle
+cd "$(git rev-parse --show-toplevel)" && /bin/bash <<'EOF'
 set -euo pipefail
 
 APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app"
@@ -338,7 +338,7 @@ EOF
 验收 `.pkg`：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
+cd "$(git rev-parse --show-toplevel)" && /bin/bash <<'EOF'
 set -euo pipefail
 
 PKG="$(ls -1 src-tauri/target/universal-apple-darwin/release/bundle/pkg/FinalSub_*_universal.pkg | tail -1)"
@@ -369,7 +369,7 @@ EOF
 只在明确需要安装到本机时执行：
 
 ```bash
-sudo installer -pkg "$HOME/Tools/AI-tools/FinalSub/src-tauri/target/universal-apple-darwin/release/bundle/pkg/FinalSub_<version>_universal.pkg" -target /
+sudo installer -pkg "$(git rev-parse --show-toplevel)/src-tauri/target/universal-apple-darwin/release/bundle/pkg/FinalSub_<version>_universal.pkg" -target /
 codesign --verify --deep --strict --verbose=4 "/Applications/FinalSub.app"
 plutil -extract CFBundleIdentifier raw "/Applications/FinalSub.app/Contents/Info.plist"
 plutil -extract CFBundleShortVersionString raw "/Applications/FinalSub.app/Contents/Info.plist"
@@ -378,7 +378,7 @@ plutil -extract CFBundleShortVersionString raw "/Applications/FinalSub.app/Conte
 若当前会话不能无交互使用 `sudo`，且 `/Applications/FinalSub.app` 归当前用户所有，可使用本机覆盖 fallback。此路径只适合本机测试，不等同于 `.pkg` 安装器验收：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run install:local:universal
+cd "$(git rev-parse --show-toplevel)" && npm run install:local:universal
 ```
 
 该脚本会先验签并制作 ZIP 回滚包，再原子替换 `/Applications/FinalSub.app`；成功启动后注销并删除 `src-tauri/target` 中的构建 `.app`，定向清除旧 DMG/构建路径的 LaunchServices 记录，最后要求 LaunchServices 与 Spotlight 对 `com.gravitypoet.finalsub` 都只返回 `/Applications/FinalSub.app`。禁止把第二个可索引 `.app` 或 `.app.backup.*` 留在 `/Applications`、仓库构建目录或 staging 目录。
@@ -386,7 +386,7 @@ cd $HOME/Tools/AI-tools/FinalSub && npm run install:local:universal
 本机启动验收使用等待循环，避免应用启动较慢导致误判：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && /bin/bash <<'EOF'
+cd "$(git rev-parse --show-toplevel)" && /bin/bash <<'EOF'
 set -euo pipefail
 
 open -na "/Applications/FinalSub.app"
@@ -423,7 +423,7 @@ EOF
 本机安装验收必须包含：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && test "$(mdfind 'kMDItemCFBundleIdentifier == \"com.gravitypoet.finalsub\"c' | sort)" = "/Applications/FinalSub.app"
+cd "$(git rev-parse --show-toplevel)" && test "$(mdfind 'kMDItemCFBundleIdentifier == \"com.gravitypoet.finalsub\"c' | sort)" = "/Applications/FinalSub.app"
 ```
 
 ### Apple Developer ID 正式外发要求
@@ -465,10 +465,10 @@ GitHub Actions 入口：`.github/workflows/release.yml`。Release job 已接入 
 Linux x86_64 release job 会安装 WebKit/Secret Service/Keyutils 构建依赖，安装固定 SHA-256 的 GPL FFmpeg、从固定 whisper.cpp commit 构建 sidecar，再生成 AppImage 与 DEB：
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && bash scripts/install-ffmpeg-sidecar-linux.sh
-cd $HOME/Tools/AI-tools/FinalSub && bash scripts/build-whisper-sidecar-linux.sh
-cd $HOME/Tools/AI-tools/FinalSub && npm ci
-cd $HOME/Tools/AI-tools/FinalSub && npm run tauri -- build --target x86_64-unknown-linux-gnu --bundles appimage,deb
+cd "$(git rev-parse --show-toplevel)" && bash scripts/install-ffmpeg-sidecar-linux.sh
+cd "$(git rev-parse --show-toplevel)" && bash scripts/build-whisper-sidecar-linux.sh
+cd "$(git rev-parse --show-toplevel)" && npm ci
+cd "$(git rev-parse --show-toplevel)" && npm run tauri -- build --target x86_64-unknown-linux-gnu --bundles appimage,deb
 ```
 
 GitHub Actions 入口：`.github/workflows/release.yml`。`3427b3a` 的 run `29819811618` 已在 Ubuntu 22.04 runner 的临时 D-Bus、GNOME Keyring 与 Xvfb 会话完成 Secret Service + Keyutils 回环、AppImage/DEB 启动、DEB 安装与卸载；该证据不替代所有目标发行版的桌面兼容性抽检。
@@ -563,7 +563,7 @@ sudo: a password is required
 
 - 本机 `.pkg` 的 `PackageInfo` 为 `auth="root"`；`installer -pkg ... -target /` 需要 root 授权。
 - 当前 Codex 会话不能交互输入 sudo 密码。
-- `/Applications/FinalSub.app` 实际归当前用户 `GravityPoet:staff` 所有，可用本机 fallback 覆盖 `.app`。
+- `/Applications/FinalSub.app` 实际归当前用户 `<USER>:staff` 所有，可用本机 fallback 覆盖 `.app`。
 
 处理：
 
@@ -1011,7 +1011,7 @@ Release tag must be exactly v1.0.11
 
 ```text
 Command: npm run install:local:universal
-Missing source app: $HOME/Tools/AI-tools/FinalSub/src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app
+Missing source app: <repo-root>/src-tauri/target/universal-apple-darwin/release/bundle/macos/FinalSub.app
 ```
 
 原因：
@@ -1248,17 +1248,17 @@ lipo: unknown architecture specification flag: .../FinalSub.app/Contents/MacOS/f
 现象：
 
 ```text
-git@ssh.github.com: Permission denied (publickey).
+SSH authentication failed (public key).
 fatal: Could not read from remote repository.
 ```
 
 原因与恢复：
 
-- SSH 推送失败时，`gh auth status` 仍确认目标 GitHub 账户处于有效登录状态。保留本地提交，通过 `gh auth setup-git` 配置已登录 CLI 的 credential helper，再使用单次 `git -c url."https://github.com/".insteadOf="git@github.com:" push origin main` 完成推送，不修改仓库 remote，也不读取或回显 token。
+- SSH 推送失败时，`gh auth status` 仍确认目标 GitHub 账户处于有效登录状态。保留本地提交，通过 `gh auth setup-git` 配置已登录 CLI 的 credential helper，再使用单次 HTTPS push 完成推送，不修改仓库 remote，也不读取或回显 token。
 
 发布脚本防复发：
 
-- 发布前必须验证实际 Git transport 可读写；当 SSH 不可用而 CLI 凭据已验证可用时，为整个发布进程设置 `GIT_CONFIG_COUNT=1`、`GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf`、`GIT_CONFIG_VALUE_0=git@github.com:`，使脚本中的 tag 探测与推送使用同一 HTTPS 凭据通道。恢复后核对本地 SHA、upstream SHA 与 GitHub API 的分支 SHA 一致。
+- 发布前必须验证实际 Git transport 可读写；当 SSH 不可用而 CLI 凭据已验证可用时，为整个发布进程设置 `GIT_CONFIG_COUNT=1`、`GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf`、`GIT_CONFIG_VALUE_0=SSH_REMOTE:`，使脚本中的 tag 探测与推送使用同一 HTTPS 凭据通道。恢复后核对本地 SHA、upstream SHA 与 GitHub API 的分支 SHA 一致。
 
 ### 2026-10-01：DMG 挂载路径别名导致本机安装器误报重复 App
 

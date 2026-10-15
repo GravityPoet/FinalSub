@@ -17,7 +17,7 @@
 |---------|------|------|
 | FunASR (pip) | ❌ 未安装 | `pip3 list` 无 funasr |
 | sherpa-onnx | ❌ 未安装 | `pip3 list` 无 sherpa-onnx |
-| SenseVoiceSmall 模型 | ❌ 未下载 | `$HOME/Tools/Local-LLM/` 无 sensevoice 相关目录 |
+| SenseVoiceSmall 模型 | ❌ 未下载 | `$LOCAL_LLM_ROOT/` 无 sensevoice 相关目录 |
 
 ## 当时结论
 

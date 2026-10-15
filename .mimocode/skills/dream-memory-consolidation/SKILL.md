@@ -19,7 +19,7 @@ Read recent session trajectories and memory files, extract durable verified info
 4. **Session notes**: `<DATA>/memory/sessions/<session_id>/notes.md`
 5. **Global memory**: `<DATA>/memory/global/MEMORY.md`
 
-`<DATA>` = `$HOME/.local/share/mimocode`
+`<DATA>` = `~/.local/share/mimocode`
 
 ## Procedure
 

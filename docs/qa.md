@@ -4,16 +4,16 @@
 
 ```bash
 # 前端构建
-cd $HOME/Tools/AI-tools/FinalSub && npm run build
+cd "$(git rev-parse --show-toplevel)" && npm run build
 
 # Rust 测试
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri && cargo fmt --check && cargo test --lib
+cd "$(git rev-parse --show-toplevel)/src-tauri" && cargo fmt --check && cargo test --lib
 
 # Clippy lint
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri && cargo clippy --all-targets --all-features -- -D warnings
+cd "$(git rev-parse --show-toplevel)/src-tauri" && cargo clippy --all-targets --all-features -- -D warnings
 
 # macOS Universal 完整打包（含签名验证）
-cd $HOME/Tools/AI-tools/FinalSub && npm run build:universal
+cd "$(git rev-parse --show-toplevel)" && npm run build:universal
 ```
 
 `build:universal` 会在构建前清掉旧残留，并在成功、失败或可捕获中断后删除 `target` 内的构建 `.app`，只保留 DMG；`target/.metadata_never_index` 是构建期间的第二道防线。需要检查 App 内容时应挂载 DMG，不得把第二个 `FinalSub.app` 长期留在仓库。
@@ -23,7 +23,7 @@ cd $HOME/Tools/AI-tools/FinalSub && npm run build:universal
 ### 启动开发服务器
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run dev -- --host 127.0.0.1 --port 5173
+cd "$(git rev-parse --show-toplevel)" && npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 说明：Vite 浏览器预览启用开发 mock，可用于 UI 排布、路由、表单状态和响应式 QA；它不能替代 Tauri native API 验收，文件权限、系统 dialog、事件、sidecar、签名和系统打开文件必须用 Tauri smoke 或打包产物验证。
@@ -65,7 +65,7 @@ cd $HOME/Tools/AI-tools/FinalSub && npm run dev -- --host 127.0.0.1 --port 5173
 ### Tauri Smoke 验收
 
 ```bash
-cd $HOME/Tools/AI-tools/FinalSub && npm run tauri dev
+cd "$(git rev-parse --show-toplevel)" && npm run tauri dev
 ```
 
 | 场景 | 操作 | 成功判据 |
@@ -119,7 +119,7 @@ cd $HOME/Tools/AI-tools/FinalSub && npm run tauri dev
 
 ```bash
 # 使用应用自带 FFmpeg 生成真实媒体夹具，并验收软字幕+双音轨与硬字幕+智能混音
-cd $HOME/Tools/AI-tools/FinalSub/src-tauri && \
+cd "$(git rev-parse --show-toplevel)/src-tauri" && \
   FINALSUB_COMPOSE_MEDIA_E2E=1 cargo test --lib \
   core::audio::tests::compose_real_media_fixture_when_enabled -- --nocapture
 ```
